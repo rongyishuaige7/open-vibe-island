@@ -354,7 +354,8 @@ struct ActiveAgentProcessDiscovery {
     }
 
     private func bestCodexTranscriptPath(in lsofOutput: String) -> String? {
-        let paths = allMatchingPaths(in: lsofOutput, containing: "/.codex/sessions/", suffix: ".jsonl")
+        // Match by layout so sessions from any CODEX_HOME keep their process liveness.
+        let paths = openFilePaths(in: lsofOutput).filter(CodexTranscriptPath.isRolloutTranscript)
         guard !paths.isEmpty else {
             return nil
         }
@@ -438,6 +439,14 @@ struct ActiveAgentProcessDiscovery {
         }
 
         return paths.first
+    }
+
+    /// Every file path lsof reported (`n`-prefixed lines in `-F` output).
+    private func openFilePaths(in lsofOutput: String) -> [String] {
+        lsofOutput.split(whereSeparator: \.isNewline).compactMap { line in
+            guard line.first == "n" else { return nil }
+            return String(line.dropFirst()).trimmingCharacters(in: .whitespacesAndNewlines)
+        }
     }
 
     private func allMatchingPaths(in lsofOutput: String, containing fragment: String, suffix: String) -> [String] {

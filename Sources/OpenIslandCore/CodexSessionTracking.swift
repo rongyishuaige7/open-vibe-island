@@ -334,7 +334,7 @@ public enum CodexAppSessionReconciler {
             return false
         }
 
-        return transcriptPath.contains("/.codex/archived_sessions/")
+        return CodexTranscriptPath.isArchivedRolloutTranscript(transcriptPath)
     }
 }
 
