@@ -654,6 +654,83 @@ public final class CodexRolloutDiscovery: @unchecked Sendable {
         )
     }
 
+    /// Record for a transcript that a live Codex process holds open, whatever
+    /// its age or CODEX_HOME. Reads at most `headLimit` bytes from the start
+    /// (session_meta, first prompt) and `tailLimit` from the end (current
+    /// state), so a multi-GB rollout is never folded in full. Nothing is
+    /// cached: callers use it once per session and leave ongoing tracking to
+    /// `CodexRolloutWatcher`.
+    public func liveSessionRecord(
+        transcriptPath: String,
+        headLimit: Int = 4 * 1_024 * 1_024,
+        tailLimit: Int = 4 * 1_024 * 1_024
+    ) -> CodexTrackedSessionRecord? {
+        let fileURL = URL(fileURLWithPath: transcriptPath)
+        guard let values = try? fileURL.resourceValues(
+                forKeys: [.contentModificationDateKey, .isRegularFileKey, .fileSizeKey]
+              ),
+              values.isRegularFile == true,
+              let fileHandle = try? FileHandle(forReadingFrom: fileURL) else {
+            return nil
+        }
+        defer { try? fileHandle.close() }
+        let fileSize = values.fileSize ?? 0
+        let modifiedAt = values.contentModificationDate ?? .distantPast
+
+        var headSnapshot = CodexRolloutSnapshot()
+        var sessionMeta: SessionMeta?
+        var buffer = Data()
+        var headRead = 0
+        while headRead < headLimit,
+              sessionMeta == nil || headSnapshot.initialUserPrompt == nil,
+              let chunk = try? fileHandle.read(upToCount: min(Self.streamingChunkSize, headLimit - headRead)),
+              !chunk.isEmpty {
+            buffer.append(chunk)
+            headRead += chunk.count
+            for line in extractCompleteLines(from: &buffer) {
+                CodexRolloutReducer.apply(line: line, to: &headSnapshot)
+                if sessionMeta == nil {
+                    sessionMeta = parseSessionMeta(fromLine: line)
+                }
+            }
+        }
+        guard let sessionMeta else { return nil }
+
+        // Continue from the head's line boundary when the file is small enough;
+        // otherwise start a fresh fold at the tail window's first full line.
+        let lineBoundary = headRead - buffer.count
+        let tailStart = max(lineBoundary, fileSize - tailLimit)
+        var tail = Data()
+        if (try? fileHandle.seek(toOffset: UInt64(tailStart))) != nil {
+            tail = (try? fileHandle.readToEnd()) ?? Data()
+        }
+        if tailStart > lineBoundary {
+            if let newline = tail.firstIndex(of: UInt8(ascii: "\n")) {
+                tail.removeSubrange(...newline)
+            } else {
+                tail.removeAll()
+            }
+        }
+
+        // A fresh tail fold is seeded with the head's prompts (as the watcher's
+        // bootstrap does) so the first prompt found in the tail window is not
+        // mistaken for the session's initial prompt.
+        var snapshot = tailStart == lineBoundary
+            ? headSnapshot
+            : CodexRolloutSnapshot(
+                initialUserPrompt: headSnapshot.initialUserPrompt,
+                lastUserPrompt: headSnapshot.lastUserPrompt ?? headSnapshot.initialUserPrompt
+            )
+        for line in extractCompleteLines(from: &tail) {
+            CodexRolloutReducer.apply(line: line, to: &snapshot)
+        }
+        if !tail.isEmpty {
+            CodexRolloutReducer.apply(line: String(decoding: tail, as: UTF8.self), to: &snapshot)
+        }
+
+        return makeRecord(fileURL: fileURL, modifiedAt: modifiedAt, snapshot: snapshot, sessionMeta: sessionMeta)
+    }
+
     private static let streamingChunkSize = 64 * 1_024
 
     private func parseSessionMeta(fromLine line: String) -> SessionMeta? {

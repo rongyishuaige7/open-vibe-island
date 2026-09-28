@@ -299,7 +299,8 @@ struct ActiveAgentProcessDiscovery {
             sessionID: sessionID,
             workingDirectory: workingDirectory(from: lsofOutput),
             terminalTTY: process.terminalTTY,
-            terminalApp: terminalApp(for: process, processesByPID: processesByPID)
+            terminalApp: terminalApp(for: process, processesByPID: processesByPID),
+            transcriptPath: transcriptPath
         )
 
         // If terminalApp is nil and we have a TTY, try to resolve tmux info

@@ -721,6 +721,8 @@ final class AppModel {
         monitoring.onSessionsReconciled = { [weak self] in
             self?.synchronizeSelection()
             self?.refreshOverlayPlacementIfVisible()
+            // Reconcile can add live Codex sessions; start watching their rollouts.
+            self?.discovery.refreshCodexRolloutTracking()
         }
         monitoring.onPersistenceNeeded = { [weak self] in
             self?.discovery.scheduleCodexSessionPersistence()

@@ -36,6 +36,10 @@ final class ProcessMonitoringCoordinator {
     @ObservationIgnored
     let activeAgentProcessDiscovery = ActiveAgentProcessDiscovery()
 
+    /// Reads bounded records for live Codex transcripts no other source reported.
+    @ObservationIgnored
+    private let liveCodexTranscriptReader = CodexRolloutDiscovery()
+
     @ObservationIgnored
     private let terminalSessionAttachmentProbe = TerminalSessionAttachmentProbe()
 
@@ -134,8 +138,15 @@ final class ProcessMonitoringCoordinator {
                     let probe = self.terminalSessionAttachmentProbe
                     let resolver = self.terminalJumpTargetResolver
                     let shouldResolveTerminals = hasTrackedLiveSessions
-                    let (snapshots, ghosttyAvail, terminalAvail, jumpTargets) = await Task.detached(priority: .utility) {
+                    let liveCodexReader = self.liveCodexTranscriptReader
+                    let knownCodexIDs = Set(self.state.sessions.filter { $0.tool == .codex }.map(\.id))
+                    let (snapshots, ghosttyAvail, terminalAvail, jumpTargets, liveCodexRecords) = await Task.detached(priority: .utility) {
                         let s = discovery.discover()
+                        let c = Self.untrackedLiveCodexRecords(
+                            activeProcesses: s,
+                            knownSessionIDs: knownCodexIDs,
+                            reader: liveCodexReader
+                        )
                         let g: TerminalSessionAttachmentProbe.SnapshotAvailability<TerminalSessionAttachmentProbe.GhosttyTerminalSnapshot>
                         let t: TerminalSessionAttachmentProbe.SnapshotAvailability<TerminalSessionAttachmentProbe.TerminalTabSnapshot>
                         let j: [String: JumpTarget]
@@ -150,7 +161,7 @@ final class ProcessMonitoringCoordinator {
                             j = [:]
                         }
 
-                        return (s, g, t, j)
+                        return (s, g, t, j, c)
                     }.value
                     let isCodexAppRunning = Self.isCodexDesktopAppRunning()
                     self.reconcileSessionAttachments(
@@ -158,7 +169,8 @@ final class ProcessMonitoringCoordinator {
                         ghosttyAvailability: ghosttyAvail,
                         terminalAvailability: terminalAvail,
                         preResolvedJumpTargets: jumpTargets,
-                        observedCodexAppRunning: isCodexAppRunning
+                        observedCodexAppRunning: isCodexAppRunning,
+                        liveCodexRecords: liveCodexRecords
                     )
                     if isCodexAppRunning {
                         self.onCodexAppMaintenanceTick?()
@@ -206,7 +218,8 @@ final class ProcessMonitoringCoordinator {
         ghosttyAvailability: TerminalSessionAttachmentProbe.SnapshotAvailability<TerminalSessionAttachmentProbe.GhosttyTerminalSnapshot>? = nil,
         terminalAvailability: TerminalSessionAttachmentProbe.SnapshotAvailability<TerminalSessionAttachmentProbe.TerminalTabSnapshot>? = nil,
         preResolvedJumpTargets: [String: JumpTarget]? = nil,
-        observedCodexAppRunning: Bool? = nil
+        observedCodexAppRunning: Bool? = nil,
+        liveCodexRecords: [CodexTrackedSessionRecord] = []
     ) {
         let activeProcesses = activeProcesses ?? activeAgentProcessDiscovery.discover()
 
@@ -224,8 +237,13 @@ final class ProcessMonitoringCoordinator {
             existingSessions: local.sessions,
             activeProcesses: activeProcesses
         )
-        let mergedSessions = mergedWithSyntheticCursorSessions(
+        let mergedCursorSessions = mergedWithSyntheticCursorSessions(
             existingSessions: mergedClaudeSessions,
+            activeProcesses: activeProcesses
+        )
+        let mergedSessions = mergedWithLiveCodexSessions(
+            existingSessions: mergedCursorSessions,
+            liveRecords: liveCodexRecords,
             activeProcesses: activeProcesses
         )
         if mergedSessions != local.sessions {
@@ -892,6 +910,77 @@ final class ProcessMonitoringCoordinator {
 
     func isSyntheticClaudeSession(_ session: AgentSession) -> Bool {
         session.tool == .claudeCode && session.id.hasPrefix(syntheticClaudeSessionPrefix)
+    }
+
+    // MARK: - Live Codex sessions
+
+    /// Records for Codex CLI processes whose open transcript no hook or
+    /// rollout scan has reported: sessions started before hooks were
+    /// installed, older than the 24h scan window, or under a CODEX_HOME the
+    /// scan does not cover. Only unknown session IDs are read, so each
+    /// transcript is parsed once. Runs off the main actor.
+    nonisolated static func untrackedLiveCodexRecords(
+        activeProcesses: [ActiveProcessSnapshot],
+        knownSessionIDs: Set<String>,
+        reader: CodexRolloutDiscovery
+    ) -> [CodexTrackedSessionRecord] {
+        var seen = knownSessionIDs
+        var records: [CodexTrackedSessionRecord] = []
+        for process in activeProcesses where process.tool == .codex {
+            guard let sessionID = process.sessionID,
+                  let transcriptPath = process.transcriptPath,
+                  seen.insert(sessionID).inserted,
+                  let record = reader.liveSessionRecord(transcriptPath: transcriptPath),
+                  // Liveness matches CLI sessions by ID, so keep only records whose
+                  // session_meta ID is the one the process snapshot reports.
+                  record.sessionID == sessionID else {
+                continue
+            }
+            records.append(record)
+        }
+        return records
+    }
+
+    func mergedWithLiveCodexSessions(
+        existingSessions: [AgentSession],
+        liveRecords: [CodexTrackedSessionRecord],
+        activeProcesses: [ActiveProcessSnapshot]
+    ) -> [AgentSession] {
+        guard !liveRecords.isEmpty else {
+            return existingSessions
+        }
+
+        let existingIDs = Set(existingSessions.map(\.id))
+        let processesBySessionID = Dictionary(
+            activeProcesses.compactMap { process in
+                process.tool == .codex ? process.sessionID.map { ($0, process) } : nil
+            },
+            uniquingKeysWith: { first, _ in first }
+        )
+
+        var added: [AgentSession] = []
+        for record in liveRecords where !existingIDs.contains(record.sessionID) {
+            let process = processesBySessionID[record.sessionID]
+            var record = record
+            if record.jumpTarget == nil {
+                let workingDirectory = process?.workingDirectory
+                let workspaceName = workingDirectory.map { WorkspaceNameResolver.workspaceName(for: $0) } ?? "Workspace"
+                record.jumpTarget = JumpTarget(
+                    terminalApp: supportedTerminalApp(for: process?.terminalApp) ?? "Unknown",
+                    workspaceName: workspaceName,
+                    paneTitle: "Codex \(workspaceName)",
+                    workingDirectory: workingDirectory,
+                    terminalTTY: process?.terminalTTY,
+                    tmuxTarget: process?.tmuxTarget,
+                    tmuxSocketPath: process?.tmuxSocketPath
+                )
+            }
+            var session = record.session
+            session.isProcessAlive = true
+            added.append(session)
+        }
+
+        return existingSessions + added
     }
 
     // MARK: - Synthetic Cursor sessions

@@ -57,7 +57,8 @@ struct ActiveAgentProcessDiscoveryTests {
             sessionID: "019d516f-71ee-7e40-bcff-502fedac0928",
             workingDirectory: "/tmp/open-island",
             terminalTTY: "/dev/ttys001",
-            terminalApp: "Ghostty"
+            terminalApp: "Ghostty",
+            transcriptPath: "/Users/test/.codex/sessions/2026/04/03/rollout-2026-04-03T11-42-31-019d516f-71ee-7e40-bcff-502fedac0928.jsonl"
         )))
     }
 
@@ -132,9 +133,40 @@ struct ActiveAgentProcessDiscoveryTests {
                 sessionID: "019e0dc1-3f8b-7eb0-ae8d-04a5911e95b9",
                 workingDirectory: "/tmp/open-island",
                 terminalTTY: "/dev/ttys001",
-                terminalApp: "Ghostty"
+                terminalApp: "Ghostty",
+                transcriptPath: "/Users/test/.codex/sessions/2026/05/10/rollout-2026-05-10T01-20-29-019e0dc1-3f8b-7eb0-ae8d-04a5911e95b9.jsonl"
             ),
         ])
+    }
+
+    @Test
+    func codexDiscoveryMatchesRolloutUnderCustomCodexHome() {
+        let discovery = ActiveAgentProcessDiscovery { executablePath, arguments in
+            if executablePath == "/bin/ps" {
+                return """
+                  202 401 ttys001 /Users/test/.local/share/codex-cli/bin/codex
+                  401 900 ttys001 -/bin/zsh
+                  900 1 ?? /Applications/Ghostty.app/Contents/MacOS/ghostty
+                """
+            }
+
+            guard executablePath == "/usr/sbin/lsof",
+                  let pid = arguments.dropFirst(2).first,
+                  pid == "202" else {
+                return nil
+            }
+
+            return """
+            fcwd
+            n/tmp/yiapi
+            n/Users/test/.codex-yi/sessions/2026/01/15/rollout-2026-01-15T09-00-00-01990000-aaaa-7bbb-8ccc-000000000001.jsonl
+            """
+        }
+
+        let snapshots = discovery.discover()
+
+        #expect(snapshots.first?.sessionID == "01990000-aaaa-7bbb-8ccc-000000000001")
+        #expect(snapshots.first?.transcriptPath == "/Users/test/.codex-yi/sessions/2026/01/15/rollout-2026-01-15T09-00-00-01990000-aaaa-7bbb-8ccc-000000000001.jsonl")
     }
 
     @Test
