@@ -226,3 +226,49 @@
 
 /* Window Titles */
 "window.settings" = "Open Island Settings";
+
+/* Session rows: status words and Open Island's own summaries */
+"session.status.running" = "Running";
+"session.status.thinking" = "Thinking";
+"session.status.approvalNeeded" = "Approval needed";
+"session.status.answerNeeded" = "Answer needed";
+"session.status.ready" = "Ready";
+"session.status.completed" = "Completed";
+"session.promptLine" = "You: %@";
+"session.summary.started" = "Started %@ session in %@.";
+"session.summary.resumed" = "Resumed %@ session in %@.";
+"session.summary.clearedContext" = "Cleared %@ context in %@.";
+"session.summary.compactedContext" = "Compacted %@ context in %@.";
+"session.summary.endedIn" = "%@ session ended in %@.";
+"session.summary.ended" = "%@ session ended.";
+"session.summary.compacting" = "%@ is compacting the conversation.";
+"session.summary.detectedFrom" = "%@ session detected from %@.";
+"session.summary.detected" = "%@ session detected.";
+"session.summary.agentDetectedFrom" = "%@ agent detected from %@.";
+"session.summary.agentDetected" = "%@ agent detected.";
+"session.summary.codexPreparingBash" = "Codex is preparing a Bash command in %@.";
+"session.summary.codexWaitingPermissionIn" = "Codex is waiting for permission approval in %@.";
+"session.summary.codexBashResult" = "Codex reported a Bash result in %@.";
+"session.summary.codexNewPrompt" = "Codex received a new prompt in %@.";
+"session.summary.codexTurnCompletedIn" = "Codex completed a turn in %@.";
+"session.summary.codexWantsToUse" = "Codex wants to use %@.";
+"session.summary.codexRequestingPermission" = "Codex is requesting permission.";
+"session.summary.codexWantsShell" = "Codex wants to run a shell command.";
+"session.summary.codexWaitingApproval" = "Codex is waiting for approval.";
+"session.summary.codexWaitingInput" = "Codex is waiting for input.";
+"session.summary.codexWorking" = "Codex is working…";
+"session.summary.codexSession" = "Codex session.";
+"session.summary.idle" = "Idle.";
+"session.summary.turnFailed" = "Turn failed.";
+"session.summary.turnStalled" = "Turn stalled.";
+"session.summary.turnInterrupted" = "Codex turn was interrupted.";
+"session.summary.threadClosed" = "Codex thread closed.";
+"session.summary.threadArchived" = "Codex thread archived.";
+"session.summary.rateLimited" = "Rate limit reached.";
+"session.summary.runningTool" = "Running %@.";
+"session.summary.thinking" = "Thinking.";
+"session.summary.prompt" = "Prompt: %@";
+"session.summary.permissionInactive" = "Permission request is no longer active.";
+"session.summary.approvalHandledElsewhere" = "Approval was handled outside Open Island.";
+"session.summary.hookDisconnected" = "Hook process disconnected.";
+"session.summary.claudeExitPlan" = "Claude wants to exit plan mode and start implementation.";

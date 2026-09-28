@@ -225,3 +225,49 @@
 
 /* Window Titles */
 "window.settings" = "Open Island 設定";
+
+/* Session rows: status words and Open Island's own summaries */
+"session.status.running" = "執行中";
+"session.status.thinking" = "思考中";
+"session.status.approvalNeeded" = "需要核准";
+"session.status.answerNeeded" = "需要回答";
+"session.status.ready" = "就緒";
+"session.status.completed" = "已完成";
+"session.promptLine" = "你：%@";
+"session.summary.started" = "已在 %2$@ 啟動 %1$@ 工作階段。";
+"session.summary.resumed" = "已在 %2$@ 恢復 %1$@ 工作階段。";
+"session.summary.clearedContext" = "已清除 %2$@ 中的 %1$@ 上下文。";
+"session.summary.compactedContext" = "已壓縮 %2$@ 中的 %1$@ 上下文。";
+"session.summary.endedIn" = "%2$@ 中的 %1$@ 工作階段已結束。";
+"session.summary.ended" = "%@ 工作階段已結束。";
+"session.summary.compacting" = "%@ 正在壓縮對話。";
+"session.summary.detectedFrom" = "從 %2$@ 偵測到 %1$@ 工作階段。";
+"session.summary.detected" = "偵測到 %@ 工作階段。";
+"session.summary.agentDetectedFrom" = "從 %2$@ 偵測到 %1$@ Agent。";
+"session.summary.agentDetected" = "偵測到 %@ Agent。";
+"session.summary.codexPreparingBash" = "Codex 正在 %@ 中準備 Bash 命令。";
+"session.summary.codexWaitingPermissionIn" = "Codex 正在 %@ 中等待權限核准。";
+"session.summary.codexBashResult" = "Codex 在 %@ 中回報了 Bash 結果。";
+"session.summary.codexNewPrompt" = "Codex 在 %@ 中收到新提示。";
+"session.summary.codexTurnCompletedIn" = "Codex 在 %@ 中完成了一輪。";
+"session.summary.codexWantsToUse" = "Codex 想使用 %@。";
+"session.summary.codexRequestingPermission" = "Codex 正在請求權限。";
+"session.summary.codexWantsShell" = "Codex 想執行 Shell 命令。";
+"session.summary.codexWaitingApproval" = "Codex 正在等待核准。";
+"session.summary.codexWaitingInput" = "Codex 正在等待輸入。";
+"session.summary.codexWorking" = "Codex 正在工作…";
+"session.summary.codexSession" = "Codex 工作階段。";
+"session.summary.idle" = "閒置。";
+"session.summary.turnFailed" = "本輪失敗。";
+"session.summary.turnStalled" = "本輪已停滯。";
+"session.summary.turnInterrupted" = "Codex 本輪已中斷。";
+"session.summary.threadClosed" = "Codex 對話已關閉。";
+"session.summary.threadArchived" = "Codex 對話已封存。";
+"session.summary.rateLimited" = "已達到速率限制。";
+"session.summary.runningTool" = "正在執行 %@。";
+"session.summary.thinking" = "思考中。";
+"session.summary.prompt" = "提示：%@";
+"session.summary.permissionInactive" = "權限請求已失效。";
+"session.summary.approvalHandledElsewhere" = "已在 Open Island 之外處理核准。";
+"session.summary.hookDisconnected" = "Hook 程序已中斷連線。";
+"session.summary.claudeExitPlan" = "Claude 想結束規劃模式並開始實作。";
