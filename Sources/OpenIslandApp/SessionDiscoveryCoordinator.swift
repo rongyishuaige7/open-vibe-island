@@ -60,6 +60,12 @@ final class SessionDiscoveryCoordinator {
     let codexRolloutWatcher = CodexRolloutWatcher()
 
     @ObservationIgnored
+    private let conversationTitleResolver = ConversationTitleResolver()
+
+    @ObservationIgnored
+    private var conversationTitleTask: Task<Void, Never>?
+
+    @ObservationIgnored
     private let codexRolloutDiscovery = CodexRolloutDiscovery()
 
     @ObservationIgnored
@@ -456,6 +462,35 @@ final class SessionDiscoveryCoordinator {
             now: now
         ) {
             onAgentEvent?(event)
+        }
+    }
+
+    // MARK: - Conversation titles
+
+    /// Keeps each session's `conversationTitle` in step with what its agent
+    /// recorded. Renames and regenerated AI titles arrive without hook events,
+    /// so this polls; unchanged files cost one `stat` each.
+    func startConversationTitleRefreshIfNeeded(interval: Duration = .seconds(5)) {
+        guard conversationTitleTask == nil else { return }
+        conversationTitleTask = Task { [weak self] in
+            while !Task.isCancelled {
+                guard let self else { return }
+                await self.refreshConversationTitles()
+                try? await Task.sleep(for: interval)
+            }
+        }
+    }
+
+    func refreshConversationTitles() async {
+        let requests = ConversationTitleRequest.requests(for: state.sessions)
+        guard !requests.isEmpty else { return }
+        let resolver = conversationTitleResolver
+        let titles = await Task.detached(priority: .utility) {
+            resolver.titles(for: requests)
+        }.value
+        var updated = state
+        if updated.reconcileConversationTitles(titles) {
+            state = updated
         }
     }
 

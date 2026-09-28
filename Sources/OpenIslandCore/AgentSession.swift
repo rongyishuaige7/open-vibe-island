@@ -429,6 +429,11 @@ public struct AgentSession: Equatable, Identifiable, Codable, Sendable {
     /// Runtime-only: never persisted, and cleared on the first real liveness signal.
     public var heartbeatReconnectStartedAt: Date?
 
+    /// Conversation title the agent recorded (Codex `thread_name`, Claude Code
+    /// `custom-title` / `ai-title`). Runtime-only: re-read from the agent's
+    /// files, never persisted.
+    public var conversationTitle: String?
+
     public init(
         id: String,
         title: String,

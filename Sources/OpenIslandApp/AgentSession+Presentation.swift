@@ -188,9 +188,12 @@ extension AgentSession {
     }
 
     var spotlightHeadlinePromptText: String? {
-        // Headline shows the initial prompt (session topic), not the latest.
-        // The latest prompt is shown separately in the "You:" line.
-        initialPromptText ?? latestPromptText
+        // Headline shows the session topic: the title the agent recorded, else
+        // the initial prompt. The latest prompt has its own "You:" line.
+        if let title = conversationTitle?.trimmedForSurface, !title.isEmpty {
+            return title
+        }
+        return initialPromptText ?? latestPromptText
     }
 
     var spotlightPromptText: String? {
