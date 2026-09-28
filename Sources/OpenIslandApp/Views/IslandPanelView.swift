@@ -1388,7 +1388,7 @@ private struct IslandSessionRow: View {
     @ViewBuilder
     private func rowAuxiliaryDetails(presence: IslandSessionPresence) -> some View {
         if !shouldShowEmbeddedDetailBody,
-           let activityLine = session.spotlightActivityLineText ?? expandedActivityLineText {
+           let activityLine = session.localizedActivityLineText(textLocalizer) ?? expandedActivityLineText {
             Text(activityLine)
                 .font(.system(size: 11, weight: .medium))
                 .foregroundStyle(activityColor(for: presence).opacity(0.94))
@@ -1505,15 +1505,17 @@ private struct IslandSessionRow: View {
             .background(.white.opacity(presentation == .notification ? 0.045 : 0.06), in: Capsule())
     }
 
+    private var textLocalizer: SessionTextLocalizer { .current(lang) }
+
     private var summaryPromptLineText: String? {
         if presentation == .notification {
             if session.phase == .completed {
                 return notificationCompletedPromptLineText
             }
-            return session.notificationHeaderPromptLineText
+            return session.localizedNotificationHeaderPromptLineText(textLocalizer)
         }
 
-        return session.spotlightPromptLineText ?? expandedPromptLineText
+        return session.localizedPromptLineText(textLocalizer) ?? expandedPromptLineText
     }
 
     private var summaryHeadlineText: String {
@@ -1537,11 +1539,11 @@ private struct IslandSessionRow: View {
 
     private var notificationCompletedPromptLineText: String? {
         if let prompt = session.latestUserPromptText?.trimmedForNotificationCard, !prompt.isEmpty {
-            return "You: \(prompt)"
+            return textLocalizer.promptLine(prompt)
         }
 
         if let prompt = session.initialUserPromptText?.trimmedForNotificationCard, !prompt.isEmpty {
-            return "You: \(prompt)"
+            return textLocalizer.promptLine(prompt)
         }
 
         return nil
@@ -1882,7 +1884,7 @@ private struct IslandSessionRow: View {
             return text
         }
         let summary = session.summary.trimmedForNotificationCard
-        return summary == SessionPhase.completed.displayName ? "" : summary
+        return summary == SessionPhase.completed.displayName ? "" : textLocalizer.summary(summary)
     }
 
     private var commandLabel: String {
@@ -1902,7 +1904,7 @@ private struct IslandSessionRow: View {
         if let preview, !preview.isEmpty {
             return "$ \(preview)"
         }
-        return session.permissionRequest?.summary.trimmedForNotificationCard ?? session.summary.trimmedForNotificationCard
+        return textLocalizer.summary(session.permissionRequest?.summary.trimmedForNotificationCard ?? session.summary.trimmedForNotificationCard)
     }
 
     private var runningDetailText: String? {
@@ -1911,13 +1913,13 @@ private struct IslandSessionRow: View {
             return "$ \(preview)"
         }
 
-        if let activity = session.spotlightActivityLineText?.trimmedForNotificationCard,
+        if let activity = session.localizedActivityLineText(textLocalizer)?.trimmedForNotificationCard,
            !activity.isEmpty {
             return activity
         }
 
         let summary = session.summary.trimmedForNotificationCard
-        return summary.isEmpty ? nil : summary
+        return summary.isEmpty ? nil : textLocalizer.summary(summary)
     }
 
     private func subagentElapsed(since start: Date, at now: Date) -> String {
@@ -2033,7 +2035,7 @@ private struct IslandSessionRow: View {
     /// Prompt line for manually expanded inactive rows (bypasses time-based filter).
     private var expandedPromptLineText: String? {
         guard detailOverride == true, let prompt = session.spotlightPromptText else { return nil }
-        return "You: \(prompt)"
+        return textLocalizer.promptLine(prompt)
     }
 
     /// Activity line for manually expanded inactive rows (bypasses time-based filter).
@@ -2044,7 +2046,7 @@ private struct IslandSessionRow: View {
         if let assistantMessage = trimmed, !assistantMessage.isEmpty {
             return assistantMessage
         }
-        return session.jumpTarget != nil ? "Ready" : "Completed"
+        return textLocalizer.word(session.jumpTarget != nil ? .ready : .completed)
     }
 
     private func handlePrimaryTap() {

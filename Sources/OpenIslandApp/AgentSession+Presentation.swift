@@ -205,12 +205,16 @@ extension AgentSession {
     }
 
     var spotlightPromptLineText: String? {
+        localizedPromptLineText(.english)
+    }
+
+    func localizedPromptLineText(_ localizer: SessionTextLocalizer) -> String? {
         guard spotlightShowsDetailLines,
               let prompt = spotlightPromptText else {
             return nil
         }
 
-        return "You: \(prompt)"
+        return localizer.promptLine(prompt)
     }
 
     var completionReplyRecipientName: String {
@@ -245,26 +249,36 @@ extension AgentSession {
     }
 
     var notificationHeaderPromptLineText: String? {
+        localizedNotificationHeaderPromptLineText(.english)
+    }
+
+    func localizedNotificationHeaderPromptLineText(_ localizer: SessionTextLocalizer) -> String? {
         guard phase != .completed else {
             return nil
         }
 
-        return spotlightPromptLineText
+        return localizedPromptLineText(localizer)
     }
 
     var spotlightActivityLineText: String? {
+        localizedActivityLineText(.english)
+    }
+
+    /// Status words and Open Island's own summaries go through `localizer`;
+    /// assistant messages and tool previews stay verbatim.
+    func localizedActivityLineText(_ localizer: SessionTextLocalizer) -> String? {
         guard spotlightShowsDetailLines else {
             return nil
         }
 
         if let request = permissionRequest?.summary.trimmedForSurface,
            !request.isEmpty {
-            return request
+            return localizer.summary(request)
         }
 
         if let prompt = questionPrompt?.title.trimmedForSurface,
            !prompt.isEmpty {
-            return prompt
+            return localizer.summary(prompt)
         }
 
         switch phase {
@@ -272,18 +286,20 @@ extension AgentSession {
             if let activity = spotlightRunningActivityText {
                 return activity
             }
-            return spotlightPromptLineText == nil ? "Running" : "Thinking"
+            return localizer.word(spotlightPromptLineText == nil ? .running : .thinking)
         case .waitingForApproval:
-            return permissionRequest?.summary.trimmedForSurface ?? "Approval needed"
+            return permissionRequest.map { localizer.summary($0.summary.trimmedForSurface) }
+                ?? localizer.word(.approvalNeeded)
         case .waitingForAnswer:
-            return questionPrompt?.title.trimmedForSurface ?? "Answer needed"
+            return questionPrompt.map { localizer.summary($0.title.trimmedForSurface) }
+                ?? localizer.word(.answerNeeded)
         case .completed:
             if let assistantMessage = lastAssistantMessageText?.trimmedForSurface,
                !assistantMessage.isEmpty {
                 return assistantMessage
             }
 
-            return jumpTarget != nil ? "Ready" : "Completed"
+            return localizer.word(jumpTarget != nil ? .ready : .completed)
         }
     }
 

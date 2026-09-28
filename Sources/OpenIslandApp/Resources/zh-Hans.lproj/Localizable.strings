@@ -226,3 +226,49 @@
 
 /* Window Titles */
 "window.settings" = "Open Island 设置";
+
+/* Session rows: status words and Open Island's own summaries */
+"session.status.running" = "运行中";
+"session.status.thinking" = "思考中";
+"session.status.approvalNeeded" = "需要审批";
+"session.status.answerNeeded" = "需要回答";
+"session.status.ready" = "就绪";
+"session.status.completed" = "已完成";
+"session.promptLine" = "你：%@";
+"session.summary.started" = "已在 %2$@ 启动 %1$@ 会话。";
+"session.summary.resumed" = "已在 %2$@ 恢复 %1$@ 会话。";
+"session.summary.clearedContext" = "已清空 %2$@ 中的 %1$@ 上下文。";
+"session.summary.compactedContext" = "已压缩 %2$@ 中的 %1$@ 上下文。";
+"session.summary.endedIn" = "%2$@ 中的 %1$@ 会话已结束。";
+"session.summary.ended" = "%@ 会话已结束。";
+"session.summary.compacting" = "%@ 正在压缩对话。";
+"session.summary.detectedFrom" = "从 %2$@ 检测到 %1$@ 会话。";
+"session.summary.detected" = "检测到 %@ 会话。";
+"session.summary.agentDetectedFrom" = "从 %2$@ 检测到 %1$@ Agent。";
+"session.summary.agentDetected" = "检测到 %@ Agent。";
+"session.summary.codexPreparingBash" = "Codex 正在 %@ 中准备 Bash 命令。";
+"session.summary.codexWaitingPermissionIn" = "Codex 正在 %@ 中等待权限审批。";
+"session.summary.codexBashResult" = "Codex 在 %@ 中返回了 Bash 结果。";
+"session.summary.codexNewPrompt" = "Codex 在 %@ 中收到新提示。";
+"session.summary.codexTurnCompletedIn" = "Codex 在 %@ 中完成了一轮。";
+"session.summary.codexWantsToUse" = "Codex 想使用 %@。";
+"session.summary.codexRequestingPermission" = "Codex 正在请求权限。";
+"session.summary.codexWantsShell" = "Codex 想运行 Shell 命令。";
+"session.summary.codexWaitingApproval" = "Codex 正在等待审批。";
+"session.summary.codexWaitingInput" = "Codex 正在等待输入。";
+"session.summary.codexWorking" = "Codex 正在工作…";
+"session.summary.codexSession" = "Codex 会话。";
+"session.summary.idle" = "空闲。";
+"session.summary.turnFailed" = "本轮失败。";
+"session.summary.turnStalled" = "本轮已停滞。";
+"session.summary.turnInterrupted" = "Codex 本轮已中断。";
+"session.summary.threadClosed" = "Codex 对话已关闭。";
+"session.summary.threadArchived" = "Codex 对话已归档。";
+"session.summary.rateLimited" = "已达到速率限制。";
+"session.summary.runningTool" = "正在运行 %@。";
+"session.summary.thinking" = "思考中。";
+"session.summary.prompt" = "提示：%@";
+"session.summary.permissionInactive" = "权限请求已失效。";
+"session.summary.approvalHandledElsewhere" = "已在 Open Island 之外处理审批。";
+"session.summary.hookDisconnected" = "Hook 进程已断开。";
+"session.summary.claudeExitPlan" = "Claude 想退出计划模式并开始实施。";
