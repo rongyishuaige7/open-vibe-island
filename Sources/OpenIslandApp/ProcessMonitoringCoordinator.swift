@@ -874,7 +874,7 @@ final class ProcessMonitoringCoordinator {
             origin: .live,
             attachmentState: .attached,
             phase: .completed,
-            summary: "Claude session detected from \(terminalApp).",
+            summary: Self.syntheticDetectedSummary(subject: "Claude session", terminalApp: terminalApp),
             updatedAt: now,
             jumpTarget: JumpTarget(
                 terminalApp: terminalApp,
@@ -951,7 +951,7 @@ final class ProcessMonitoringCoordinator {
             origin: .live,
             attachmentState: .attached,
             phase: .running,
-            summary: "Cursor agent detected from \(terminalApp).",
+            summary: Self.syntheticDetectedSummary(subject: "Cursor agent", terminalApp: terminalApp),
             updatedAt: now,
             jumpTarget: JumpTarget(
                 terminalApp: terminalApp,
@@ -1490,6 +1490,16 @@ final class ProcessMonitoringCoordinator {
         }
 
         return value.hasPrefix("/dev/") ? value : "/dev/\(value)"
+    }
+
+    /// Summary for a session synthesized from a live process. Omits the
+    /// terminal when it is unknown instead of printing "from Unknown".
+    nonisolated static func syntheticDetectedSummary(subject: String, terminalApp: String) -> String {
+        let trimmed = terminalApp.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty, trimmed.lowercased() != "unknown" else {
+            return "\(subject) detected."
+        }
+        return "\(subject) detected from \(trimmed)."
     }
 
     func supportedTerminalApp(for value: String?) -> String? {

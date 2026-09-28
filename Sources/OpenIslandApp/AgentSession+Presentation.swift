@@ -110,8 +110,15 @@ extension AgentSession {
         return "\(jumpTarget.terminalApp) · \(jumpTarget.workspaceName)"
     }
 
+    /// Hidden when the terminal is unknown: "Unknown" is the sentinel for
+    /// "could not classify the host" and tells the user nothing.
     var spotlightTerminalBadge: String? {
-        jumpTarget?.terminalApp
+        guard let terminalApp = jumpTarget?.terminalApp.trimmedForSurface,
+              !terminalApp.isEmpty,
+              terminalApp.lowercased() != "unknown" else {
+            return nil
+        }
+        return terminalApp
     }
 
     var spotlightWorkspaceName: String {
