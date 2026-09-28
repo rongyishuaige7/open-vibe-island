@@ -1473,11 +1473,21 @@ private struct IslandSessionRow: View {
 
     private var agentBadge: some View {
         let tint = Color(hex: session.tool.brandColorHex) ?? V6Palette.paper
-        return Text(agentBadgeTitle)
-            .font(.system(size: 10.5, weight: .semibold, design: .monospaced))
+        return HStack(spacing: 4) {
+            if let icon = AgentBrandIcon.image(for: session.tool) {
+                Image(nsImage: icon)
+                    .renderingMode(.template)
+                    .resizable()
+                    .interpolation(.high)
+                    .frame(width: 11, height: 11)
+                    .accessibilityHidden(true)
+            }
+            Text(agentBadgeTitle)
+                .font(.system(size: 10.5, weight: .semibold, design: .monospaced))
+                .lineLimit(1)
+                .fixedSize(horizontal: true, vertical: false)
+        }
             .foregroundStyle(tint.opacity(notificationChromeOpacity))
-            .lineLimit(1)
-            .fixedSize(horizontal: true, vertical: false)
             .padding(.horizontal, 8)
             .padding(.vertical, 3)
             .background(tint.opacity(notificationBadgeFillOpacity), in: Capsule())
