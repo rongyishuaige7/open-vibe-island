@@ -332,6 +332,22 @@ public struct SessionState: Equatable, Sendable {
     }
 
     @discardableResult
+    /// Sets the agent-recorded conversation title. Sessions missing from
+    /// `titles` keep theirs, so a failed read never blanks a row.
+    public mutating func reconcileConversationTitles(_ titles: [String: String]) -> Bool {
+        var changed = false
+        for (sessionID, title) in titles {
+            guard var session = sessionsByID[sessionID],
+                  session.conversationTitle != title else {
+                continue
+            }
+            session.conversationTitle = title
+            upsert(session)
+            changed = true
+        }
+        return changed
+    }
+
     public mutating func reconcileJumpTargets(_ updates: [String: JumpTarget]) -> Bool {
         var changed = false
 

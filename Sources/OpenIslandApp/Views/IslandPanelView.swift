@@ -1528,13 +1528,14 @@ private struct IslandSessionRow: View {
 
     private var notificationWorkspaceHeadlineText: String {
         let workspace = session.spotlightWorkspaceName.trimmedForNotificationCard
-        let title = workspace.isEmpty ? session.tool.displayName : workspace
-        guard let branch = session.spotlightWorktreeBranch?.trimmedForNotificationCard,
-              !branch.isEmpty else {
-            return title
+        var headline = workspace.isEmpty ? session.tool.displayName : workspace
+        if let branch = session.spotlightWorktreeBranch?.trimmedForNotificationCard, !branch.isEmpty {
+            headline += " (\(branch))"
         }
-
-        return "\(title) (\(branch))"
+        if let title = session.conversationTitle?.trimmedForNotificationCard, !title.isEmpty {
+            headline += " · \(title)"
+        }
+        return headline
     }
 
     private var notificationCompletedPromptLineText: String? {

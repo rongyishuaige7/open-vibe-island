@@ -1732,6 +1732,7 @@ final class AppModel {
         // Reconcile attachments and start monitoring (requires sessions to be loaded).
         monitoring.reconcileSessionAttachments()
         monitoring.startMonitoringIfNeeded()
+        discovery.startConversationTitleRefreshIfNeeded()
     }
 
 
