@@ -976,6 +976,9 @@ final class AppModel {
                 cells.append(.overflow(ordered.count - 7))
             }
             return cells.isEmpty ? nil : .agents(cells)
+        case .mascots:
+            let slots = Self.mascotSlots(for: sessions)
+            return slots.isEmpty ? nil : .mascots(slots)
         }
     }
 
@@ -1012,15 +1015,37 @@ final class AppModel {
 
     private static func agentsGridCell(for session: AgentSession) -> AgentGridCell {
         let color = Color(hex: session.tool.brandColorHex) ?? .gray
-        let state: AgentGridCellState
+        return .session(color: color, state: agentsGridState(for: session))
+    }
+
+    private static func agentsGridState(for session: AgentSession) -> AgentGridCellState {
         if session.phase.requiresAttention {
-            state = .waiting
-        } else if session.phase == .running {
-            state = .running
-        } else {
-            state = .idle
+            return .waiting
         }
-        return .session(color: color, state: state)
+        return session.phase == .running ? .running : .idle
+    }
+
+    /// One mascot per agent tool, carrying the most urgent state among its
+    /// sessions. At most three, in `AgentTool` order reversed so Claude sits
+    /// outermost: on a MacBook the slot's inner edge runs under the notch.
+    static func mascotSlots(for sessions: [AgentSession]) -> [PixelMascotSlot] {
+        func rank(_ state: AgentGridCellState) -> Int {
+            switch state {
+            case .waiting: 2
+            case .running: 1
+            case .idle: 0
+            }
+        }
+        var states: [AgentTool: AgentGridCellState] = [:]
+        for session in sessions {
+            let state = agentsGridState(for: session)
+            if let current = states[session.tool], rank(current) >= rank(state) { continue }
+            states[session.tool] = state
+        }
+        let present = AgentTool.allCases.compactMap { tool in
+            states[tool].map { PixelMascotSlot(tool: tool, state: $0) }
+        }
+        return Array(present.prefix(3).reversed())
     }
 
     var shouldShowSessionBootstrapPlaceholder: Bool {

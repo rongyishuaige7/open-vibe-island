@@ -65,6 +65,7 @@
 "settings.appearance.rightSlot.note" = "What shows on the right of the closed island.";
 "settings.appearance.rightSlot.count" = "Count";
 "settings.appearance.rightSlot.agents" = "Agents";
+"settings.appearance.rightSlot.mascots" = "Mascots";
 "settings.appearance.rightSlot.none" = "None";
 "settings.appearance.centerLabel.title" = "02 · Center label";
 "settings.appearance.centerLabel.note" = "External displays only — the physical notch covers this space on MacBook.";
@@ -90,6 +91,7 @@
 "settings.appearance.stateIndicator.bar" = "Bar";
 "settings.appearance.stateIndicator.glyph" = "Glyph";
 "settings.appearance.stateIndicator.tint" = "Tint";
+"settings.appearance.stateIndicator.pixel" = "Pixel";
 "settings.appearance.sessionGroup.title" = "04 · Session grouping";
 "settings.appearance.sessionGroup.note" = "Optional sections for the expanded session list.";
 "settings.appearance.sessionGroup.none" = "None";
@@ -203,6 +205,7 @@
 "island.section.inProgress" = "In progress";
 "island.section.justDone" = "Just done";
 "island.section.idle" = "Idle";
+"island.mascot.waiting" = "needs you";
 "island.showAll" = "Show all %lld sessions";
 "island.collapseList" = "Collapse list";
 "island.usageWaiting" = "Usage waiting";

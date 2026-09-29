@@ -1655,7 +1655,7 @@ private struct IslandSessionRow: View {
             max(28, sideInset)
         case .tint:
             sideInset
-        case .animatedDot, .glyph:
+        case .animatedDot, .glyph, .pixel:
             sideInset
         }
     }
@@ -1670,7 +1670,7 @@ private struct IslandSessionRow: View {
             max(28, sideInset)
         case .tint:
             sideInset
-        case .animatedDot, .glyph:
+        case .animatedDot, .glyph, .pixel:
             sideInset + 30
         }
     }
@@ -2041,15 +2041,14 @@ private struct IslandSessionRow: View {
         let tint = statusTint(for: presence)
         switch stateIndicator {
         case .animatedDot:
-            if let interval = stateIndicator.timelineInterval(presence: presence, isActionable: isActionable) {
-                TimelineView(.periodic(from: .now, by: interval)) { context in
-                    let pulse = (sin(context.date.timeIntervalSinceReferenceDate * 3.2) + 1) / 2
-                    statusDot(tint: tint, presence: presence, pulse: pulse)
-                }
-                .frame(width: 10, height: 24, alignment: .top)
+            animatedStatusDot(tint: tint, presence: presence)
+        case .pixel:
+            if session.phase == .completed {
+                PixelCheckmark(tint: tint)
+                    .padding(.top, 6)
+                    .frame(width: 10, height: 24, alignment: .topLeading)
             } else {
-                statusDot(tint: tint, presence: presence, pulse: 0)
-                    .frame(width: 10, height: 24, alignment: .top)
+                animatedStatusDot(tint: tint, presence: presence)
             }
         case .bar:
             RoundedRectangle(cornerRadius: 2.5, style: .continuous)
@@ -2067,6 +2066,20 @@ private struct IslandSessionRow: View {
                 .fill(tint.opacity(presence == .inactive ? 0.54 : 0.92))
                 .frame(width: 8, height: 8)
                 .padding(.top, 6)
+        }
+    }
+
+    @ViewBuilder
+    private func animatedStatusDot(tint: Color, presence: IslandSessionPresence) -> some View {
+        if let interval = stateIndicator.timelineInterval(presence: presence, isActionable: isActionable) {
+            TimelineView(.periodic(from: .now, by: interval)) { context in
+                let pulse = (sin(context.date.timeIntervalSinceReferenceDate * 3.2) + 1) / 2
+                statusDot(tint: tint, presence: presence, pulse: pulse)
+            }
+            .frame(width: 10, height: 24, alignment: .top)
+        } else {
+            statusDot(tint: tint, presence: presence, pulse: 0)
+                .frame(width: 10, height: 24, alignment: .top)
         }
     }
 
