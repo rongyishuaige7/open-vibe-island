@@ -10,6 +10,8 @@ struct SessionModelLabelTests {
         #expect(SessionModelLabel.display(for: "claude-3-5-sonnet-20241022") == "Sonnet 3.5")
         #expect(SessionModelLabel.display(for: "claude-3-opus-20240229") == "Opus 3")
         #expect(SessionModelLabel.display(for: "claude-sonnet-5") == "Sonnet 5")
+        #expect(SessionModelLabel.display(for: "claude-opus-5.5") == "Opus 5.5")
+        #expect(SessionModelLabel.display(for: "claude-sonnet-4.5-20250929") == "Sonnet 4.5")
     }
 
     @Test

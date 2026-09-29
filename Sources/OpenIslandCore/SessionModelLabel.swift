@@ -55,12 +55,22 @@ public enum SessionModelLabel {
             return nil
         }
 
-        // Version parts are short numbers; dates (`20241022`) and `v1` markers are dropped.
+        // Version parts are short numbers (`5`, `5.5`); dates (`20241022`) and `v1` markers are dropped.
         let version = tokens
-            .filter { $0.count <= 2 && $0.allSatisfy(\.isNumber) }
+            .filter(isVersionPart)
             .joined(separator: ".")
         let name = family.prefix(1).uppercased() + family.dropFirst()
         return version.isEmpty ? name : "\(name) \(version)"
+    }
+
+    private static func isVersionPart(_ token: String) -> Bool {
+        guard token.count <= 5,
+              token.first?.isNumber == true,
+              token.last?.isNumber == true,
+              token.allSatisfy({ $0.isNumber || $0 == "." }) else {
+            return false
+        }
+        return token.split(separator: ".").allSatisfy { $0.count <= 2 }
     }
 
     private static func clipped(_ value: String) -> String {

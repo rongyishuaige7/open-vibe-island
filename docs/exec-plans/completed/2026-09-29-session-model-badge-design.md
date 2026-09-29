@@ -13,6 +13,8 @@ Non-goals: changing jump targets, the closed island, or adding a setting.
 
 - Claude: `ClaudeSessionMetadata.model` already exists. It comes from the
   SessionStart hook and from assistant `message.model` in transcripts.
+  Transcript discovery now skips `<synthetic>` (locally generated error or
+  interrupt replies), so a trailing API error no longer hides the real model.
 - Codex: `CodexSessionMetadata` gains `model`. It is filled from the required
   `model` field of hook payloads, and from `turn_context.model` in rollouts,
   which Codex writes on every turn, so `/model` switches show up on the next turn.
@@ -26,7 +28,7 @@ Non-goals: changing jump targets, the closed island, or adding a setting.
 
 `SessionModelLabel.display(for:)` in OpenIslandCore:
 
-- `claude-opus-5-5` → `Opus 5.5`, `claude-3-5-sonnet-20241022` → `Sonnet 3.5`;
+- `claude-opus-5-5` / `claude-opus-5.5` → `Opus 5.5`, `claude-3-5-sonnet-20241022` → `Sonnet 3.5`;
   Bedrock/Vertex suffixes, `[1m]` and provider prefixes are dropped.
 - Other ids stay as-is (`gpt-5-codex`), clipped to 18 characters.
 - Empty values and `<synthetic>` give no label.
