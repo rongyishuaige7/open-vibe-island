@@ -1366,8 +1366,8 @@ private struct IslandSessionRow: View {
                 if session.isRemote {
                     sideBadge("SSH")
                 }
-                if let terminalBadge = session.spotlightTerminalBadge {
-                    sideBadge(terminalBadge)
+                if let contextBadge = session.spotlightContextBadge {
+                    sideBadge(contextBadge, help: session.spotlightContextBadgeHelp)
                 }
                 Text(session.spotlightAgeBadge)
                     .font(.system(size: 10.5, weight: .medium, design: .monospaced))
@@ -1484,7 +1484,7 @@ private struct IslandSessionRow: View {
             .overlay(Capsule().stroke(tint.opacity(notificationBadgeStrokeOpacity), lineWidth: 1))
     }
 
-    private func sideBadge(_ title: String) -> some View {
+    private func sideBadge(_ title: String, help: String? = nil) -> some View {
         Text(title)
             .font(.system(size: 10.5, weight: .medium, design: .monospaced))
             .foregroundStyle(V6Palette.paper.opacity(presentation == .notification ? 0.52 : 0.7))
@@ -1493,6 +1493,7 @@ private struct IslandSessionRow: View {
             .padding(.horizontal, 8)
             .padding(.vertical, 3)
             .background(.white.opacity(presentation == .notification ? 0.045 : 0.06), in: Capsule())
+            .help(help ?? title)
     }
 
     private var summaryPromptLineText: String? {

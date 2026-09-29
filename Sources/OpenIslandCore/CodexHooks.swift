@@ -404,7 +404,8 @@ public extension CodexHookPayload {
             lastUserPrompt: prompt ?? promptPreview,
             lastAssistantMessage: lastAssistantMessage,
             currentTool: toolName,
-            currentCommandPreview: commandPreview
+            currentCommandPreview: commandPreview,
+            model: model.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? nil : model
         )
     }
 
