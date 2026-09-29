@@ -62,6 +62,20 @@ struct ClaudeTranscriptDiscoveryTests {
     }
 
     @Test
+    func syntheticAssistantReplyKeepsTheRealModel() throws {
+        let lines = [
+            #"{"type":"assistant","sessionId":"bbb22222","cwd":"/Users/test/project","timestamp":"2026-07-22T18:00:00Z","message":{"role":"assistant","model":"claude-sonnet-5","content":[{"type":"text","text":"Done."}]}}"#,
+            #"{"type":"assistant","sessionId":"bbb22222","cwd":"/Users/test/project","timestamp":"2026-07-22T18:00:05Z","message":{"role":"assistant","model":"<synthetic>","content":[{"type":"text","text":"API Error"}]}}"#,
+        ]
+        let (discovery, root) = try makeDiscovery(line: lines.joined(separator: "\n"))
+        defer { try? FileManager.default.removeItem(at: root) }
+
+        let sessions = discovery.discoverRecentSessions()
+
+        #expect(sessions.first?.claudeMetadata?.model == "claude-sonnet-5")
+    }
+
+    @Test
     func firstNonEmptyEntrypointIsLatched() throws {
         // An empty earlier entrypoint is skipped, the first non-empty value is
         // latched ("claude-desktop"), and a later record ("cli") must not

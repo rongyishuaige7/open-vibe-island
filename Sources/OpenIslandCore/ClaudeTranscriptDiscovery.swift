@@ -151,7 +151,8 @@ public final class ClaudeTranscriptDiscovery: @unchecked Sendable {
                     lastAssistantMessage = assistantText
                 }
 
-                if let value = message?["model"] as? String, !value.isEmpty {
+                // `<synthetic>` marks locally generated replies (errors, interrupts), not a model.
+                if let value = message?["model"] as? String, !value.isEmpty, !value.hasPrefix("<") {
                     model = value
                 }
 
