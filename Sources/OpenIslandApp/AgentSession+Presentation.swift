@@ -121,6 +121,17 @@ extension AgentSession {
         return terminalApp
     }
 
+    /// Row badge: the model the session runs on, falling back to the terminal.
+    var spotlightContextBadge: String? {
+        SessionModelLabel.display(for: currentModelIdentifier) ?? spotlightTerminalBadge
+    }
+
+    /// Hover text for the context badge: the full model id and the terminal it lives in.
+    var spotlightContextBadgeHelp: String? {
+        let parts = [currentModelIdentifier, spotlightTerminalBadge].compactMap { $0 }
+        return parts.isEmpty ? nil : parts.joined(separator: " · ")
+    }
+
     var spotlightWorkspaceName: String {
         if let workspaceName = jumpTarget?.workspaceName.trimmedForSurface,
            !workspaceName.isEmpty {

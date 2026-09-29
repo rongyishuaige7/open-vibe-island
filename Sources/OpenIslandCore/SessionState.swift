@@ -171,7 +171,13 @@ public struct SessionState: Equatable, Sendable {
                 return
             }
 
-            session.codexMetadata = payload.codexMetadata.isEmpty ? nil : payload.codexMetadata
+            var codexMetadata = payload.codexMetadata
+            // Tail-only rollout watchers may not have seen a `turn_context` yet;
+            // keep the model we already know instead of blanking it.
+            if codexMetadata.model == nil {
+                codexMetadata.model = session.codexMetadata?.model
+            }
+            session.codexMetadata = codexMetadata.isEmpty ? nil : codexMetadata
             session.updatedAt = payload.timestamp
             upsert(session)
 

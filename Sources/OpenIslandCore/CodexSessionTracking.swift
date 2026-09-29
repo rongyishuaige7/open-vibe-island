@@ -8,6 +8,8 @@ public struct CodexSessionMetadata: Equatable, Codable, Sendable {
     public var lastAssistantMessage: String?
     public var currentTool: String?
     public var currentCommandPreview: String?
+    /// Latest model reported by the hook payload or the rollout's `turn_context`.
+    public var model: String?
 
     public init(
         transcriptPath: String? = nil,
@@ -15,7 +17,8 @@ public struct CodexSessionMetadata: Equatable, Codable, Sendable {
         lastUserPrompt: String? = nil,
         lastAssistantMessage: String? = nil,
         currentTool: String? = nil,
-        currentCommandPreview: String? = nil
+        currentCommandPreview: String? = nil,
+        model: String? = nil
     ) {
         self.transcriptPath = transcriptPath
         self.initialUserPrompt = initialUserPrompt
@@ -23,6 +26,7 @@ public struct CodexSessionMetadata: Equatable, Codable, Sendable {
         self.lastAssistantMessage = lastAssistantMessage
         self.currentTool = currentTool
         self.currentCommandPreview = currentCommandPreview
+        self.model = model
     }
 
     public var isEmpty: Bool {
@@ -32,6 +36,7 @@ public struct CodexSessionMetadata: Equatable, Codable, Sendable {
             && lastAssistantMessage == nil
             && currentTool == nil
             && currentCommandPreview == nil
+            && model == nil
     }
 }
 
@@ -639,7 +644,8 @@ public final class CodexRolloutDiscovery: @unchecked Sendable {
             lastUserPrompt: snapshot.lastUserPrompt,
             lastAssistantMessage: snapshot.lastAssistantMessage,
             currentTool: snapshot.currentTool,
-            currentCommandPreview: snapshot.currentCommandPreview
+            currentCommandPreview: snapshot.currentCommandPreview,
+            model: snapshot.model
         )
 
         return CodexTrackedSessionRecord(
@@ -788,6 +794,7 @@ public struct CodexRolloutSnapshot: Equatable, Sendable {
     public var lastAssistantMessage: String?
     public var currentTool: String?
     public var currentCommandPreview: String?
+    public var model: String?
     public var isCompleted: Bool
     public var isInterrupted: Bool
 
@@ -800,6 +807,7 @@ public struct CodexRolloutSnapshot: Equatable, Sendable {
         lastAssistantMessage: String? = nil,
         currentTool: String? = nil,
         currentCommandPreview: String? = nil,
+        model: String? = nil,
         isCompleted: Bool = false,
         isInterrupted: Bool = false
     ) {
@@ -811,6 +819,7 @@ public struct CodexRolloutSnapshot: Equatable, Sendable {
         self.lastAssistantMessage = lastAssistantMessage
         self.currentTool = currentTool
         self.currentCommandPreview = currentCommandPreview
+        self.model = model
         self.isCompleted = isCompleted
         self.isInterrupted = isInterrupted
     }
@@ -821,7 +830,8 @@ public struct CodexRolloutSnapshot: Equatable, Sendable {
             lastUserPrompt: lastUserPrompt,
             lastAssistantMessage: lastAssistantMessage,
             currentTool: currentTool,
-            currentCommandPreview: currentCommandPreview
+            currentCommandPreview: currentCommandPreview,
+            model: model
         )
     }
 }
@@ -846,6 +856,12 @@ public enum CodexRolloutReducer {
             applyEventMessage(payload, timestamp: timestamp, to: &snapshot)
         case "response_item":
             applyResponseItem(payload, timestamp: timestamp, to: &snapshot)
+        case "turn_context":
+            // Each turn records the model it runs on, so `/model` switches show up.
+            if let model = (payload["model"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines),
+               !model.isEmpty {
+                snapshot.model = model
+            }
         default:
             break
         }
@@ -866,7 +882,8 @@ public enum CodexRolloutReducer {
                 lastUserPrompt: $0.lastUserPrompt,
                 lastAssistantMessage: $0.lastAssistantMessage,
                 currentTool: $0.currentTool,
-                currentCommandPreview: $0.currentCommandPreview
+                currentCommandPreview: $0.currentCommandPreview,
+                model: $0.model
             )
         }
         let newMetadata = CodexSessionMetadata(
@@ -875,7 +892,8 @@ public enum CodexRolloutReducer {
             lastUserPrompt: newSnapshot.lastUserPrompt,
             lastAssistantMessage: newSnapshot.lastAssistantMessage,
             currentTool: newSnapshot.currentTool,
-            currentCommandPreview: newSnapshot.currentCommandPreview
+            currentCommandPreview: newSnapshot.currentCommandPreview,
+            model: newSnapshot.model
         )
 
         if oldMetadata != newMetadata {

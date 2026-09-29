@@ -2478,7 +2478,8 @@ public final class BridgeServer: @unchecked Sendable {
                 existing: existing?.currentCommandPreview,
                 update: update.currentCommandPreview,
                 hookEventName: hookEventName
-            )
+            ),
+            model: update.model ?? existing?.model
         )
     }
 
