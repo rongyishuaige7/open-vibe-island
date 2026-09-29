@@ -444,41 +444,15 @@ final class ProcessMonitoringCoordinator {
             }
         }
 
-        // Claude sessions: reuse the multi-pass matching from representedClaudeProcessKeys.
+        // Claude sessions: share the one-to-one matching used for synthetic rows,
+        // so each live process keeps at most one session alive.
         let claudeProcesses = activeProcesses.filter { $0.tool == .claudeCode }
         let trackedClaudeSessions = sessions.filter { $0.tool == .claudeCode && !isSyntheticClaudeSession($0) }
-        var claimedSessionIDs: Set<String> = []
-
-        // Pass 1: exact session ID match.
-        for process in claudeProcesses {
-            guard let processSessionID = process.sessionID,
-                  let matched = trackedClaudeSessions.first(where: {
-                      !claimedSessionIDs.contains($0.id) && $0.id == processSessionID
-                  }) else { continue }
-            aliveIDs.insert(matched.id)
-            claimedSessionIDs.insert(matched.id)
-        }
-
-        // Pass 2: transcript path match.
-        for process in claudeProcesses {
-            guard let transcriptPath = process.transcriptPath,
-                  let matched = trackedClaudeSessions.first(where: {
-                      !claimedSessionIDs.contains($0.id)
-                          && $0.claudeMetadata?.transcriptPath == transcriptPath
-                  }) else { continue }
-            aliveIDs.insert(matched.id)
-            claimedSessionIDs.insert(matched.id)
-        }
-
-        // Pass 3: TTY + CWD fallback match.
-        for process in claudeProcesses {
-            guard let matched = uniqueTrackedClaudeSession(
-                for: process,
-                sessions: trackedClaudeSessions,
-                claimedSessionIDs: claimedSessionIDs
-            ) else { continue }
-            aliveIDs.insert(matched.id)
-            claimedSessionIDs.insert(matched.id)
+        for match in claudeProcessSessionMatches(
+            sessions: trackedClaudeSessions,
+            activeProcesses: claudeProcesses
+        ) {
+            aliveIDs.insert(match.session.id)
         }
 
         // OpenCode sessions are hook-managed, but OpenCode does not expose a stable
@@ -1160,52 +1134,86 @@ final class ProcessMonitoringCoordinator {
             session.tool == .claudeCode && !isSyntheticClaudeSession(session)
         }
 
-        var representedProcessKeys: Set<String> = []
+        return Set(
+            claudeProcessSessionMatches(
+                sessions: trackedClaudeSessions,
+                activeProcesses: activeProcesses.filter { $0.tool == .claudeCode }
+            )
+            .map { processIdentityKey($0.process) }
+        )
+    }
+
+    /// Pairs live Claude processes with tracked sessions, one to one.
+    ///
+    /// A process's `sessionID` comes from its `--resume` / `--session-id`
+    /// launch argument, which goes stale after an in-process `/resume` or
+    /// `/clear`. An ID match is therefore ignored when the session's TTY is
+    /// held by another live process; the session then falls through to the
+    /// TTY/CWD passes like any other.
+    private func claudeProcessSessionMatches(
+        sessions: [AgentSession],
+        activeProcesses: [ActiveProcessSnapshot]
+    ) -> [(process: ActiveProcessSnapshot, session: AgentSession)] {
+        var matches: [(process: ActiveProcessSnapshot, session: AgentSession)] = []
+        var claimedProcessIndices: Set<Int> = []
         var claimedSessionIDs: Set<String> = []
 
-        for process in activeProcesses {
-            guard let processSessionID = process.sessionID,
-                  let matchedSession = trackedClaudeSessions.first(where: {
-                      !claimedSessionIDs.contains($0.id) && $0.id == processSessionID
-                  }) else {
-                continue
-            }
-
-            representedProcessKeys.insert(processIdentityKey(process))
-            claimedSessionIDs.insert(matchedSession.id)
+        func claim(_ index: Int, _ session: AgentSession) {
+            matches.append((activeProcesses[index], session))
+            claimedProcessIndices.insert(index)
+            claimedSessionIDs.insert(session.id)
         }
 
-        for process in activeProcesses {
-            let processKey = processIdentityKey(process)
-            guard !representedProcessKeys.contains(processKey),
-                  let transcriptPath = process.transcriptPath,
-                  let matchedSession = trackedClaudeSessions.first(where: {
+        // Pass 1: exact session ID match.
+        for (index, process) in activeProcesses.enumerated() {
+            guard let processSessionID = process.sessionID,
+                  let matched = sessions.first(where: {
+                      !claimedSessionIDs.contains($0.id)
+                          && $0.id == processSessionID
+                          && !isHeldByAnotherProcess($0, excluding: process, in: activeProcesses)
+                  }) else { continue }
+            claim(index, matched)
+        }
+
+        // Pass 2: transcript path match.
+        for (index, process) in activeProcesses.enumerated() where !claimedProcessIndices.contains(index) {
+            guard let transcriptPath = process.transcriptPath,
+                  let matched = sessions.first(where: {
                       !claimedSessionIDs.contains($0.id)
                           && $0.claudeMetadata?.transcriptPath == transcriptPath
-                  }) else {
-                continue
-            }
-
-            representedProcessKeys.insert(processKey)
-            claimedSessionIDs.insert(matchedSession.id)
+                  }) else { continue }
+            claim(index, matched)
         }
 
-        for process in activeProcesses {
-            let processKey = processIdentityKey(process)
-            guard !representedProcessKeys.contains(processKey),
-                  let matchedSession = uniqueTrackedClaudeSession(
-                      for: process,
-                      sessions: trackedClaudeSessions,
-                      claimedSessionIDs: claimedSessionIDs
-                  ) else {
-                continue
-            }
-
-            representedProcessKeys.insert(processKey)
-            claimedSessionIDs.insert(matchedSession.id)
+        // Pass 3: TTY + CWD fallback match.
+        for (index, process) in activeProcesses.enumerated() where !claimedProcessIndices.contains(index) {
+            guard let matched = uniqueTrackedClaudeSession(
+                for: process,
+                sessions: sessions,
+                claimedSessionIDs: claimedSessionIDs
+            ) else { continue }
+            claim(index, matched)
         }
 
-        return representedProcessKeys
+        return matches
+    }
+
+    /// True when the session's known TTY differs from `process` and another
+    /// live Claude process sits on that TTY, i.e. the session still lives in
+    /// its own tab and `process` only carries a stale launch argument. A TTY
+    /// with no process left is not a conflict: the session was resumed in a
+    /// new tab.
+    private func isHeldByAnotherProcess(
+        _ session: AgentSession,
+        excluding process: ActiveProcessSnapshot,
+        in processes: [ActiveProcessSnapshot]
+    ) -> Bool {
+        guard let sessionTTY = normalizedTTYForMatching(session.jumpTarget?.terminalTTY),
+              let processTTY = normalizedTTYForMatching(process.terminalTTY),
+              sessionTTY != processTTY else {
+            return false
+        }
+        return processes.contains { normalizedTTYForMatching($0.terminalTTY) == sessionTTY }
     }
 
     private func uniqueTrackedClaudeSession(
@@ -1320,6 +1328,18 @@ final class ProcessMonitoringCoordinator {
                     continue
                 }
 
+                // A shared cwd alone may only fill in a missing TTY. Replacing a
+                // known TTY needs the process to identify this very session;
+                // otherwise a new process in the same folder would take over an
+                // old session's row and keep it alive.
+                let processIdentifiesSession = process.sessionID == session.id
+                    || (process.transcriptPath != nil
+                        && process.transcriptPath == session.claudeMetadata?.transcriptPath)
+                guard processIdentifiesSession
+                        || normalizedTTYForMatching(jumpTarget.terminalTTY) == nil else {
+                    continue
+                }
+
                 // Only adopt if no other session already owns this TTY.
                 let ttyAlreadyClaimed = sessions.contains { other in
                     other.id != session.id
@@ -1336,9 +1356,11 @@ final class ProcessMonitoringCoordinator {
                 }
                 guard !sessionOwnedByOtherProcess else { continue }
 
+                // Leave updatedAt alone: adopting a TTY is not session activity,
+                // and a fresh timestamp would win the cwd-only tie-break in
+                // uniqueTrackedClaudeSession.
                 sessions[index].jumpTarget?.terminalTTY = processTTY
                 sessions[index].attachmentState = .attached
-                sessions[index].updatedAt = .now
                 changed = true
                 break
             }
