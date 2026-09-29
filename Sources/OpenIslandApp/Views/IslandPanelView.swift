@@ -977,7 +977,58 @@ struct IslandPanelView: View {
             }
         }
 
+        if model.showTodayTokenUsage,
+           let todayTokens = todayTokenUsagePresentation {
+            providers.append(todayTokens)
+        }
+
         return providers
+    }
+
+    /// The "Today" chip: Claude and Codex tokens CC Switch logged since local
+    /// midnight, cache included.
+    private var todayTokenUsagePresentation: UsageProviderPresentation? {
+        let monitor = model.todayTokenUsageMonitor
+        guard monitor.usage != nil || monitor.lastErrorMessage != nil else {
+            return nil
+        }
+
+        let languageCode = lang.language.resolvedCode
+        let agents: [(id: String, label: String, shortLabel: String, totals: AgentTokenTotals?)] = [
+            ("claude", "Claude", "Cl", monitor.usage?.claude),
+            ("codex", "Codex", "Cx", monitor.usage?.codex),
+        ]
+        var helpLines = [lang.t("usage.todayTokens.help")]
+        for agent in agents {
+            guard let totals = agent.totals else { continue }
+            helpLines.append(lang.t(
+                "usage.todayTokens.helpLine",
+                agent.label,
+                totals.totalTokens.formatted(),
+                totals.cacheReadTokens.formatted(),
+                totals.requestCount.formatted()
+            ))
+        }
+        if let message = monitor.lastErrorMessage {
+            helpLines.append(lang.t("usage.todayTokens.readFailed", message))
+        }
+
+        return UsageProviderPresentation(
+            id: "today-tokens",
+            title: lang.t("usage.todayTokens.title"),
+            windows: [],
+            tokens: agents.map { agent in
+                UsageTokenPresentation(
+                    id: "today-\(agent.id)",
+                    label: agent.label,
+                    shortLabel: agent.shortLabel,
+                    value: agent.totals.map {
+                        TokenCountFormatter.compact($0.totalTokens, languageCode: languageCode)
+                    } ?? "—"
+                )
+            },
+            helpText: helpLines.joined(separator: "\n")
+        )
     }
 
     private func splitUsageProviders(
@@ -1111,6 +1162,18 @@ struct IslandPanelView: View {
                     }
                 }
             }
+
+            ForEach(provider.tokens) { token in
+                HStack(spacing: 4) {
+                    Text(layout.usesShortTitle ? token.shortLabel : token.label)
+                        .font(.system(size: 10.5, weight: .semibold, design: .monospaced))
+                        .foregroundStyle(.white.opacity(0.42))
+
+                    Text(token.value)
+                        .font(.system(size: 11.5, weight: .bold, design: .monospaced))
+                        .foregroundStyle(.white.opacity(0.86))
+                }
+            }
         }
         .padding(.horizontal, 8)
         .padding(.vertical, 4)
@@ -1123,7 +1186,10 @@ struct IslandPanelView: View {
     }
 
     private func usageHelpText(for provider: UsageProviderPresentation) -> String {
-        provider.windows.map { window in
+        if let helpText = provider.helpText {
+            return helpText
+        }
+        return provider.windows.map { window in
             var parts = ["\(window.label) \(window.roundedUsedPercentage)%"]
             if let resetsAt = window.resetsAt,
                let remaining = remainingDurationString(until: resetsAt) {
@@ -1186,10 +1252,22 @@ private struct UsageChipLayout {
     let showsRemaining: Bool
 }
 
+/// One agent's token total inside a token chip.
+private struct UsageTokenPresentation: Identifiable {
+    let id: String
+    let label: String
+    let shortLabel: String
+    let value: String
+}
+
 private struct UsageProviderPresentation: Identifiable {
     let id: String
     let title: String
     let windows: [UsageWindowPresentation]
+    /// Token totals shown instead of quota windows (the "Today" chip).
+    var tokens: [UsageTokenPresentation] = []
+    /// Overrides the tooltip otherwise built from `windows`.
+    var helpText: String?
 
     var peakWindow: UsageWindowPresentation? {
         windows.max { lhs, rhs in
@@ -1215,6 +1293,8 @@ private struct UsageProviderPresentation: Identifiable {
             "Cl"
         case "codex":
             "Cx"
+        case "today-tokens":
+            title
         default:
             String(title.prefix(2))
         }

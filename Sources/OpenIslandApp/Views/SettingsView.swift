@@ -703,6 +703,18 @@ struct SetupSettingsPane: View {
                     get: { model.showCodexUsage },
                     set: { model.showCodexUsage = $0 }
                 ))
+
+                Toggle(isOn: Binding(
+                    get: { model.showTodayTokenUsage },
+                    set: { model.showTodayTokenUsage = $0 }
+                )) {
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text(lang.t("settings.general.showTodayTokenUsage"))
+                        Text(lang.t("settings.general.showTodayTokenUsage.caption"))
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                }
             } header: {
                 HStack(spacing: 4) {
                     Text(lang.t("setup.section.usage"))
