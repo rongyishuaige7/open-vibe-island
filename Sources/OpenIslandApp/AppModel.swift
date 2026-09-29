@@ -24,6 +24,7 @@ final class AppModel {
     private static let islandRightSlotDefaultsKey = "appearance.island.v6.rightSlot"
     private static let islandCenterLabelDefaultsKey = "appearance.island.v6.centerLabel"
     private static let showCodexUsageDefaultsKey = "app.showCodexUsage"
+    private static let showTodayTokenUsageDefaultsKey = "app.showTodayTokenUsage"
     private static let completionReplyEnabledDefaultsKey = "feature.completionReply.enabled"
     private static let suppressFrontmostNotificationsDefaultsKey = "app.suppressFrontmostNotifications"
     private static let legacyIslandSessionStateIndicatorDefaultsKey = "appearance.island.v8.stateIndicator"
@@ -71,6 +72,7 @@ final class AppModel {
     let monitoring = ProcessMonitoringCoordinator()
     let codexAppServer = CodexAppServerCoordinator()
     let updateChecker = UpdateChecker()
+    let todayTokenUsageMonitor = TodayTokenUsageMonitor()
 
     var notchStatus: NotchStatus {
         get { overlay.notchStatus }
@@ -285,6 +287,19 @@ final class AppModel {
         didSet {
             guard hasFinishedInit, showCodexUsage != oldValue else { return }
             UserDefaults.standard.set(showCodexUsage, forKey: Self.showCodexUsageDefaultsKey)
+        }
+    }
+    /// Shows today's Claude and Codex token totals from CC Switch's local
+    /// request log in the island header.
+    var showTodayTokenUsage: Bool = false {
+        didSet {
+            guard hasFinishedInit, showTodayTokenUsage != oldValue else { return }
+            UserDefaults.standard.set(showTodayTokenUsage, forKey: Self.showTodayTokenUsageDefaultsKey)
+            if showTodayTokenUsage {
+                todayTokenUsageMonitor.start()
+            } else {
+                todayTokenUsageMonitor.stop()
+            }
         }
     }
     var completionReplyEnabled: Bool = false {
@@ -643,6 +658,13 @@ final class AppModel {
         } else {
             showCodexUsage = FileManager.default.fileExists(
                 atPath: CodexRolloutDiscovery.defaultRootURL.path
+            )
+        }
+        if UserDefaults.standard.object(forKey: Self.showTodayTokenUsageDefaultsKey) != nil {
+            showTodayTokenUsage = UserDefaults.standard.bool(forKey: Self.showTodayTokenUsageDefaultsKey)
+        } else {
+            showTodayTokenUsage = FileManager.default.fileExists(
+                atPath: CCSwitchUsageReader.defaultDatabaseURL.path
             )
         }
         completionReplyEnabled = UserDefaults.standard.bool(forKey: Self.completionReplyEnabledDefaultsKey)
@@ -1134,6 +1156,9 @@ final class AppModel {
             if showCodexUsage {
                 hooks.refreshCodexUsageState()
                 hooks.startCodexUsageMonitoringIfNeeded()
+            }
+            if showTodayTokenUsage {
+                todayTokenUsageMonitor.start()
             }
             updateChecker.startIfNeeded()
 
