@@ -32,9 +32,13 @@ agent works, which reads at a glance and gives the island some character.
   (`PixelMascotMotion`) and the checkmark bitmap, with agent-notch's MIT
   notice for the adapted parts: the Claude critter frames, the shimmer and the
   checkmark.
-- `PixelMascotRow` draws every mascot in one `Canvas`. A `TimelineView` ticks
-  at 8 fps only while a mascot is running or waiting, and never under Reduce
-  Motion.
+- `PixelMascotRow` hosts one `CALayer` per mascot, like `UnifiedBars`.
+  Running mascots cycle four pre-rendered frames (both walk poses, cursor on
+  and off) with a discrete `contents` keyframe animation; waiting ones animate
+  opacity. The render server plays both, so SwiftUI does no per-frame work.
+  Reduce Motion shows a still frame. A first version redrew a `Canvas` from a
+  `TimelineView` at 8 fps; on the packaged build that raised the app's CPU from
+  about 1% to about 5% while an agent ran.
 - Cells are 1×2pt, the aspect of the terminal block characters. Claude is
   16×10pt and Codex 10×12pt; with a 2pt gap the pair is 28pt wide, the visible
   part of the MacBook right wing at the 32pt notch height.
@@ -45,8 +49,8 @@ agent works, which reads at a glance and gives the island some character.
 ## Risks
 
 - A third mascot on a MacBook sits partly under the notch.
-- The 8 fps tick costs some CPU while an agent runs; check it on the packaged
-  build before relying on the slot.
+- Layer animations restart whenever the slots change, so a tool flipping
+  state mid-step jumps back to its first frame.
 - The pixel art relies on whole-point positions, so a fractional pill origin
   can soften its edges.
 
