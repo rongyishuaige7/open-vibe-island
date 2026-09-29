@@ -90,10 +90,16 @@ struct PixelSprite {
 
 /// Frame timing shared by the mascot row, kept pure so tests can pin it.
 enum PixelMascotMotion {
-    static let tick: TimeInterval = 0.125
     static let stepDuration: TimeInterval = 0.4
-    static let cursorBlinkDuration: TimeInterval = 0.5
+    static let cursorBlinkDuration: TimeInterval = 0.8
     static let bobHeight: CGFloat = 1
+    /// One walk-and-blink cycle: two steps with the cursor on, two with it off.
+    static let cycleDuration: TimeInterval = 1.6
+    /// Sample times for the running keyframes, one inside each step.
+    static let keyframeTimes: [TimeInterval] = [0.2, 0.6, 1.0, 1.4]
+    static let idleOpacity: Float = 0.3
+    static let breathMinOpacity: Float = 0.35
+    static let breathDuration: TimeInterval = 0.7
 
     /// Keeps the time small so the frame math stays exact.
     private static func phase(_ time: TimeInterval) -> TimeInterval {
@@ -111,17 +117,10 @@ enum PixelMascotMotion {
         return Int(phase(time) / cursorBlinkDuration) % 2 == 0
     }
 
-    /// Idle mascots stay dim; waiting ones breathe like the grid's waiting tile.
-    static func alpha(state: AgentGridCellState, time: TimeInterval?) -> Double {
-        switch state {
-        case .idle:
-            return 0.3
-        case .running:
-            return 1
-        case .waiting:
-            guard let time else { return 1 }
-            return 0.35 + 0.65 * (sin(phase(time) * .pi / 0.7) + 1) / 2
-        }
+    /// Resting layer opacity: idle mascots stay dim. Waiting ones breathe from
+    /// `breathMinOpacity` up to full, like the grid's waiting tile.
+    static func opacity(for state: AgentGridCellState) -> Float {
+        state == .idle ? idleOpacity : 1
     }
 
     /// Stable per-cell noise in 0..<1 that re-rolls three times a second,

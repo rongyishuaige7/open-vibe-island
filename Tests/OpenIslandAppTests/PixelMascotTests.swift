@@ -39,19 +39,39 @@ struct PixelMascotTests {
         #expect(PixelMascotMotion.walkFrame(state: .running, time: nil) == 0)
 
         #expect(PixelMascotMotion.cursorVisible(state: .running, time: 0.2))
-        #expect(!PixelMascotMotion.cursorVisible(state: .running, time: 0.7))
-        #expect(PixelMascotMotion.cursorVisible(state: .waiting, time: 0.7))
+        #expect(!PixelMascotMotion.cursorVisible(state: .running, time: 1.0))
+        #expect(PixelMascotMotion.cursorVisible(state: .waiting, time: 1.0))
     }
 
     @Test
-    func idleMascotsStayDimAndWaitingOnesBreathe() {
-        #expect(PixelMascotMotion.alpha(state: .idle, time: 1) == 0.3)
-        #expect(PixelMascotMotion.alpha(state: .running, time: 1) == 1)
-        let samples = stride(from: 0.0, through: 1.4, by: 0.1).map {
-            PixelMascotMotion.alpha(state: .waiting, time: $0)
+    func idleMascotsRestDim() {
+        #expect(PixelMascotMotion.opacity(for: .idle) == PixelMascotMotion.idleOpacity)
+        #expect(PixelMascotMotion.opacity(for: .running) == 1)
+        #expect(PixelMascotMotion.opacity(for: .waiting) == 1)
+        #expect(PixelMascotMotion.breathMinOpacity < 1)
+    }
+
+    /// Each running keyframe samples a different step of the cycle, so the
+    /// four frames cover both walk poses with the cursor on and off.
+    @Test
+    func runningKeyframesCoverEveryWalkAndCursorPose() {
+        let poses = PixelMascotMotion.keyframeTimes.map { time in
+            "\(PixelMascotMotion.walkFrame(state: .running, time: time))-\(PixelMascotMotion.cursorVisible(state: .running, time: time))"
         }
-        #expect(samples.allSatisfy { $0 >= 0.35 && $0 <= 1 })
-        #expect((samples.max() ?? 0) - (samples.min() ?? 0) > 0.5)
+        #expect(Set(poses).count == 4)
+        #expect(PixelMascotMotion.keyframeTimes.allSatisfy { $0 < PixelMascotMotion.cycleDuration })
+    }
+
+    @Test
+    func onlyRunningMascotsGetMoreThanOneFrame() {
+        let running = PixelMascotRenderer.frames(for: PixelMascotSlot(tool: .claudeCode, state: .running), scale: 2, animated: true)
+        #expect(running.count == 4)
+        #expect(running.first?.width == 32)
+        #expect(running.first?.height == 22)
+
+        #expect(PixelMascotRenderer.frames(for: PixelMascotSlot(tool: .codex, state: .waiting), scale: 2, animated: true).count == 1)
+        #expect(PixelMascotRenderer.frames(for: PixelMascotSlot(tool: .codex, state: .idle), scale: 2, animated: true).count == 1)
+        #expect(PixelMascotRenderer.frames(for: PixelMascotSlot(tool: .codex, state: .running), scale: 2, animated: false).count == 1)
     }
 
     @Test
