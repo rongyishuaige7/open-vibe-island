@@ -24,6 +24,7 @@ enum AgentGridCell: Equatable {
 enum IslandRightSlotContent: Equatable {
     case count(Int)              // "×N" badge
     case agents([AgentGridCell]) // balanced grid, one tile per session
+    case mascots([PixelMascotSlot]) // one pixel critter per agent tool
 }
 
 // MARK: - Right-slot renderers
@@ -41,6 +42,8 @@ struct V6RightSlotView: View {
                 .foregroundStyle(V6Palette.paper.opacity(0.72))
         case .agents(let cells):
             AgentsGridBody(cells: cells)
+        case .mascots(let slots):
+            PixelMascotRow(slots: slots)
         }
     }
 
@@ -61,6 +64,8 @@ struct V6RightSlotView: View {
             let maxRow = rows.max() ?? 0
             let geom = cellGeometry(rowCount: rows.count)
             return CGFloat(maxRow) * geom.cell + CGFloat(max(0, maxRow - 1)) * geom.gap
+        case .mascots(let slots):
+            return PixelMascotRow.intrinsicWidth(of: slots)
         }
     }
 
@@ -322,11 +327,13 @@ enum V6ClosedLayout: Equatable {
 private enum RightSlotKey: Hashable {
     case count(Int)
     case agents(Int)
+    case mascots([String])
 
     init(_ content: IslandRightSlotContent) {
         switch content {
         case .count(let n):    self = .count(n)
         case .agents(let cs):  self = .agents(cs.count)
+        case .mascots(let ss): self = .mascots(ss.map(\.tool.rawValue))
         }
     }
 }

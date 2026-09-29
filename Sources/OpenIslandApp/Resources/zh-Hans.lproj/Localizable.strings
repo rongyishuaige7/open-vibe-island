@@ -59,6 +59,7 @@
 "settings.appearance.rightSlot.note" = "收起状态下岛右侧显示的内容。";
 "settings.appearance.rightSlot.count" = "会话数";
 "settings.appearance.rightSlot.agents" = "代理";
+"settings.appearance.rightSlot.mascots" = "像素小人";
 "settings.appearance.rightSlot.none" = "不显示";
 "settings.appearance.centerLabel.title" = "02 · 中央标签";
 "settings.appearance.centerLabel.note" = "仅外接屏显示 — MacBook 的物理刘海会遮挡中央区域。";
@@ -84,6 +85,7 @@
 "settings.appearance.stateIndicator.bar" = "竖条";
 "settings.appearance.stateIndicator.glyph" = "图标";
 "settings.appearance.stateIndicator.tint" = "底色";
+"settings.appearance.stateIndicator.pixel" = "像素";
 "settings.appearance.sessionGroup.title" = "04 · 会话分组";
 "settings.appearance.sessionGroup.note" = "展开会话列表里的可选分组。";
 "settings.appearance.sessionGroup.none" = "不分组";
@@ -197,6 +199,7 @@
 "island.section.inProgress" = "进行中";
 "island.section.justDone" = "刚完成";
 "island.section.idle" = "空闲";
+"island.mascot.waiting" = "等你处理";
 "island.showAll" = "显示全部 %lld 个会话";
 "island.collapseList" = "收起列表";
 "island.usageWaiting" = "等待用量数据";

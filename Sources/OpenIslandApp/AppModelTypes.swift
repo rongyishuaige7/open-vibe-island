@@ -28,6 +28,7 @@ enum TrackedEventIngress {
 enum IslandRightSlot: String, CaseIterable, Identifiable, Sendable {
     case count   // "×N" badge
     case agents  // colored dot stack, one per active agent tool
+    case mascots // pixel critter per agent tool, walking while it runs
     case none    // pill collapses — useful if you just want the bars
 
     var id: String { rawValue }
@@ -75,11 +76,13 @@ enum IslandSessionStateIndicator: String, CaseIterable, Identifiable, Sendable {
     case bar
     case glyph
     case tint
+    /// Animated dot, with a pixel checkmark once the session completes.
+    case pixel
 
     var id: String { rawValue }
 
     func timelineInterval(presence: IslandSessionPresence, isActionable: Bool) -> TimeInterval? {
-        guard self == .animatedDot else { return nil }
+        guard self == .animatedDot || self == .pixel else { return nil }
         return presence == .running || isActionable ? 1.0 / 15.0 : nil
     }
 }
