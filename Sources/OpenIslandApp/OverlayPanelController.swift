@@ -561,11 +561,14 @@ final class OverlayPanelController {
         }
 
         let rowHeights = visibleSessions.map { session -> CGFloat in
+            let rowHeight = session.estimatedIslandRowHeight(
+                at: now,
+                isUnseenCompletion: model.isUnseenCompletion(session)
+            )
             if session.id == actionableID {
-                return session.estimatedIslandRowHeight(at: now)
-                    + actionableBodyHeight(for: session, model: model)
+                return rowHeight + actionableBodyHeight(for: session, model: model)
             }
-            return session.estimatedIslandRowHeight(at: now)
+            return rowHeight
         }
 
         let rowsHeight = rowHeights.reduce(CGFloat.zero, +)

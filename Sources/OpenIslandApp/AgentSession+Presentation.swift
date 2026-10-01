@@ -121,15 +121,34 @@ extension AgentSession {
         return terminalApp
     }
 
-    /// Row badge: the model the session runs on, falling back to the terminal.
-    var spotlightContextBadge: String? {
-        SessionModelLabel.display(for: currentModelIdentifier) ?? spotlightTerminalBadge
+    /// Row badge next to the brand icon: the model the session runs on,
+    /// falling back to the agent's short name.
+    var spotlightAgentBadgeTitle: String {
+        SessionModelLabel.display(for: currentModelIdentifier) ?? spotlightAgentShortName
     }
 
-    /// Hover text for the context badge: the full model id and the terminal it lives in.
-    var spotlightContextBadgeHelp: String? {
-        let parts = [currentModelIdentifier, spotlightTerminalBadge].compactMap { $0 }
-        return parts.isEmpty ? nil : parts.joined(separator: " · ")
+    /// Hover text for the row badge: the agent, the full model id and the terminal.
+    var spotlightAgentBadgeHelp: String {
+        // Ids the badge can't label (`<synthetic>`) would only add noise.
+        let model = SessionModelLabel.display(for: currentModelIdentifier) == nil ? nil : currentModelIdentifier
+        return [tool.displayName, model, spotlightTerminalBadge]
+            .compactMap { $0 }
+            .joined(separator: " · ")
+    }
+
+    var spotlightAgentShortName: String {
+        switch tool {
+        case .claudeCode:
+            "claude"
+        case .geminiCLI:
+            "gemini"
+        case .qwenCode:
+            "qwen"
+        case .kimiCLI:
+            "kimi"
+        default:
+            tool.shortName.lowercased()
+        }
     }
 
     var spotlightWorkspaceName: String {
@@ -212,6 +231,50 @@ extension AgentSession {
             return title
         }
         return initialPromptText ?? latestPromptText
+    }
+
+    /// List-row line 1: the topic alone, else where the session runs.
+    var spotlightRowTopicText: String {
+        if let topic = spotlightHeadlinePromptText {
+            return topic
+        }
+        let location = spotlightWorkspaceLabel
+        return location.isEmpty ? tool.displayName : location
+    }
+
+    /// The workspace a list row shows, or nil when it is `/` or already the topic.
+    var spotlightRowWorkspaceText: String? {
+        let location = spotlightWorkspaceLabel
+        guard !location.isEmpty,
+              spotlightWorkspaceName != "/",
+              location != spotlightRowTopicText else {
+            return nil
+        }
+        return location
+    }
+
+    /// List-row line 2: "workspace · You: latest prompt". The prompt is left
+    /// out when excluded or when it repeats the topic.
+    func spotlightRowContextLine(_ localizer: SessionTextLocalizer, includesPrompt: Bool) -> String? {
+        var parts: [String] = []
+        if let workspace = spotlightRowWorkspaceText {
+            parts.append(workspace)
+        }
+        if includesPrompt,
+           let prompt = spotlightPromptText,
+           prompt != spotlightRowTopicText {
+            parts.append(localizer.promptLine(prompt))
+        }
+        return parts.isEmpty ? nil : parts.joined(separator: " · ")
+    }
+
+    /// "workspace (branch)", the label `spotlightHeadlineText` leads with.
+    private var spotlightWorkspaceLabel: String {
+        let workspaceName = spotlightWorkspaceName
+        guard !workspaceName.isEmpty, let branch = spotlightWorktreeBranch else {
+            return workspaceName
+        }
+        return "\(workspaceName) (\(branch))"
     }
 
     var spotlightPromptText: String? {

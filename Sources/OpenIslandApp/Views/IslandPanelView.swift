@@ -51,13 +51,16 @@ private struct AutoHeightScrollView<Content: View>: View {
 
 extension AgentSession {
     /// Estimated row height matching `IslandSessionRow` layout for viewport sizing.
-    func estimatedIslandRowHeight(at date: Date) -> CGFloat {
+    func estimatedIslandRowHeight(at date: Date, isUnseenCompletion: Bool = false) -> CGFloat {
         let presence = islandPresence(at: date)
         // v8 list rows are full-width scan rows, not rounded cards.
         // Base: vertical padding (22) + headline (~17) + divider rounding.
         var height: CGFloat = 40
-        guard presence != .inactive else { return height }
-        if spotlightPromptLineText != nil { height += 17 }
+        // An unseen finish keeps its row open however old it is.
+        guard presence != .inactive || isUnseenCompletion else { return height }
+        if spotlightRowContextLine(.english, includesPrompt: spotlightShowsDetailLines(at: date)) != nil {
+            height += 17
+        }
         if spotlightActivityLineText != nil { height += 20 }
         if let subagents = claudeMetadata?.activeSubagents, !subagents.isEmpty {
             height += 18
@@ -1429,7 +1432,7 @@ private struct IslandSessionRow: View {
             }
 
             VStack(alignment: .leading, spacing: 3) {
-                Text(summaryHeadlineText)
+                summaryHeadline(presence: presence, showsDetail: showsDetail)
                     .font(summaryTitleFont)
                     .foregroundStyle(titleColor(for: presence))
                     .lineLimit(1)
@@ -1451,9 +1454,6 @@ private struct IslandSessionRow: View {
                 agentBadge
                 if session.isRemote {
                     sideBadge("SSH")
-                }
-                if let contextBadge = session.spotlightContextBadge {
-                    sideBadge(contextBadge, help: session.spotlightContextBadgeHelp)
                 }
                 Text(session.spotlightAgeBadge)
                     .font(.system(size: 10.5, weight: .medium, design: .monospaced))
@@ -1568,7 +1568,7 @@ private struct IslandSessionRow: View {
                     .frame(width: 11, height: 11)
                     .accessibilityHidden(true)
             }
-            Text(agentBadgeTitle)
+            Text(session.spotlightAgentBadgeTitle)
                 .font(.system(size: 10.5, weight: .semibold, design: .monospaced))
                 .lineLimit(1)
                 .fixedSize(horizontal: true, vertical: false)
@@ -1578,9 +1578,21 @@ private struct IslandSessionRow: View {
             .padding(.vertical, 3)
             .background(tint.opacity(notificationBadgeFillOpacity), in: Capsule())
             .overlay(Capsule().stroke(tint.opacity(notificationBadgeStrokeOpacity), lineWidth: 1))
+            .help(session.spotlightAgentBadgeHelp)
+            .accessibilityElement(children: .ignore)
+            .accessibilityLabel(agentBadgeAccessibilityLabel)
     }
 
-    private func sideBadge(_ title: String, help: String? = nil) -> some View {
+    /// The icon is hidden from VoiceOver, so name the agent when the badge shows a model.
+    private var agentBadgeAccessibilityLabel: String {
+        let title = session.spotlightAgentBadgeTitle
+        guard title != session.spotlightAgentShortName else {
+            return session.tool.displayName
+        }
+        return "\(session.tool.displayName), \(title)"
+    }
+
+    private func sideBadge(_ title: String) -> some View {
         Text(title)
             .font(.system(size: 10.5, weight: .medium, design: .monospaced))
             .foregroundStyle(V6Palette.paper.opacity(presentation == .notification ? 0.52 : 0.7))
@@ -1589,7 +1601,6 @@ private struct IslandSessionRow: View {
             .padding(.horizontal, 8)
             .padding(.vertical, 3)
             .background(.white.opacity(presentation == .notification ? 0.045 : 0.06), in: Capsule())
-            .help(help ?? title)
     }
 
     private var textLocalizer: SessionTextLocalizer { .current(lang) }
@@ -1602,14 +1613,35 @@ private struct IslandSessionRow: View {
             return session.localizedNotificationHeaderPromptLineText(textLocalizer)
         }
 
-        return session.localizedPromptLineText(textLocalizer) ?? expandedPromptLineText
+        // A manually expanded row keeps its prompt past the age cutoff.
+        return session.spotlightRowContextLine(
+            textLocalizer,
+            includesPrompt: detailOverride == true || session.spotlightShowsDetailLines
+        )
+    }
+
+    /// List rows lead with the topic. A collapsed row has no line 2, so it
+    /// trails its workspace in the line-2 color instead.
+    private func summaryHeadline(presence: IslandSessionPresence, showsDetail: Bool) -> Text {
+        guard presentation == .list, !showsDetail,
+              let workspace = session.spotlightRowWorkspaceText else {
+            return Text(summaryHeadlineText)
+        }
+        var headline = AttributedString(summaryHeadlineText)
+        var suffix = AttributedString(" · " + workspace)
+        let suffixColor: Color = summaryPromptColor(for: presence)
+        suffix.foregroundColor = suffixColor
+        headline.append(suffix)
+        return Text(headline)
     }
 
     private var summaryHeadlineText: String {
-        if presentation == .notification, session.phase == .completed {
+        guard presentation == .notification else {
+            return session.spotlightRowTopicText
+        }
+        if session.phase == .completed {
             return notificationWorkspaceHeadlineText
         }
-
         return session.spotlightHeadlineText
     }
 
@@ -1635,21 +1667,6 @@ private struct IslandSessionRow: View {
         }
 
         return nil
-    }
-
-    private var agentBadgeTitle: String {
-        switch session.tool {
-        case .claudeCode:
-            "claude"
-        case .geminiCLI:
-            "gemini"
-        case .qwenCode:
-            "qwen"
-        case .kimiCLI:
-            "kimi"
-        default:
-            session.tool.shortName.lowercased()
-        }
     }
 
     private var rowLeadingInset: CGFloat {
@@ -2135,12 +2152,6 @@ private struct IslandSessionRow: View {
 
     private var allowsRowHoverHighlight: Bool {
         presentation != .notification
-    }
-
-    /// Prompt line for manually expanded inactive rows (bypasses time-based filter).
-    private var expandedPromptLineText: String? {
-        guard detailOverride == true, let prompt = session.spotlightPromptText else { return nil }
-        return textLocalizer.promptLine(prompt)
     }
 
     /// Activity line for manually expanded inactive rows (bypasses time-based filter).
