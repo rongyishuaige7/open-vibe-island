@@ -52,6 +52,7 @@ final class AppModel {
         didSet {
             _cachedSessionBuckets = nil
             pruneAgentsGridObservationTicketsIfNeeded()
+            pruneUnseenCompletedSessionIDs()
             bridgeServer.updateStateSnapshot(state)
         }
     }
@@ -66,6 +67,13 @@ final class AppModel {
     @ObservationIgnored private var _agentsGridObservedSequence: [String: Int] = [:]
     @ObservationIgnored private var _agentsGridNextTicket: Int = 0
     var selectedSessionID: String?
+    /// Sessions whose latest turn finished while the user wasn't looking.
+    /// Opening the list yourself, or jumping to the session, clears them;
+    /// an auto-popped notification doesn't. Memory only.
+    private(set) var unseenCompletedSessionIDs: Set<String> = []
+    /// Completions still waiting on the frontmost-terminal probe. A jump or a
+    /// list view during the probe drops the entry, so it never lands.
+    @ObservationIgnored private var pendingUnseenCompletionIDs: Set<String> = []
     let hooks = HookInstallationCoordinator()
     let overlay = OverlayUICoordinator()
     let discovery = SessionDiscoveryCoordinator()
@@ -862,16 +870,20 @@ final class AppModel {
     }
 
     private func stateGroupedSections(for sessions: [AgentSession]) -> [IslandSessionSection] {
+        // An unseen finish stays under "just done" however old it gets.
+        let unseen = unseenCompletedSessionIDs
         let definitions: [(id: String, title: String, include: (AgentSession) -> Bool)] = [
             ("approval", "island.section.needsApproval", { $0.phase == .waitingForApproval }),
             ("answer", "island.section.needsAnswer", { $0.phase == .waitingForAnswer }),
             ("running", "island.section.inProgress", { $0.phase == .running }),
             ("done", "island.section.justDone", { [completedStaleThreshold] session in
                 session.phase == .completed
-                    && !session.isStaleCompletedForIsland(at: .now, threshold: completedStaleThreshold.seconds)
+                    && (unseen.contains(session.id)
+                        || !session.isStaleCompletedForIsland(at: .now, threshold: completedStaleThreshold.seconds))
             }),
             ("idle", "island.section.idle", { [completedStaleThreshold] session in
                 session.phase == .completed
+                    && !unseen.contains(session.id)
                     && session.isStaleCompletedForIsland(at: .now, threshold: completedStaleThreshold.seconds)
             }),
         ]
@@ -977,7 +989,7 @@ final class AppModel {
             }
             return cells.isEmpty ? nil : .agents(cells)
         case .mascots:
-            let slots = Self.mascotSlots(for: sessions)
+            let slots = Self.mascotSlots(for: sessions, unseenCompletedIDs: unseenCompletedSessionIDs)
             return slots.isEmpty ? nil : .mascots(slots)
         }
     }
@@ -1025,10 +1037,14 @@ final class AppModel {
         return session.phase == .running ? .running : .idle
     }
 
-    /// One mascot per agent tool, carrying the most urgent state among its
-    /// sessions. At most three, in `AgentTool` order reversed so Claude sits
-    /// outermost: on a MacBook the slot's inner edge runs under the notch.
-    static func mascotSlots(for sessions: [AgentSession]) -> [PixelMascotSlot] {
+    /// One mascot per agent tool, carrying the most urgent state and the most
+    /// urgent mark among its sessions. At most three, in `AgentTool` order
+    /// reversed so Claude sits outermost: on a MacBook the slot's inner edge
+    /// runs under the notch.
+    static func mascotSlots(
+        for sessions: [AgentSession],
+        unseenCompletedIDs: Set<String> = []
+    ) -> [PixelMascotSlot] {
         func rank(_ state: AgentGridCellState) -> Int {
             switch state {
             case .waiting: 2
@@ -1036,14 +1052,26 @@ final class AppModel {
             case .idle: 0
             }
         }
+        func mark(for session: AgentSession) -> PixelMascotMark? {
+            switch session.phase {
+            case .waitingForApproval: .approval
+            case .waitingForAnswer: .answer
+            case .completed: unseenCompletedIDs.contains(session.id) ? .unseenDone : nil
+            case .running: nil
+            }
+        }
         var states: [AgentTool: AgentGridCellState] = [:]
+        var marks: [AgentTool: PixelMascotMark] = [:]
         for session in sessions {
+            if let mark = mark(for: session), marks[session.tool].map({ $0 < mark }) ?? true {
+                marks[session.tool] = mark
+            }
             let state = agentsGridState(for: session)
             if let current = states[session.tool], rank(current) >= rank(state) { continue }
             states[session.tool] = state
         }
         let present = AgentTool.allCases.compactMap { tool in
-            states[tool].map { PixelMascotSlot(tool: tool, state: $0) }
+            states[tool].map { PixelMascotSlot(tool: tool, state: $0, mark: marks[tool]) }
         }
         return Array(present.prefix(3).reversed())
     }
@@ -1416,6 +1444,8 @@ final class AppModel {
     }
 
     func jumpToSession(_ session: AgentSession) {
+        // Picking the row is the user looking at it, even if the jump fails.
+        markCompletionSeen(sessionID: session.id)
         guard let jumpTarget = session.jumpTarget,
               jumpTarget.terminalApp.lowercased() != "unknown" else {
             lastActionMessage = "Cannot jump: terminal app is unknown."
@@ -1650,6 +1680,10 @@ final class AppModel {
             lastActionMessage = describe(event)
         }
 
+        if case let .sessionCompleted(payload) = event {
+            markCompletionUnseenIfNeeded(payload, wasAlreadyCompleted: wasAlreadyCompleted, ingress: ingress)
+        }
+
         if let surface = IslandSurface.notificationSurface(for: event) {
             scheduleNotificationSurfacePresentationIfNeeded(
                 surface,
@@ -1706,6 +1740,71 @@ final class AppModel {
             && (notchStatus == .closed || notchOpenReason == .notification)
             && !overlay.shouldPreserveCurrentNotificationSurface(against: surface)
             && surface.matchesCurrentState(of: session)
+    }
+
+    // MARK: - Unseen completions
+
+    func isUnseenCompletion(_ session: AgentSession) -> Bool {
+        unseenCompletedSessionIDs.contains(session.id)
+    }
+
+    /// A finished turn counts as unseen unless it was interrupted (the user
+    /// is at the terminal), the session itself ended, it replays history at
+    /// launch, or its terminal tab already has focus.
+    private func markCompletionUnseenIfNeeded(
+        _ payload: SessionCompleted,
+        wasAlreadyCompleted: Bool,
+        ingress: TrackedEventIngress
+    ) {
+        let sessionID = payload.sessionID
+        guard !wasAlreadyCompleted,
+              payload.isInterrupt != true,
+              payload.isSessionEnd != true,
+              ingress == .bridge || !isResolvingInitialLiveSessions,
+              isUnseenCompletionCandidate(sessionID),
+              let session = state.session(id: sessionID) else {
+            return
+        }
+
+        pendingUnseenCompletionIDs.insert(sessionID)
+        Task { @MainActor [weak self] in
+            guard let self else { return }
+            let isFrontmost = await self.isNotificationSessionAlreadyFrontmost(session)
+            guard self.pendingUnseenCompletionIDs.remove(sessionID) != nil,
+                  !isFrontmost,
+                  self.isUnseenCompletionCandidate(sessionID),
+                  !self.unseenCompletedSessionIDs.contains(sessionID) else {
+                return
+            }
+            self.unseenCompletedSessionIDs.insert(sessionID)
+        }
+    }
+
+    /// The user closed a list they opened themselves: everything on it is seen.
+    func markCompletedSessionsSeen() {
+        pendingUnseenCompletionIDs.removeAll()
+        guard !unseenCompletedSessionIDs.isEmpty else { return }
+        unseenCompletedSessionIDs.removeAll()
+    }
+
+    private func markCompletionSeen(sessionID: String) {
+        pendingUnseenCompletionIDs.remove(sessionID)
+        guard unseenCompletedSessionIDs.contains(sessionID) else { return }
+        unseenCompletedSessionIDs.remove(sessionID)
+    }
+
+    private func isUnseenCompletionCandidate(_ sessionID: String) -> Bool {
+        guard let session = state.session(id: sessionID) else { return false }
+        return session.phase == .completed && !session.isSessionEnded && !session.isSubagentSession
+    }
+
+    /// Drops marks for sessions that started a new turn, ended or vanished.
+    private func pruneUnseenCompletedSessionIDs() {
+        guard !unseenCompletedSessionIDs.isEmpty else { return }
+        let retained = unseenCompletedSessionIDs.filter { isUnseenCompletionCandidate($0) }
+        if retained != unseenCompletedSessionIDs {
+            unseenCompletedSessionIDs = retained
+        }
     }
 
     private func synchronizeSelection() {

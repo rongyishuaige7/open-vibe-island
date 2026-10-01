@@ -76,6 +76,23 @@ final class OverlayUICoordinator {
     @ObservationIgnored
     private var isPointerInsideIslandSurface = false
 
+    /// A hover that merely passes over the island isn't a look; a list the
+    /// user hovered open counts as seen once it stayed open this long.
+    static let hoverSeenDwell: TimeInterval = 1.0
+
+    /// Overridable clock so tests can drive the hover dwell.
+    @ObservationIgnored
+    var nowProvider: () -> Date = { Date() }
+
+    @ObservationIgnored
+    private var userListViewStartedAt: Date?
+
+    /// The full session list, opened by the user rather than by a
+    /// notification or the boot flash.
+    var isUserViewingSessionList: Bool {
+        notchStatus == .opened && (notchOpenReason == .click || notchOpenReason == .hover)
+    }
+
     /// Kept for API compatibility; always false now that the window never
     /// resizes and close transitions are pure SwiftUI.
     var isCloseTransitionPending: Bool { false }
@@ -223,9 +240,12 @@ final class OverlayUICoordinator {
             appModel?.measuredNotificationContentHeight = 0
         }
 
+        let previousReason = notchOpenReason
+        let wasUserViewingSessionList = isUserViewingSessionList
         islandSurface = surface
         notchOpenReason = reason
         notchStatus = status
+        noteUserListViewChange(wasViewing: wasUserViewingSessionList, previousReason: previousReason)
         overlayPanelController.setInteractive(interactive)
 
         if status == .opened, let appModel {
@@ -237,6 +257,22 @@ final class OverlayUICoordinator {
 
         afterStateChange?()
         onPlacementResolved?()
+    }
+
+    /// Starts the dwell clock when the user opens the list and, when they
+    /// leave it, marks finished turns seen: always after a click, after a
+    /// hover only once it stayed open for `hoverSeenDwell`.
+    private func noteUserListViewChange(wasViewing: Bool, previousReason: NotchOpenReason?) {
+        let isViewing = isUserViewingSessionList
+        if isViewing, !wasViewing {
+            userListViewStartedAt = nowProvider()
+        } else if wasViewing, !isViewing {
+            let dwell = userListViewStartedAt.map { nowProvider().timeIntervalSince($0) } ?? 0
+            userListViewStartedAt = nil
+            if previousReason == .click || dwell >= Self.hoverSeenDwell {
+                appModel?.markCompletedSessionsSeen()
+            }
+        }
     }
 
     func notchPop() {
@@ -277,7 +313,10 @@ final class OverlayUICoordinator {
             islandSurface = .sessionList()
         }
         // When not clearing, keep actionableSessionID so approval/question expansion persists
+        let previousReason = notchOpenReason
+        let wasUserViewingSessionList = isUserViewingSessionList
         notchOpenReason = .click
+        noteUserListViewChange(wasViewing: wasUserViewingSessionList, previousReason: previousReason)
         notificationAutoCollapseTask?.cancel()
         notificationAutoCollapseTask = nil
         refreshOverlayPlacementIfVisible()

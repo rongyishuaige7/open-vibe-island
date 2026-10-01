@@ -650,6 +650,7 @@ struct IslandPanelView: View {
                                 stateIndicator: model.islandSessionStateIndicator,
                                 completedStaleThreshold: model.completedStaleThreshold.seconds,
                                 isActionable: session.phase.requiresAttention || session.id == actionableSessionID,
+                                isUnseenCompletion: model.isUnseenCompletion(session),
                                 useDrawingGroup: model.notchStatus == .opened,
                                 isInteractive: model.notchStatus == .opened,
                                 sideInset: sessionListSideInset,
@@ -700,6 +701,7 @@ struct IslandPanelView: View {
                         stateIndicator: model.islandSessionStateIndicator,
                         completedStaleThreshold: model.completedStaleThreshold.seconds,
                         isActionable: session.phase.requiresAttention || session.id == actionableSessionID,
+                        isUnseenCompletion: model.isUnseenCompletion(session),
                         useDrawingGroup: model.notchStatus == .opened,
                         isInteractive: model.notchStatus == .opened,
                         sideInset: sessionListSideInset,
@@ -781,7 +783,8 @@ struct IslandPanelView: View {
         referenceDate: Date,
         threshold: TimeInterval
     ) -> Bool {
-        guard session.phase == .completed else { return false }
+        // An unseen finish counts as done until the user has looked at it.
+        guard session.phase == .completed, !model.isUnseenCompletion(session) else { return false }
         return session.isStaleCompletedForIsland(at: referenceDate, threshold: threshold)
             || session.islandPresence(at: referenceDate) == .inactive
     }
@@ -1340,6 +1343,7 @@ private struct IslandSessionRow: View {
     var stateIndicator: IslandSessionStateIndicator = .animatedDot
     var completedStaleThreshold: TimeInterval = AgentSession.staleCompletedDisplayThreshold
     var isActionable: Bool = false
+    var isUnseenCompletion: Bool = false
     var useDrawingGroup: Bool = true
     var isInteractive: Bool = true
     var presentation: IslandSessionRowPresentation = .list
@@ -1361,15 +1365,17 @@ private struct IslandSessionRow: View {
 
     private func rowBody(referenceDate: Date) -> some View {
         let rawPresence = session.islandPresence(at: referenceDate)
-        let isStaleCompleted = session.isStaleCompletedForIsland(
+        // A finish the user hasn't seen stays lit, however long ago it landed.
+        let isStaleCompleted = !isUnseenCompletion && session.isStaleCompletedForIsland(
             at: referenceDate,
             threshold: completedStaleThreshold
         )
-        let defaultShowsDetail = !isStaleCompleted && (rawPresence != .inactive || isActionable)
+        let defaultShowsDetail = !isStaleCompleted
+            && (rawPresence != .inactive || isActionable || isUnseenCompletion)
         let showsDetail = detailOverride ?? defaultShowsDetail
         let presence = isStaleCompleted
             ? .inactive
-            : ((showsDetail && rawPresence == .inactive) ? .active : rawPresence)
+            : (((showsDetail || isUnseenCompletion) && rawPresence == .inactive) ? .active : rawPresence)
         return VStack(alignment: .leading, spacing: 0) {
             rowSummary(presence: presence, showsDetail: showsDetail)
 
@@ -2096,6 +2102,10 @@ private struct IslandSessionRow: View {
     private func rowFillColor(for presence: IslandSessionPresence) -> Color {
         if presentation == .notification {
             return Color.clear
+        }
+
+        if isUnseenCompletion {
+            return IslandDesignPalette.Status.completed.opacity(isHighlighted ? 0.11 : 0.07)
         }
 
         let base = isHighlighted ? Color.white.opacity(isActionable ? 0.06 : 0.04) : Color.clear

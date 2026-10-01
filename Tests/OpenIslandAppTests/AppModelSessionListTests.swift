@@ -1490,6 +1490,262 @@ struct AppModelSessionListTests {
         #expect(claudeSessions.count == 2)
     }
 
+    // MARK: - Unseen completions
+
+    @Test
+    func backgroundCompletionStaysUnseenUntilTheUserOpensTheList() async throws {
+        let model = unseenTestModel()
+        model.state = SessionState(sessions: [unseenSession(id: "unseen-bg")])
+
+        complete(model, "unseen-bg")
+        await waitUntil { model.unseenCompletedSessionIDs == ["unseen-bg"] && model.notchOpenReason == .notification }
+
+        // The card popped up on its own; closing it isn't a look at the list.
+        model.notchClose()
+        #expect(model.unseenCompletedSessionIDs == ["unseen-bg"])
+        let session = try #require(model.state.session(id: "unseen-bg"))
+        #expect(model.isUnseenCompletion(session))
+
+        model.notchOpen(reason: .click)
+        #expect(model.unseenCompletedSessionIDs == ["unseen-bg"])
+        model.notchClose()
+        #expect(model.unseenCompletedSessionIDs.isEmpty)
+    }
+
+    @Test
+    func hoverOpenCountsAsSeenOnlyAfterTheDwell() async {
+        let model = unseenTestModel()
+        var now = Date(timeIntervalSince1970: 10_000)
+        model.overlay.nowProvider = { now }
+        model.state = SessionState(sessions: [unseenSession(id: "unseen-hover")])
+
+        complete(model, "unseen-hover")
+        await waitUntil { model.unseenCompletedSessionIDs == ["unseen-hover"] && model.notchOpenReason == .notification }
+        model.notchClose()
+
+        // Sweeping across the island on the way to the menu bar.
+        model.notchOpen(reason: .hover)
+        now += 0.4
+        model.notchClose()
+        #expect(model.unseenCompletedSessionIDs == ["unseen-hover"])
+
+        model.notchOpen(reason: .hover)
+        now += OverlayUICoordinator.hoverSeenDwell + 0.5
+        model.notchClose()
+        #expect(model.unseenCompletedSessionIDs.isEmpty)
+    }
+
+    @Test
+    func completionInTheFocusedTerminalIsAlreadySeen() async {
+        let model = unseenTestModel(isFrontmost: true)
+        model.state = SessionState(sessions: [unseenSession(id: "unseen-front")])
+
+        complete(model, "unseen-front")
+        await settle()
+
+        #expect(model.unseenCompletedSessionIDs.isEmpty)
+        #expect(model.notchStatus == .closed)
+    }
+
+    @Test
+    func interruptedOrEndedTurnsLeaveNoMark() async {
+        let model = unseenTestModel()
+        model.state = SessionState(sessions: [
+            unseenSession(id: "unseen-esc"),
+            unseenSession(id: "unseen-exit"),
+        ])
+
+        // Esc means the user is at the terminal; an ended session has nothing to come back to.
+        complete(model, "unseen-esc", isInterrupt: true)
+        complete(model, "unseen-exit", isSessionEnd: true)
+        await settle()
+
+        #expect(model.unseenCompletedSessionIDs.isEmpty)
+    }
+
+    @Test
+    func coldStartReplayLeavesNoMark() async {
+        let model = unseenTestModel()
+        model.isResolvingInitialLiveSessions = true
+        model.state = SessionState(sessions: [unseenSession(id: "unseen-replay")])
+
+        complete(model, "unseen-replay", ingress: .rollout)
+        await settle()
+
+        #expect(model.unseenCompletedSessionIDs.isEmpty)
+    }
+
+    @Test
+    func aNewTurnOrASessionEndDropsTheMark() async {
+        let model = unseenTestModel()
+        model.state = SessionState(sessions: [
+            unseenSession(id: "unseen-again"),
+            unseenSession(id: "unseen-closing"),
+        ])
+
+        complete(model, "unseen-again")
+        complete(model, "unseen-closing")
+        await waitUntil { model.unseenCompletedSessionIDs.count == 2 }
+
+        model.applyTrackedEvent(
+            .activityUpdated(SessionActivityUpdated(
+                sessionID: "unseen-again",
+                summary: "Working",
+                phase: .running,
+                timestamp: .now
+            )),
+            updateLastActionMessage: false
+        )
+        #expect(model.unseenCompletedSessionIDs == ["unseen-closing"])
+
+        complete(model, "unseen-closing", isSessionEnd: true)
+        #expect(model.unseenCompletedSessionIDs.isEmpty)
+    }
+
+    @Test
+    func jumpingToARowMarksOnlyThatSessionSeen() async throws {
+        let model = unseenTestModel()
+        model.state = SessionState(sessions: [
+            unseenSession(id: "unseen-jump"),
+            unseenSession(id: "unseen-other"),
+        ])
+
+        complete(model, "unseen-jump")
+        complete(model, "unseen-other")
+        await waitUntil { model.unseenCompletedSessionIDs.count == 2 }
+
+        let session = try #require(model.state.session(id: "unseen-jump"))
+        model.jumpToSession(session)
+
+        #expect(model.unseenCompletedSessionIDs == ["unseen-other"])
+    }
+
+    @Test
+    func expandingACompletionCardCountsAsOpeningTheList() async {
+        let model = unseenTestModel()
+        model.state = SessionState(sessions: [unseenSession(id: "unseen-card")])
+
+        complete(model, "unseen-card")
+        await waitUntil { model.unseenCompletedSessionIDs == ["unseen-card"] && model.notchOpenReason == .notification }
+
+        model.expandNotificationToSessionList(clearExpansion: true)
+        #expect(model.notchOpenReason == .click)
+        #expect(model.unseenCompletedSessionIDs == ["unseen-card"])
+
+        model.notchClose()
+        #expect(model.unseenCompletedSessionIDs.isEmpty)
+    }
+
+    @Test
+    func completionWhileTheListIsOpenClearsWhenTheUserClosesIt() async {
+        let model = unseenTestModel()
+        model.state = SessionState(sessions: [unseenSession(id: "unseen-open")])
+        model.notchOpen(reason: .click)
+
+        complete(model, "unseen-open")
+        await waitUntil { model.unseenCompletedSessionIDs == ["unseen-open"] }
+        #expect(model.notchOpenReason == .click)
+
+        model.notchClose()
+        #expect(model.unseenCompletedSessionIDs.isEmpty)
+    }
+
+    @Test
+    func staleUnseenCompletionStaysInDoneAndLightsItsMascot() async {
+        let model = unseenTestModel()
+        let finishedAt = Date.now.addingTimeInterval(-600)
+        model.state = SessionState(sessions: [
+            unseenSession(id: "unseen-stale", updatedAt: finishedAt.addingTimeInterval(-60)),
+        ])
+
+        complete(model, "unseen-stale", at: finishedAt)
+        await waitUntil { model.unseenCompletedSessionIDs == ["unseen-stale"] }
+
+        // Same preferences on both profiles and diagnostics last: tracked
+        // events re-resolve the placement against the machine's real screen.
+        for profile in IslandAppearanceDisplayProfile.allCases {
+            model.updateAppearancePreferences(for: profile) {
+                $0.rightSlot = .mascots
+                $0.sessionGroup = .state
+                $0.completedStaleThreshold = .fiveMinutes
+            }
+        }
+        model.overlayPlacementDiagnostics = placementDiagnostics(mode: .topBar)
+
+        #expect(model.islandSessionSections.map(\.id) == ["state-done"])
+        #expect(model.islandClosedRightSlotContent() == .mascots([
+            PixelMascotSlot(tool: .codex, state: .idle, mark: .unseenDone),
+        ]))
+
+        model.markCompletedSessionsSeen()
+        #expect(model.islandSessionSections.map(\.id) == ["state-idle"])
+        #expect(model.islandClosedRightSlotContent() == .mascots([PixelMascotSlot(tool: .codex, state: .idle)]))
+    }
+
+    private func unseenTestModel(isFrontmost: Bool = false) -> AppModel {
+        let model = AppModel(
+            terminalJumpAction: { _ in "Jumped." },
+            isNotificationSessionAlreadyFrontmost: { _ in isFrontmost }
+        )
+        model.isSoundMuted = true
+        // Keep the real pointer from holding a notification card open.
+        model.overlay.pointerLocationProvider = { NSPoint(x: -10_000, y: -10_000) }
+        return model
+    }
+
+    /// A live, hook-managed Codex turn in progress, the shape a bridge
+    /// session has before its completion lands.
+    private func unseenSession(id: String, updatedAt: Date = .now) -> AgentSession {
+        var session = listSession(id: id, phase: .running, updatedAt: updatedAt)
+        session.isProcessAlive = true
+        session.isHookManaged = true
+        return session
+    }
+
+    private func complete(
+        _ model: AppModel,
+        _ sessionID: String,
+        at timestamp: Date = .now,
+        isInterrupt: Bool? = nil,
+        isSessionEnd: Bool? = nil,
+        ingress: TrackedEventIngress = .bridge
+    ) {
+        model.applyTrackedEvent(
+            .sessionCompleted(SessionCompleted(
+                sessionID: sessionID,
+                summary: "Done",
+                timestamp: timestamp,
+                isInterrupt: isInterrupt,
+                isSessionEnd: isSessionEnd
+            )),
+            updateLastActionMessage: false,
+            ingress: ingress
+        )
+    }
+
+    /// Polls until the frontmost probe and the notification task have run.
+    private func waitUntil(
+        _ condition: () -> Bool,
+        sourceLocation: SourceLocation = #_sourceLocation
+    ) async {
+        for _ in 0..<50 {
+            if condition() { return }
+            await Task.yield()
+            try? await Task.sleep(for: .milliseconds(10))
+        }
+        if !condition() {
+            Issue.record("Timed out waiting for the unseen-completion state", sourceLocation: sourceLocation)
+        }
+    }
+
+    /// Gives the probe time to land when the point is that nothing changes.
+    private func settle() async {
+        for _ in 0..<20 {
+            await Task.yield()
+            try? await Task.sleep(for: .milliseconds(10))
+        }
+    }
+
     private func listSession(id: String, phase: SessionPhase, updatedAt: Date) -> AgentSession {
         AgentSession(
             id: id,

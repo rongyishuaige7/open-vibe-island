@@ -17,12 +17,16 @@ struct PixelMascotLayerRepresentable: NSViewRepresentable {
     }
 }
 
-/// One layer per mascot. Running mascots cycle pre-rendered frames with a
-/// discrete `contents` keyframe animation and waiting ones animate opacity,
-/// so the render server plays them without waking the app.
+/// One layer per mascot plus a still layer per mark. Running mascots cycle
+/// pre-rendered frames with a discrete `contents` keyframe animation and
+/// waiting ones animate opacity, so the render server plays them without
+/// waking the app.
 final class PixelMascotLayerView: NSView {
-    private struct Configuration: Equatable {
-        var slots: [PixelMascotSlot]
+    /// Everything that shapes the sprite layers. Marks stay out of it so a
+    /// mark coming or going never restarts a walk.
+    private struct SpriteConfiguration: Equatable {
+        var tools: [AgentTool]
+        var states: [AgentGridCellState]
         var reduceMotion: Bool
         var size: CGSize
         var scale: CGFloat
@@ -30,8 +34,10 @@ final class PixelMascotLayerView: NSView {
 
     private var slots: [PixelMascotSlot] = []
     private var reduceMotion = false
-    private var configured: Configuration?
+    private var configuredSprites: SpriteConfiguration?
+    private var configuredMarks: [PixelMascotMark?]?
     private var spriteLayers: [CALayer] = []
+    private var markLayers: [CALayer] = []
 
     override init(frame frameRect: NSRect) {
         super.init(frame: frameRect)
@@ -43,6 +49,12 @@ final class PixelMascotLayerView: NSView {
     @available(*, unavailable)
     required init?(coder: NSCoder) {
         fatalError("init(coder:) has not been implemented")
+    }
+
+    /// Purely decorative, and it reaches up into the marks' headroom: let
+    /// clicks fall through to the island underneath.
+    override func hitTest(_ point: NSPoint) -> NSView? {
+        nil
     }
 
     func update(slots: [PixelMascotSlot], reduceMotion: Bool) {
@@ -60,40 +72,65 @@ final class PixelMascotLayerView: NSView {
     override func layout() {
         super.layout()
         let scale = window?.backingScaleFactor ?? NSScreen.main?.backingScaleFactor ?? 2
-        let configuration = Configuration(slots: slots, reduceMotion: reduceMotion, size: bounds.size, scale: scale)
+        let sprites = SpriteConfiguration(
+            tools: slots.map(\.tool),
+            states: slots.map(\.state),
+            reduceMotion: reduceMotion,
+            size: bounds.size,
+            scale: scale
+        )
         // Reapplying restarts the animations, so only do it when something changed.
-        guard configuration != configured else { return }
-        configured = configuration
-        configureLayers(scale: scale)
+        if sprites != configuredSprites {
+            configuredSprites = sprites
+            configureSpriteLayers(scale: scale)
+            // Fresh sprite layers still need their marks and resting opacity.
+            configuredMarks = nil
+        }
+        let marks = slots.map(\.mark)
+        guard marks != configuredMarks else { return }
+        configuredMarks = marks
+        configureMarkLayers(scale: scale)
     }
 
-    private func configureLayers(scale: CGFloat) {
+    private func configureSpriteLayers(scale: CGFloat) {
         CATransaction.begin()
         CATransaction.setDisableActions(true)
         spriteLayers.forEach { $0.removeFromSuperlayer() }
         spriteLayers = []
-        var x: CGFloat = 0
-        for slot in slots {
-            let sprite = PixelSprite.sprite(for: slot.tool)
-            let frames = PixelMascotRenderer.frames(for: slot, scale: scale, animated: !reduceMotion)
+        let spriteFrames = PixelMascotRenderer.spriteFrames(for: slots.map(\.tool))
+        for (slot, spriteFrame) in zip(slots, spriteFrames) {
+            let images = PixelMascotRenderer.frames(for: slot, scale: scale, animated: !reduceMotion)
             let spriteLayer = CALayer()
-            // Feet on the shared baseline at the bottom of the row.
-            spriteLayer.frame = CGRect(
-                x: x,
-                y: 0,
-                width: PixelMascotRenderer.width(of: sprite),
-                height: PixelMascotRenderer.height(of: sprite)
-            )
+            spriteLayer.frame = spriteFrame
             spriteLayer.contentsScale = scale
             spriteLayer.magnificationFilter = .nearest
-            spriteLayer.contents = frames.first
-            spriteLayer.opacity = PixelMascotMotion.opacity(for: slot.state)
+            spriteLayer.contents = images.first
             if !reduceMotion {
-                addAnimations(to: spriteLayer, state: slot.state, frames: frames)
+                addAnimations(to: spriteLayer, state: slot.state, frames: images)
             }
             layer?.addSublayer(spriteLayer)
             spriteLayers.append(spriteLayer)
-            x += PixelMascotRenderer.width(of: sprite) + PixelMascotRow.spacing
+        }
+        CATransaction.commit()
+    }
+
+    /// Marks are stills, so swapping one leaves the sprite animations alone.
+    private func configureMarkLayers(scale: CGFloat) {
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        markLayers.forEach { $0.removeFromSuperlayer() }
+        markLayers = []
+        for (slot, spriteLayer) in zip(slots, spriteLayers) {
+            spriteLayer.opacity = PixelMascotMotion.opacity(for: slot.state, mark: slot.mark)
+            guard let mark = slot.mark,
+                  let image = PixelMascotRenderer.markImage(for: mark, scale: scale) else { continue }
+            let markLayer = CALayer()
+            markLayer.frame = PixelMascotRenderer.markFrame(for: mark, above: spriteLayer.frame, scale: scale)
+            markLayer.contentsScale = scale
+            markLayer.magnificationFilter = .nearest
+            markLayer.contents = image
+            layer?.addSublayer(markLayer)
+            markLayers.append(markLayer)
         }
         CATransaction.commit()
     }
@@ -133,6 +170,72 @@ enum PixelMascotRenderer {
     /// Sprite height plus headroom for the walking bob.
     static func height(of sprite: PixelSprite) -> CGFloat {
         CGFloat(sprite.rowCount) * PixelMascotRow.cellHeight + PixelMascotMotion.bobHeight
+    }
+
+    /// Sprites left to right, feet on the shared baseline at the bottom.
+    static func spriteFrames(for tools: [AgentTool]) -> [CGRect] {
+        var x: CGFloat = 0
+        return tools.map { tool in
+            let sprite = PixelSprite.sprite(for: tool)
+            let frame = CGRect(x: x, y: 0, width: width(of: sprite), height: height(of: sprite))
+            x += frame.width + PixelMascotRow.spacing
+            return frame
+        }
+    }
+
+    static func markSize(of mark: PixelMascotMark) -> CGSize {
+        CGSize(
+            width: CGFloat(mark.rows.first?.count ?? 0) * PixelMascotMark.cell,
+            height: CGFloat(mark.rows.count) * PixelMascotMark.cell
+        )
+    }
+
+    /// Centered over the sprite and clear of its bob, snapped to device
+    /// pixels so the cells stay crisp.
+    static func markFrame(for mark: PixelMascotMark, above spriteFrame: CGRect, scale: CGFloat) -> CGRect {
+        let size = markSize(of: mark)
+        let x = ((spriteFrame.midX - size.width / 2) * scale).rounded(.down) / scale
+        let y = ((spriteFrame.maxY + PixelMascotMark.gap) * scale).rounded(.down) / scale
+        return CGRect(origin: CGPoint(x: x, y: y), size: size)
+    }
+
+    static func markImage(for mark: PixelMascotMark, scale: CGFloat) -> CGImage? {
+        let size = markSize(of: mark)
+        guard let context = CGContext(
+            data: nil,
+            width: Int((size.width * scale).rounded()),
+            height: Int((size.height * scale).rounded()),
+            bitsPerComponent: 8,
+            bytesPerRow: 0,
+            space: CGColorSpaceCreateDeviceRGB(),
+            bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue
+        ) else { return nil }
+        context.scaleBy(x: scale, y: scale)
+        context.setShouldAntialias(false)
+        context.setFillColor(NSColor(markTint(for: mark)).cgColor)
+        let rows = mark.rows
+        for (rowIndex, line) in rows.enumerated() {
+            // Bitmap y runs bottom-up; row 0 is the mark's top.
+            let y = CGFloat(rows.count - 1 - rowIndex) * PixelMascotMark.cell
+            for (column, character) in line.enumerated() where character == "#" {
+                context.fill(CGRect(
+                    x: CGFloat(column) * PixelMascotMark.cell,
+                    y: y,
+                    width: PixelMascotMark.cell,
+                    height: PixelMascotMark.cell
+                ))
+            }
+        }
+        return context.makeImage()
+    }
+
+    /// The same tints the session list uses for these states.
+    static func markTint(for mark: PixelMascotMark) -> Color {
+        switch mark {
+        case .approval: IslandDesignPalette.Status.waitingForApproval
+        case .answer: IslandDesignPalette.Status.waitingForAnswer
+        case .unseenDone: IslandDesignPalette.Status.completed
+        }
     }
 
     /// The walk-and-blink keyframes while running, a single still otherwise.

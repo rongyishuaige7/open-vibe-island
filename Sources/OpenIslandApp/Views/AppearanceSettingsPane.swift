@@ -670,12 +670,13 @@ struct AppearanceSettingsPane: View {
         }
     }
 
-    /// Claude walks beside an idle Codex; Codex waits in the waiting preview.
+    /// Claude walks beside an idle Codex; Codex waits on an approval in the
+    /// waiting preview, mark included, as it would on the island.
     private var previewMascotSlots: [PixelMascotSlot] {
         switch previewMode {
         case .idle: [PixelMascotSlot(tool: .codex, state: .idle), PixelMascotSlot(tool: .claudeCode, state: .idle)]
         case .running: [PixelMascotSlot(tool: .codex, state: .idle), PixelMascotSlot(tool: .claudeCode, state: .running)]
-        case .waiting: [PixelMascotSlot(tool: .codex, state: .waiting), PixelMascotSlot(tool: .claudeCode, state: .running)]
+        case .waiting: [PixelMascotSlot(tool: .codex, state: .waiting, mark: .approval), PixelMascotSlot(tool: .claudeCode, state: .running)]
         }
     }
 

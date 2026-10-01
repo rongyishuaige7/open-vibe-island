@@ -206,6 +206,7 @@
 "island.section.justDone" = "剛完成";
 "island.section.idle" = "閒置";
 "island.mascot.waiting" = "等你處理";
+"island.mascot.unseenDone" = "已完成未查看";
 "island.showAll" = "顯示全部 %lld 個工作階段";
 "island.collapseList" = "收起清單";
 "island.usageWaiting" = "等待用量資料";

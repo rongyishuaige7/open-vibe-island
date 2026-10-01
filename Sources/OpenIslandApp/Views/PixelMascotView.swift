@@ -25,8 +25,11 @@ struct PixelMascotRow: View {
     }
 
     var body: some View {
+        // The layer view reaches up into the marks' headroom while the row
+        // keeps the sprites' own height, so layout and baseline don't move.
         PixelMascotLayerRepresentable(slots: slots, reduceMotion: reduceMotion)
-            .frame(width: Self.intrinsicWidth(of: slots), height: Self.height(of: slots))
+            .frame(width: Self.intrinsicWidth(of: slots), height: Self.height(of: slots) + PixelMascotMark.headroom)
+            .padding(.top, -PixelMascotMark.headroom)
             .accessibilityElement()
             .accessibilityLabel(accessibilitySummary)
     }
@@ -39,7 +42,15 @@ struct PixelMascotRow: View {
             case .waiting: lang.t("island.mascot.waiting")
             case .idle: lang.t("island.section.idle")
             }
-            return "\(slot.tool.displayName) \(state)"
+            guard let mark = slot.mark else {
+                return "\(slot.tool.displayName) \(state)"
+            }
+            let note = switch mark {
+            case .approval: lang.t("island.section.needsApproval")
+            case .answer: lang.t("island.section.needsAnswer")
+            case .unseenDone: lang.t("island.mascot.unseenDone")
+            }
+            return "\(slot.tool.displayName) \(state) (\(note))"
         }
         .joined(separator: ", ")
     }

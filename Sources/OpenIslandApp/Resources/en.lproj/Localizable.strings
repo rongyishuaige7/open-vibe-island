@@ -206,6 +206,7 @@
 "island.section.justDone" = "Just done";
 "island.section.idle" = "Idle";
 "island.mascot.waiting" = "needs you";
+"island.mascot.unseenDone" = "finished, not seen yet";
 "island.showAll" = "Show all %lld sessions";
 "island.collapseList" = "Collapse list";
 "island.usageWaiting" = "Usage waiting";

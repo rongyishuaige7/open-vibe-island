@@ -206,6 +206,7 @@
 "island.section.justDone" = "刚完成";
 "island.section.idle" = "空闲";
 "island.mascot.waiting" = "等你处理";
+"island.mascot.unseenDone" = "已完成未查看";
 "island.showAll" = "显示全部 %lld 个会话";
 "island.collapseList" = "收起列表";
 "island.usageWaiting" = "等待用量数据";

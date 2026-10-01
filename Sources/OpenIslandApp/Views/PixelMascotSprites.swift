@@ -32,11 +32,39 @@
 import Foundation
 import OpenIslandCore
 
-/// One mascot in the right slot: an agent tool and the most urgent state
-/// among its surfaced sessions.
+/// One mascot in the right slot: an agent tool, the most urgent state among
+/// its surfaced sessions and the most urgent mark to float above it.
 struct PixelMascotSlot: Equatable {
     let tool: AgentTool
     let state: AgentGridCellState
+    var mark: PixelMascotMark? = nil
+}
+
+/// A small glyph above a mascot. Raw values rank urgency: a pending approval
+/// outranks a question, which outranks a finished turn the user hasn't seen.
+enum PixelMascotMark: Int, CaseIterable, Comparable {
+    case unseenDone
+    case answer
+    case approval
+
+    static func < (lhs: PixelMascotMark, rhs: PixelMascotMark) -> Bool {
+        lhs.rawValue < rhs.rawValue
+    }
+
+    /// Square cells, `#` lit, row 0 on top.
+    var rows: [String] {
+        switch self {
+        case .unseenDone: PixelCheckmarkBitmap.rows
+        case .answer: [".##.", "#..#", "..#.", "....", "..#."]
+        case .approval: ["##", "##", "##", "..", "##"]
+        }
+    }
+
+    static let cell: CGFloat = 1
+    /// Clearance between the sprite's bob headroom and the mark.
+    static let gap: CGFloat = 0.5
+    /// Room the row reserves above the sprites so marks never clip.
+    static let headroom: CGFloat = (gap + CGFloat(allCases.map { $0.rows.count }.max() ?? 0) * cell).rounded(.up)
 }
 
 /// A two-frame walking sprite; `#` marks a lit cell. Cells are twice as tall
@@ -117,10 +145,11 @@ enum PixelMascotMotion {
         return Int(phase(time) / cursorBlinkDuration) % 2 == 0
     }
 
-    /// Resting layer opacity: idle mascots stay dim. Waiting ones breathe from
-    /// `breathMinOpacity` up to full, like the grid's waiting tile.
-    static func opacity(for state: AgentGridCellState) -> Float {
-        state == .idle ? idleOpacity : 1
+    /// Resting layer opacity: idle mascots stay dim unless a mark floats above
+    /// them, so an unseen finish lights the critter back up. Waiting ones
+    /// breathe from `breathMinOpacity` up to full, like the grid's waiting tile.
+    static func opacity(for state: AgentGridCellState, mark: PixelMascotMark? = nil) -> Float {
+        state == .idle && mark == nil ? idleOpacity : 1
     }
 
     /// Stable per-cell noise in 0..<1 that re-rolls three times a second,
