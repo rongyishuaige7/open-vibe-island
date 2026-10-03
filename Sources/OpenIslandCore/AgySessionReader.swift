@@ -208,10 +208,17 @@ public final class AgySessionReader: @unchecked Sendable {
         let stepCount = Int(sqlite3_column_int(stmt, 6))
         let appDataDir = sqlite3_column_text(stmt, 7).map { String(cString: $0) } ?? ""
 
+        let resolvedAppDataDir: String
+        if appDataDir.hasPrefix("/") {
+            resolvedAppDataDir = appDataDir
+        } else {
+            resolvedAppDataDir = URL(fileURLWithPath: databasePath).deletingLastPathComponent().path
+        }
+
         let isRunning = (notFullyIdle == 1) || (status == "CASCADE_RUN_STATUS_RUNNING")
         let lastModifiedTime = parseDate(lastModifiedStr) ?? .now
         let workspaceURIs = parseWorkspaceURIs(workspaceURIsStr)
-        let model = resolveModel(sessionID: sessionID, appDataDir: appDataDir)
+        let model = resolveModel(sessionID: sessionID, appDataDir: resolvedAppDataDir)
 
         return AgySessionRecord(
             sessionID: sessionID,
@@ -221,7 +228,7 @@ public final class AgySessionReader: @unchecked Sendable {
             lastModifiedTime: lastModifiedTime,
             workspaceURIs: workspaceURIs,
             stepCount: stepCount,
-            appDataDir: appDataDir,
+            appDataDir: resolvedAppDataDir,
             model: model
         )
     }
@@ -281,10 +288,17 @@ public final class AgySessionReader: @unchecked Sendable {
             let stepCount = Int(sqlite3_column_int(stmt, 7))
             let appDataDir = sqlite3_column_text(stmt, 8).map { String(cString: $0) } ?? ""
 
+            let resolvedAppDataDir: String
+            if appDataDir.hasPrefix("/") {
+                resolvedAppDataDir = appDataDir
+            } else {
+                resolvedAppDataDir = URL(fileURLWithPath: databasePath).deletingLastPathComponent().path
+            }
+
             let isRunning = (notFullyIdle == 1) || (status == "CASCADE_RUN_STATUS_RUNNING")
             let lastModifiedTime = parseDate(lastModifiedStr) ?? .now
             let workspaceURIs = parseWorkspaceURIs(workspaceURIsStr)
-            let model = resolveModel(sessionID: sessionID, appDataDir: appDataDir)
+            let model = resolveModel(sessionID: sessionID, appDataDir: resolvedAppDataDir)
 
             results.append(AgySessionRecord(
                 sessionID: sessionID,
@@ -294,7 +308,7 @@ public final class AgySessionReader: @unchecked Sendable {
                 lastModifiedTime: lastModifiedTime,
                 workspaceURIs: workspaceURIs,
                 stepCount: stepCount,
-                appDataDir: appDataDir,
+                appDataDir: resolvedAppDataDir,
                 model: model
             ))
         }
@@ -379,7 +393,15 @@ public final class AgySessionReader: @unchecked Sendable {
             lock.unlock()
         }
 
-        return defaultModel
+        if let defaultModel {
+            return defaultModel
+        }
+
+        // 3. Fall back to profile default based on appDataDir
+        if appDataDir.lowercased().contains("pro") {
+            return "Gemini 3.8 Pro"
+        }
+        return "Gemini 3.8 Flash"
     }
 }
 

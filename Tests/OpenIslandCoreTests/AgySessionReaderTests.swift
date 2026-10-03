@@ -172,5 +172,17 @@ struct AgySessionReaderTests {
         let resolvedFromSettings = AgySessionReader.resolveModel(sessionID: "session-other", appDataDir: tempDir.path)
         #expect(resolvedFromSettings == "Claude Sonnet 4.6 (Thinking)")
     }
+
+    @Test
+    func liveAntigravitySessionModelResolution() {
+        let records = AgySessionReader.fetchRecentRecords(limit: 5)
+        #expect(!records.isEmpty)
+        for record in records {
+            let session = record.asAgentSession()
+            #expect(session.currentModelIdentifier != nil)
+            let badge = SessionModelLabel.display(for: session.currentModelIdentifier)
+            #expect(badge != nil)
+        }
+    }
 }
 
