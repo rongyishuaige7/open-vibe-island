@@ -1062,6 +1062,62 @@ struct AppModelSessionListTests {
     }
 
     @Test
+    func sanitizeCrossToolGhosttyJumpTargetsClearsGeminiMisbindingToClaude() {
+        let now = Date(timeIntervalSince1970: 2_000)
+        let model = AppModel()
+        let misboundGeminiSession = AgentSession(
+            id: "5066c5cf-1332-4747-8b3a-cdf92fa6125e",
+            title: "Gemini · Desktop",
+            tool: .geminiCLI,
+            origin: .live,
+            attachmentState: .attached,
+            phase: .running,
+            summary: "Running",
+            updatedAt: now,
+            jumpTarget: JumpTarget(
+                terminalApp: "Ghostty",
+                workspaceName: "Desktop",
+                paneTitle: "✳ 服务器环境调查",
+                workingDirectory: "/Users/rongyi/Desktop",
+                terminalSessionID: "ghostty-claude-tab"
+            )
+        )
+
+        let sanitized = model.monitoring.sanitizeCrossToolGhosttyJumpTargets(in: [misboundGeminiSession])
+
+        #expect(sanitized.first?.jumpTarget?.terminalSessionID == nil)
+        #expect(sanitized.first?.jumpTarget?.paneTitle == "agy 5066c5cf")
+    }
+
+    @Test
+    func sanitizeCrossToolGhosttyJumpTargetsClearsClaudeMisbindingToGemini() {
+        let now = Date(timeIntervalSince1970: 2_000)
+        let model = AppModel()
+        let misboundClaudeSession = AgentSession(
+            id: "e45d5e87-66d0-4f67-8399-6ebc02f3d453",
+            title: "Claude · Desktop",
+            tool: .claudeCode,
+            origin: .live,
+            attachmentState: .attached,
+            phase: .running,
+            summary: "Running",
+            updatedAt: now,
+            jumpTarget: JumpTarget(
+                terminalApp: "Ghostty",
+                workspaceName: "Desktop",
+                paneTitle: "agy-danger",
+                workingDirectory: "/Users/rongyi/Desktop",
+                terminalSessionID: "ghostty-gemini-tab"
+            )
+        )
+
+        let sanitized = model.monitoring.sanitizeCrossToolGhosttyJumpTargets(in: [misboundClaudeSession])
+
+        #expect(sanitized.first?.jumpTarget?.terminalSessionID == nil)
+        #expect(sanitized.first?.jumpTarget?.paneTitle == "Claude e45d5e87")
+    }
+
+    @Test
     func mergedWithSyntheticClaudeSessionsSkipsSyntheticWhenAttachedClaudeAlreadyRepresentsGroup() {
         let now = Date(timeIntervalSince1970: 2_000)
         let model = AppModel()

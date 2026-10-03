@@ -1093,7 +1093,7 @@ final class ProcessMonitoringCoordinator {
             let jumpTarget = JumpTarget(
                 terminalApp: terminalApp,
                 workspaceName: workspaceName,
-                paneTitle: "Gemini \(sessionID.prefix(8))",
+                paneTitle: "agy \(sessionID.prefix(8))",
                 workingDirectory: workingDirectory,
                 terminalTTY: process.terminalTTY,
                 tmuxTarget: process.tmuxTarget,
@@ -1130,10 +1130,16 @@ final class ProcessMonitoringCoordinator {
                     existing.geminiMetadata = GeminiSessionMetadata(
                         transcriptPath: process.transcriptPath,
                         initialUserPrompt: preview,
-                        lastUserPrompt: preview
+                        lastUserPrompt: preview,
+                        model: record?.model
                     )
-                } else if existing.geminiMetadata?.transcriptPath == nil {
-                    existing.geminiMetadata?.transcriptPath = process.transcriptPath
+                } else {
+                    if existing.geminiMetadata?.transcriptPath == nil {
+                        existing.geminiMetadata?.transcriptPath = process.transcriptPath
+                    }
+                    if let model = record?.model {
+                        existing.geminiMetadata?.model = model
+                    }
                 }
                 sessionsByID[sessionID] = existing
             } else {
@@ -1150,7 +1156,8 @@ final class ProcessMonitoringCoordinator {
                     geminiMetadata: GeminiSessionMetadata(
                         transcriptPath: process.transcriptPath,
                         initialUserPrompt: preview,
-                        lastUserPrompt: preview
+                        lastUserPrompt: preview,
+                        model: record?.model
                     )
                 )
                 newSession.isProcessAlive = true
@@ -1819,8 +1826,24 @@ final class ProcessMonitoringCoordinator {
             return .codex
         }
 
-        if normalized.contains("claude") {
+        if normalized.contains("✳") || normalized.contains("claude") {
             return .claudeCode
+        }
+
+        if normalized.contains("agy") || normalized.contains("gemini") || normalized.contains("antigravity") {
+            return .geminiCLI
+        }
+
+        if normalized.contains("opencode") {
+            return .openCode
+        }
+
+        if normalized.contains("qoder") {
+            return .qoder
+        }
+
+        if normalized.contains("cursor") {
+            return .cursor
         }
 
         return nil
@@ -1833,7 +1856,7 @@ final class ProcessMonitoringCoordinator {
         case .claudeCode:
             return "Claude \(session.id.prefix(8))"
         case .geminiCLI:
-            return "Gemini \(session.id.prefix(8))"
+            return "agy \(session.id.prefix(8))"
         case .openCode:
             return "OpenCode \(session.id.prefix(8))"
         case .qoder:

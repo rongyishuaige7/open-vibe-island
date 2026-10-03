@@ -835,6 +835,26 @@ struct TerminalJumpService {
         let workingDirectory = escapeAppleScript(target.workingDirectory)
         let paneTitle = escapeAppleScript(target.paneTitle)
 
+        let paneTitleToken: String
+        let tokens = target.paneTitle.split(separator: " ").map(String.init)
+        if tokens.count >= 2, let last = tokens.last, last.count >= 6 {
+            paneTitleToken = escapeAppleScript(last)
+        } else {
+            paneTitleToken = ""
+        }
+
+        let lowerTitle = target.paneTitle.lowercased()
+        let exclusionCondition: String
+        if lowerTitle.contains("agy") || lowerTitle.contains("gemini") {
+            exclusionCondition = " and not (currentTitle contains \"✳\" or currentTitle contains \"claude\" or currentTitle contains \"codex\")"
+        } else if lowerTitle.contains("claude") || lowerTitle.contains("✳") {
+            exclusionCondition = " and not (currentTitle contains \"agy\" or currentTitle contains \"gemini\" or currentTitle contains \"codex\")"
+        } else if lowerTitle.contains("codex") {
+            exclusionCondition = " and not (currentTitle contains \"agy\" or currentTitle contains \"gemini\" or currentTitle contains \"✳\" or currentTitle contains \"claude\")"
+        } else {
+            exclusionCondition = ""
+        }
+
         return """
         tell application "Ghostty"
             if not (it is running) then return ""
@@ -865,11 +885,11 @@ struct TerminalJumpService {
                 end if
             end repeat
 
-            if targetTerminal is missing value and "\(workingDirectory)" is not "" then
+            if targetTerminal is missing value and "\(paneTitleToken)" is not "" then
                 repeat with aWindow in windows
                     repeat with aTab in tabs of aWindow
                         repeat with aTerminal in terminals of aTab
-                            if (working directory of aTerminal as text) is "\(workingDirectory)" then
+                            if (name of aTerminal as text) contains "\(paneTitleToken)" then
                                 set targetWindow to aWindow
                                 set targetTab to aTab
                                 set targetTerminal to aTerminal
@@ -893,6 +913,30 @@ struct TerminalJumpService {
                     repeat with aTab in tabs of aWindow
                         repeat with aTerminal in terminals of aTab
                             if (name of aTerminal as text) contains "\(paneTitle)" then
+                                set targetWindow to aWindow
+                                set targetTab to aTab
+                                set targetTerminal to aTerminal
+                                exit repeat
+                            end if
+                        end repeat
+
+                        if targetTerminal is not missing value then
+                            exit repeat
+                        end if
+                    end repeat
+
+                    if targetTerminal is not missing value then
+                        exit repeat
+                    end if
+                end repeat
+            end if
+
+            if targetTerminal is missing value and "\(workingDirectory)" is not "" then
+                repeat with aWindow in windows
+                    repeat with aTab in tabs of aWindow
+                        repeat with aTerminal in terminals of aTab
+                            set currentTitle to (name of aTerminal as text)
+                            if (working directory of aTerminal as text) is "\(workingDirectory)"\(exclusionCondition) then
                                 set targetWindow to aWindow
                                 set targetTab to aTab
                                 set targetTerminal to aTerminal

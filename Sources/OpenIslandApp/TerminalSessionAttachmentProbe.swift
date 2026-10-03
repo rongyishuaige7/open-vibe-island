@@ -541,9 +541,9 @@ struct TerminalSessionAttachmentProbe {
 
         // When the snapshot title carries no tool hint (e.g. a plain shell
         // prompt like "~/project"), do not match it to agent sessions.  This
-        // prevents Claude/Codex sessions from binding to an unrelated terminal
+        // prevents Claude/Codex/Gemini sessions from binding to an unrelated terminal
         // that just happens to share the same working directory.
-        if snapshotHint == nil && (session.tool == .claudeCode || session.tool == .codex) {
+        if snapshotHint == nil && (session.tool == .claudeCode || session.tool == .codex || session.tool == .geminiCLI) {
             return false
         }
 
@@ -671,8 +671,24 @@ struct TerminalSessionAttachmentProbe {
             return .codex
         }
 
-        if normalizedTitle.contains("claude") {
+        if normalizedTitle.contains("✳") || normalizedTitle.contains("claude") {
             return .claudeCode
+        }
+
+        if normalizedTitle.contains("agy") || normalizedTitle.contains("gemini") || normalizedTitle.contains("antigravity") {
+            return .geminiCLI
+        }
+
+        if normalizedTitle.contains("opencode") {
+            return .openCode
+        }
+
+        if normalizedTitle.contains("qoder") {
+            return .qoder
+        }
+
+        if normalizedTitle.contains("cursor") {
+            return .cursor
         }
 
         return nil

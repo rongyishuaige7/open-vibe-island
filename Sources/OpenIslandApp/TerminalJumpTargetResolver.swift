@@ -135,6 +135,36 @@ struct TerminalJumpTargetResolver {
 
     // MARK: - Ghostty matching
 
+    private func ghosttyTitleHint(for title: String) -> AgentTool? {
+        let normalizedTitle = title.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        if normalizedTitle.contains("codex") {
+            return .codex
+        }
+        if normalizedTitle.contains("✳") || normalizedTitle.contains("claude") {
+            return .claudeCode
+        }
+        if normalizedTitle.contains("agy") || normalizedTitle.contains("gemini") || normalizedTitle.contains("antigravity") {
+            return .geminiCLI
+        }
+        if normalizedTitle.contains("opencode") {
+            return .openCode
+        }
+        if normalizedTitle.contains("qoder") {
+            return .qoder
+        }
+        if normalizedTitle.contains("cursor") {
+            return .cursor
+        }
+        return nil
+    }
+
+    private func isGhosttySnapshotCompatible(_ snapshot: GhosttyTerminalSnapshot, with session: AgentSession) -> Bool {
+        guard let hint = ghosttyTitleHint(for: snapshot.title) else {
+            return true
+        }
+        return hint == session.tool
+    }
+
     private func matchGhosttySnapshots(
         _ snapshots: [GhosttyTerminalSnapshot],
         to sessions: [AgentSession],
@@ -144,11 +174,12 @@ struct TerminalJumpTargetResolver {
         var claimedSessionIDs: Set<String> = []
         var claimedSnapshotIDs: Set<String> = []
 
-        // Pass 1: exact session ID match via terminal session ID.
+        // Pass 1: exact session ID match via terminal session ID (if compatible).
         for snapshot in snapshots where !claimedSnapshotIDs.contains(snapshot.sessionID) {
             if let session = sessions.first(where: {
                 !claimedSessionIDs.contains($0.id)
                     && nonEmptyValue($0.jumpTarget?.terminalSessionID) == snapshot.sessionID
+                    && isGhosttySnapshotCompatible(snapshot, with: $0)
             }) {
                 assignments[session.id] = snapshot
                 claimedSessionIDs.insert(session.id)
@@ -156,12 +187,27 @@ struct TerminalJumpTargetResolver {
             }
         }
 
-        // Pass 2: working directory match.
+        // Pass 2: snapshot title mentions session ID or prefix (if compatible).
         for snapshot in snapshots where !claimedSnapshotIDs.contains(snapshot.sessionID) {
-            let snapshotCWD = normalizedPathForMatching(snapshot.workingDirectory)
             if let session = sessions.first(where: {
                 !claimedSessionIDs.contains($0.id)
-                    && snapshotCWD != nil
+                    && isGhosttySnapshotCompatible(snapshot, with: $0)
+                    && (snapshot.title.localizedCaseInsensitiveContains($0.id)
+                        || ($0.id.count >= 8 && snapshot.title.localizedCaseInsensitiveContains($0.id.prefix(8))))
+            }) {
+                assignments[session.id] = snapshot
+                claimedSessionIDs.insert(session.id)
+                claimedSnapshotIDs.insert(snapshot.sessionID)
+            }
+        }
+
+        // Pass 3: tool hint matches session.tool AND working directory matches.
+        for snapshot in snapshots where !claimedSnapshotIDs.contains(snapshot.sessionID) {
+            let snapshotCWD = normalizedPathForMatching(snapshot.workingDirectory)
+            guard let hint = ghosttyTitleHint(for: snapshot.title), snapshotCWD != nil else { continue }
+            if let session = sessions.first(where: {
+                !claimedSessionIDs.contains($0.id)
+                    && $0.tool == hint
                     && normalizedPathForMatching($0.jumpTarget?.workingDirectory) == snapshotCWD
             }) {
                 assignments[session.id] = snapshot
@@ -170,11 +216,27 @@ struct TerminalJumpTargetResolver {
             }
         }
 
-        // Pass 3: pane title match.
+        // Pass 4: pane title match (if compatible).
         for snapshot in snapshots where !claimedSnapshotIDs.contains(snapshot.sessionID) {
             if let session = sessions.first(where: {
                 !claimedSessionIDs.contains($0.id)
-                    && nonEmptyValue($0.jumpTarget?.paneTitle).map { snapshot.title.contains($0) } == true
+                    && isGhosttySnapshotCompatible(snapshot, with: $0)
+                    && nonEmptyValue($0.jumpTarget?.paneTitle).map { snapshot.title.localizedCaseInsensitiveContains($0) } == true
+            }) {
+                assignments[session.id] = snapshot
+                claimedSessionIDs.insert(session.id)
+                claimedSnapshotIDs.insert(snapshot.sessionID)
+            }
+        }
+
+        // Pass 5: working directory match ONLY for compatible snapshots.
+        for snapshot in snapshots where !claimedSnapshotIDs.contains(snapshot.sessionID) {
+            let snapshotCWD = normalizedPathForMatching(snapshot.workingDirectory)
+            guard snapshotCWD != nil else { continue }
+            if let session = sessions.first(where: {
+                !claimedSessionIDs.contains($0.id)
+                    && isGhosttySnapshotCompatible(snapshot, with: $0)
+                    && normalizedPathForMatching($0.jumpTarget?.workingDirectory) == snapshotCWD
             }) {
                 assignments[session.id] = snapshot
                 claimedSessionIDs.insert(session.id)
