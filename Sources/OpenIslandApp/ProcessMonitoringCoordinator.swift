@@ -241,9 +241,13 @@ final class ProcessMonitoringCoordinator {
             existingSessions: mergedClaudeSessions,
             activeProcesses: activeProcesses
         )
-        let mergedSessions = mergedWithLiveCodexSessions(
+        let mergedCodexSessions = mergedWithLiveCodexSessions(
             existingSessions: mergedCursorSessions,
             liveRecords: liveCodexRecords,
+            activeProcesses: activeProcesses
+        )
+        let mergedSessions = mergedWithLiveAgySessions(
+            existingSessions: mergedCodexSessions,
             activeProcesses: activeProcesses
         )
         if mergedSessions != local.sessions {
@@ -499,6 +503,13 @@ final class ProcessMonitoringCoordinator {
         let trackedGeminiSessions = sessions.filter { $0.tool == .geminiCLI && !$0.isDemoSession }
         var claimedGeminiSessionIDs: Set<String> = []
         for process in geminiProcesses {
+            if let sessionID = process.sessionID,
+               let directMatch = trackedGeminiSessions.first(where: { $0.id == sessionID && !claimedGeminiSessionIDs.contains($0.id) }) {
+                aliveIDs.insert(directMatch.id)
+                claimedGeminiSessionIDs.insert(directMatch.id)
+                continue
+            }
+
             guard let matched = uniqueTrackedGeminiSession(
                 for: process,
                 sessions: trackedGeminiSessions,
@@ -1032,6 +1043,119 @@ final class ProcessMonitoringCoordinator {
         )
         session.isProcessAlive = true
         return session
+    }
+
+    // MARK: - Live Antigravity / Gemini sessions
+
+    func mergedWithLiveAgySessions(
+        existingSessions: [AgentSession],
+        activeProcesses: [ActiveProcessSnapshot],
+        now: Date = .now
+    ) -> [AgentSession] {
+        let activeAgyProcesses = activeProcesses.filter { $0.tool == .geminiCLI }
+        guard !activeAgyProcesses.isEmpty else {
+            return existingSessions
+        }
+
+        var sessionsByID = Dictionary(uniqueKeysWithValues: existingSessions.map { ($0.id, $0) })
+
+        for process in activeAgyProcesses {
+            let sessionID = process.sessionID ?? agySyntheticSessionID(for: process)
+            let workingDirectory = process.workingDirectory
+            let workspaceName = workingDirectory.map { WorkspaceNameResolver.workspaceName(for: $0) } ?? "Workspace"
+            let terminalApp = supportedTerminalApp(for: process.terminalApp)
+                ?? process.terminalApp?.trimmingCharacters(in: .whitespacesAndNewlines)
+                ?? "Terminal"
+
+            let record = AgySessionReader.fetchRecord(
+                sessionID: sessionID,
+                transcriptPath: process.transcriptPath
+            )
+
+            let isRunning = record?.isRunning ?? true
+            let phase: SessionPhase = isRunning ? .running : .completed
+            let rawTitle = record?.title
+            let title = (rawTitle != nil && !rawTitle!.isEmpty) ? rawTitle! : "Gemini · \(workspaceName)"
+            let preview = (record?.preview != nil && !record!.preview.isEmpty) ? record!.preview : "Antigravity session in \(workspaceName)"
+
+            let jumpTarget = JumpTarget(
+                terminalApp: terminalApp,
+                workspaceName: workspaceName,
+                paneTitle: "Gemini \(sessionID.prefix(8))",
+                workingDirectory: workingDirectory,
+                terminalTTY: process.terminalTTY,
+                tmuxTarget: process.tmuxTarget,
+                tmuxSocketPath: process.tmuxSocketPath
+            )
+
+            if var existing = sessionsByID[sessionID] {
+                existing.isProcessAlive = true
+                existing.attachmentState = .attached
+                if var target = existing.jumpTarget {
+                    if let tty = process.terminalTTY {
+                        target.terminalTTY = tty
+                    }
+                    target.terminalApp = terminalApp
+                    if let tmuxTarget = process.tmuxTarget {
+                        target.tmuxTarget = tmuxTarget
+                    }
+                    if let tmuxSocketPath = process.tmuxSocketPath {
+                        target.tmuxSocketPath = tmuxSocketPath
+                    }
+                    if target.workingDirectory == nil {
+                        target.workingDirectory = workingDirectory
+                    }
+                    existing.jumpTarget = target
+                } else {
+                    existing.jumpTarget = jumpTarget
+                }
+                if let rawTitle, !rawTitle.isEmpty {
+                    existing.conversationTitle = rawTitle
+                }
+                existing.phase = phase
+                if existing.geminiMetadata == nil {
+                    existing.geminiMetadata = GeminiSessionMetadata(
+                        transcriptPath: process.transcriptPath,
+                        initialUserPrompt: preview,
+                        lastUserPrompt: preview
+                    )
+                } else if existing.geminiMetadata?.transcriptPath == nil {
+                    existing.geminiMetadata?.transcriptPath = process.transcriptPath
+                }
+                sessionsByID[sessionID] = existing
+            } else {
+                var newSession = AgentSession(
+                    id: sessionID,
+                    title: title,
+                    tool: .geminiCLI,
+                    origin: .live,
+                    attachmentState: .attached,
+                    phase: phase,
+                    summary: preview,
+                    updatedAt: record?.lastModifiedTime ?? now,
+                    jumpTarget: jumpTarget,
+                    geminiMetadata: GeminiSessionMetadata(
+                        transcriptPath: process.transcriptPath,
+                        initialUserPrompt: preview,
+                        lastUserPrompt: preview
+                    )
+                )
+                newSession.isProcessAlive = true
+                if let rawTitle, !rawTitle.isEmpty {
+                    newSession.conversationTitle = rawTitle
+                }
+                sessionsByID[sessionID] = newSession
+            }
+        }
+
+        return Array(sessionsByID.values)
+    }
+
+    private func agySyntheticSessionID(for process: ActiveProcessSnapshot) -> String {
+        if let sessionID = process.sessionID {
+            return sessionID
+        }
+        return "gemini-process:\(processIdentityKey(process))"
     }
 
     // MARK: - Process matching

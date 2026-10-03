@@ -105,6 +105,14 @@ public final class AgySessionReader: @unchecked Sendable {
         return nil
     }
 
+    public static func fetchRecord(
+        sessionID: String,
+        transcriptPath: String?
+    ) -> AgySessionRecord? {
+        let dbPath = databasePath(forTranscriptPath: transcriptPath)
+        return fetchRecord(sessionID: sessionID, databasePath: dbPath)
+    }
+
     /// Fetches a record for a specific session ID, checking the specified database or all candidates.
     public static func fetchRecord(
         sessionID: String,
