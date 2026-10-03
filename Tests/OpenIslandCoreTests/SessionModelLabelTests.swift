@@ -66,6 +66,17 @@ struct SessionModelLabelTests {
         session.claudeMetadata = nil
         session.codexMetadata = CodexSessionMetadata(model: "gpt-5-codex")
         #expect(session.currentModelIdentifier == "gpt-5-codex")
+
+        session.codexMetadata = nil
+        session.geminiMetadata = GeminiSessionMetadata(model: "Gemini 3.8 Flash (High)")
+        #expect(session.currentModelIdentifier == "Gemini 3.8 Flash (High)")
+    }
+
+    @Test
+    func geminiAndCustomModelsAreFormatted() {
+        #expect(SessionModelLabel.display(for: "Gemini 3.8 Flash (High)") == "Gemini 3.8 Flash")
+        #expect(SessionModelLabel.display(for: "Claude Sonnet 4.6 (Thinking)") == "Sonnet 4.6")
+        #expect(SessionModelLabel.display(for: "Claude Opus 4.6 (Thinking)") == "Opus 4.6")
     }
 
     @Test

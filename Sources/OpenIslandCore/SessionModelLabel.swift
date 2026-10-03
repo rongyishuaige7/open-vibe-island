@@ -27,6 +27,10 @@ public enum SessionModelLabel {
         if let bracket = model.firstIndex(of: "[") {
             model = String(model[..<bracket])
         }
+        // Reasoning effort or display suffix such as ` (High)` or ` (Thinking)`.
+        if let paren = model.firstIndex(of: "(") {
+            model = String(model[..<paren])
+        }
         model = model.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !model.isEmpty else {
             return nil
@@ -45,6 +49,9 @@ public enum SessionModelLabel {
             if let index = lowered.firstIndex(of: Character(separator)) {
                 lowered = String(lowered[..<index])
             }
+        }
+        if lowered.hasPrefix("claude ") {
+            lowered = "claude-" + lowered.dropFirst("claude ".count).replacingOccurrences(of: " ", with: "-")
         }
         guard lowered.hasPrefix("claude-") else {
             return nil
@@ -87,6 +94,7 @@ extension AgentSession {
         let candidates = [
             claudeMetadata?.model,
             codexMetadata?.model,
+            geminiMetadata?.model,
             openCodeMetadata?.model,
             cursorMetadata?.model,
             piMetadata?.model,

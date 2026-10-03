@@ -129,7 +129,8 @@ struct AgySessionReaderTests {
             lastModifiedTime: Date(timeIntervalSince1970: 1_700_000_000),
             workspaceURIs: ["file:///Users/test/myproject"],
             stepCount: 10,
-            appDataDir: "/Users/test/.gemini/antigravity-cli"
+            appDataDir: "/Users/test/.gemini/antigravity-cli",
+            model: "Gemini 3.8 Flash (High)"
         )
 
         let session = record.asAgentSession()
@@ -140,6 +141,36 @@ struct AgySessionReaderTests {
         #expect(session.summary == "Test preview text")
         #expect(session.jumpTarget?.workingDirectory == "/Users/test/myproject")
         #expect(session.geminiMetadata?.transcriptPath == "/Users/test/.gemini/antigravity-cli/brain/test-uuid-1234/.system_generated/logs/transcript.jsonl")
+        #expect(session.geminiMetadata?.model == "Gemini 3.8 Flash (High)")
+        #expect(session.currentModelIdentifier == "Gemini 3.8 Flash (High)")
+    }
+
+    @Test
+    func resolveModelReadsFromTranscriptAndSettings() throws {
+        let tempDir = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        let brainDir = tempDir.appendingPathComponent("brain/session-test/.system_generated/logs", isDirectory: true)
+        try FileManager.default.createDirectory(at: brainDir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: tempDir) }
+
+        // 1. Transcript with Model Selection
+        let transcriptPath = brainDir.appendingPathComponent("transcript.jsonl")
+        let transcriptContent = """
+        {"step_index":0,"source":"USER_EXPLICIT","type":"USER_INPUT","status":"DONE","content":"<USER_SETTINGS_CHANGE>\\nThe user changed setting `Model Selection` from None to Gemini 3.8 Flash (High).\\n</USER_SETTINGS_CHANGE>"}
+        """
+        try transcriptContent.write(to: transcriptPath, atomically: true, encoding: .utf8)
+
+        let resolvedFromTranscript = AgySessionReader.resolveModel(sessionID: "session-test", appDataDir: tempDir.path)
+        #expect(resolvedFromTranscript == "Gemini 3.8 Flash (High)")
+
+        // 2. Fallback to settings.json
+        let settingsPath = tempDir.appendingPathComponent("settings.json")
+        let settingsContent = """
+        {"model": "Claude Sonnet 4.6 (Thinking)"}
+        """
+        try settingsContent.write(to: settingsPath, atomically: true, encoding: .utf8)
+
+        let resolvedFromSettings = AgySessionReader.resolveModel(sessionID: "session-other", appDataDir: tempDir.path)
+        #expect(resolvedFromSettings == "Claude Sonnet 4.6 (Thinking)")
     }
 }
 

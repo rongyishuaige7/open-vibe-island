@@ -10,6 +10,7 @@ public struct AgySessionRecord: Equatable, Sendable {
     public var workspaceURIs: [String]
     public var stepCount: Int
     public var appDataDir: String
+    public var model: String?
 
     public init(
         sessionID: String,
@@ -19,7 +20,8 @@ public struct AgySessionRecord: Equatable, Sendable {
         lastModifiedTime: Date,
         workspaceURIs: [String],
         stepCount: Int,
-        appDataDir: String
+        appDataDir: String,
+        model: String? = nil
     ) {
         self.sessionID = sessionID
         self.title = title
@@ -29,12 +31,21 @@ public struct AgySessionRecord: Equatable, Sendable {
         self.workspaceURIs = workspaceURIs
         self.stepCount = stepCount
         self.appDataDir = appDataDir
+        self.model = model
     }
 }
 
 public final class AgySessionReader: @unchecked Sendable {
     private static let lock = NSLock()
     nonisolated(unsafe) private static var cachedDatabasePaths: (date: Date, paths: [String])?
+    nonisolated(unsafe) private static var cachedDefaultModels: [String: (date: Date, model: String?)] = [:]
+
+    private static let modelPattern: NSRegularExpression? = {
+        try? NSRegularExpression(
+            pattern: #"The user changed setting `Model Selection` from (?:None|.*?) to (.+?)\.\s*(?:No need|</USER_SETTINGS_CHANGE>|\\n|\n|\r)"#,
+            options: []
+        )
+    }()
 
     /// Returns candidate paths to `conversation_summaries.db` across all Antigravity profiles.
     public static func candidateDatabasePaths(fileManager: FileManager = .default) -> [String] {
@@ -200,6 +211,7 @@ public final class AgySessionReader: @unchecked Sendable {
         let isRunning = (notFullyIdle == 1) || (status == "CASCADE_RUN_STATUS_RUNNING")
         let lastModifiedTime = parseDate(lastModifiedStr) ?? .now
         let workspaceURIs = parseWorkspaceURIs(workspaceURIsStr)
+        let model = resolveModel(sessionID: sessionID, appDataDir: appDataDir)
 
         return AgySessionRecord(
             sessionID: sessionID,
@@ -209,7 +221,8 @@ public final class AgySessionReader: @unchecked Sendable {
             lastModifiedTime: lastModifiedTime,
             workspaceURIs: workspaceURIs,
             stepCount: stepCount,
-            appDataDir: appDataDir
+            appDataDir: appDataDir,
+            model: model
         )
     }
 
@@ -271,6 +284,7 @@ public final class AgySessionReader: @unchecked Sendable {
             let isRunning = (notFullyIdle == 1) || (status == "CASCADE_RUN_STATUS_RUNNING")
             let lastModifiedTime = parseDate(lastModifiedStr) ?? .now
             let workspaceURIs = parseWorkspaceURIs(workspaceURIsStr)
+            let model = resolveModel(sessionID: sessionID, appDataDir: appDataDir)
 
             results.append(AgySessionRecord(
                 sessionID: sessionID,
@@ -280,7 +294,8 @@ public final class AgySessionReader: @unchecked Sendable {
                 lastModifiedTime: lastModifiedTime,
                 workspaceURIs: workspaceURIs,
                 stepCount: stepCount,
-                appDataDir: appDataDir
+                appDataDir: appDataDir,
+                model: model
             ))
         }
 
@@ -319,6 +334,53 @@ public final class AgySessionReader: @unchecked Sendable {
 
         return nil
     }
+
+    public static func resolveModel(sessionID: String, appDataDir: String) -> String? {
+        guard !sessionID.isEmpty, !appDataDir.isEmpty else { return nil }
+
+        // 1. Try reading the first chunk of the session transcript for model setting change
+        let transcriptPath = (appDataDir as NSString).appendingPathComponent("brain/\(sessionID)/.system_generated/logs/transcript.jsonl")
+        if let fileHandle = FileHandle(forReadingAtPath: transcriptPath) {
+            defer { try? fileHandle.close() }
+            let initialData = fileHandle.readData(ofLength: 8192)
+            if let content = String(data: initialData, encoding: .utf8),
+               let pattern = modelPattern,
+               let match = pattern.firstMatch(in: content, range: NSRange(content.startIndex..., in: content)),
+               let range = Range(match.range(at: 1), in: content) {
+                let model = String(content[range]).trimmingCharacters(in: .whitespacesAndNewlines)
+                if !model.isEmpty {
+                    return model
+                }
+            }
+        }
+
+        // 2. Fall back to settings.json in appDataDir
+        lock.lock()
+        if let cached = cachedDefaultModels[appDataDir], Date.now.timeIntervalSince(cached.date) < 10 {
+            lock.unlock()
+            return cached.model
+        }
+        lock.unlock()
+
+        let settingsPath = (appDataDir as NSString).appendingPathComponent("settings.json")
+        var defaultModel: String?
+        if let data = try? Data(contentsOf: URL(fileURLWithPath: settingsPath)),
+           let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+           let model = json["model"] as? String {
+            let trimmed = model.trimmingCharacters(in: .whitespacesAndNewlines)
+            if !trimmed.isEmpty {
+                defaultModel = trimmed
+            }
+        }
+
+        if let defaultModel {
+            lock.lock()
+            cachedDefaultModels[appDataDir] = (date: .now, model: defaultModel)
+            lock.unlock()
+        }
+
+        return defaultModel
+    }
 }
 
 public extension AgySessionRecord {
@@ -354,7 +416,8 @@ public extension AgySessionRecord {
             geminiMetadata: GeminiSessionMetadata(
                 transcriptPath: transcriptPath,
                 initialUserPrompt: displayPreview,
-                lastUserPrompt: displayPreview
+                lastUserPrompt: displayPreview,
+                model: model
             )
         )
         if !title.isEmpty {

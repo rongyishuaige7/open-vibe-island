@@ -92,19 +92,22 @@ public struct GeminiSessionMetadata: Equatable, Codable, Sendable {
     public var lastUserPrompt: String?
     public var lastAssistantMessage: String?
     public var lastAssistantMessageBody: String?
+    public var model: String?
 
     public init(
         transcriptPath: String? = nil,
         initialUserPrompt: String? = nil,
         lastUserPrompt: String? = nil,
         lastAssistantMessage: String? = nil,
-        lastAssistantMessageBody: String? = nil
+        lastAssistantMessageBody: String? = nil,
+        model: String? = nil
     ) {
         self.transcriptPath = transcriptPath
         self.initialUserPrompt = initialUserPrompt
         self.lastUserPrompt = lastUserPrompt
         self.lastAssistantMessage = lastAssistantMessage
         self.lastAssistantMessageBody = lastAssistantMessageBody
+        self.model = model
     }
 
     public var isEmpty: Bool {
@@ -113,6 +116,7 @@ public struct GeminiSessionMetadata: Equatable, Codable, Sendable {
             && lastUserPrompt == nil
             && lastAssistantMessage == nil
             && lastAssistantMessageBody == nil
+            && model == nil
     }
 }
 
