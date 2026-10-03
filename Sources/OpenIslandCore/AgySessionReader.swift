@@ -141,9 +141,30 @@ public final class AgySessionReader: @unchecked Sendable {
         return nil
     }
 
-    private static func queryRecord(sessionID: String, databasePath: String) -> AgySessionRecord? {
+    private static func openDatabase(databasePath: String) -> OpaquePointer? {
         var db: OpaquePointer?
-        guard sqlite3_open_v2(databasePath, &db, SQLITE_OPEN_READONLY | SQLITE_OPEN_NOMUTEX, nil) == SQLITE_OK else {
+        // First try READWRITE so WAL shared-memory (-shm) and locks coordinate seamlessly with agy.
+        var rc = sqlite3_open_v2(databasePath, &db, SQLITE_OPEN_READWRITE | SQLITE_OPEN_NOMUTEX, nil)
+        if rc == SQLITE_OK {
+            sqlite3_busy_timeout(db, 200)
+            return db
+        }
+        sqlite3_close(db)
+        db = nil
+
+        // If READWRITE fails, try immutable URI (read-only without requiring WAL/SHM file creation).
+        let uri = "file://\(databasePath)?immutable=1"
+        rc = sqlite3_open_v2(uri, &db, SQLITE_OPEN_READONLY | SQLITE_OPEN_URI | SQLITE_OPEN_NOMUTEX, nil)
+        if rc == SQLITE_OK {
+            sqlite3_busy_timeout(db, 200)
+            return db
+        }
+        sqlite3_close(db)
+        return nil
+    }
+
+    private static func queryRecord(sessionID: String, databasePath: String) -> AgySessionRecord? {
+        guard let db = openDatabase(databasePath: databasePath) else {
             return nil
         }
         defer { sqlite3_close(db) }
@@ -214,8 +235,7 @@ public final class AgySessionReader: @unchecked Sendable {
     }
 
     private static func queryRecentRecords(databasePath: String, limit: Int) -> [AgySessionRecord] {
-        var db: OpaquePointer?
-        guard sqlite3_open_v2(databasePath, &db, SQLITE_OPEN_READONLY | SQLITE_OPEN_NOMUTEX, nil) == SQLITE_OK else {
+        guard let db = openDatabase(databasePath: databasePath) else {
             return []
         }
         defer { sqlite3_close(db) }
