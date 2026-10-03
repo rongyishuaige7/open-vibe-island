@@ -37,12 +37,11 @@ public struct ConversationTitleRequest: Equatable, Hashable, Sendable {
                 guard let path = session.claudeMetadata?.transcriptPath, !path.isEmpty else { return nil }
                 return ConversationTitleRequest(sessionID: session.id, source: .claudeTranscript(path: path))
             case .geminiCLI:
-                let transcriptPath = session.geminiMetadata?.transcriptPath
-                if let dbPath = AgySessionReader.databasePath(forTranscriptPath: transcriptPath)
-                    ?? AgySessionReader.candidateDatabasePaths().first {
-                    return ConversationTitleRequest(sessionID: session.id, source: .agyDatabase(databasePath: dbPath))
+                guard let transcriptPath = session.geminiMetadata?.transcriptPath, !transcriptPath.isEmpty,
+                      let dbPath = AgySessionReader.databasePath(forTranscriptPath: transcriptPath) else {
+                    return nil
                 }
-                return nil
+                return ConversationTitleRequest(sessionID: session.id, source: .agyDatabase(databasePath: dbPath))
             default:
                 return nil
             }

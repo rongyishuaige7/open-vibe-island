@@ -412,4 +412,43 @@ struct ActiveAgentProcessDiscoveryTests {
         #expect(!aliveIDs.contains("pi-a"))
         #expect(!aliveIDs.contains("omp-b"))
     }
+
+    @Test
+    func discoverRecognizesAgyProcessWithSessionID() {
+        let sessionUUID = "12345678-abcd-ef01-2345-6789abcdef01"
+        let discovery = ActiveAgentProcessDiscovery { executablePath, arguments in
+            if executablePath == "/bin/ps" {
+                return """
+                  501 301 ttys003 /Users/test/.local/bin/agy --gemini_dir=/tmp/.gemini/cpa
+                  301 900 ttys003 -/bin/zsh
+                  900 1 ?? /Applications/Ghostty.app/Contents/MacOS/ghostty
+                """
+            }
+
+            guard executablePath == "/usr/sbin/lsof",
+                  let pid = arguments.dropFirst(2).first else {
+                return nil
+            }
+
+            if pid == "501" {
+                return """
+                fcwd
+                n/tmp/my-workspace
+                n/tmp/.gemini/cpa/presence/\(sessionUUID).lock
+                n/tmp/.gemini/cpa/brain/\(sessionUUID)/.system_generated/logs/transcript.jsonl
+                """
+            }
+
+            return nil
+        }
+
+        let snapshots = discovery.discover()
+        #expect(snapshots.count == 1)
+        #expect(snapshots.first?.tool == .geminiCLI)
+        #expect(snapshots.first?.sessionID == sessionUUID)
+        #expect(snapshots.first?.workingDirectory == "/tmp/my-workspace")
+        #expect(snapshots.first?.terminalTTY == "/dev/ttys003")
+        #expect(snapshots.first?.terminalApp == "Ghostty")
+        #expect(snapshots.first?.transcriptPath?.contains(sessionUUID) == true)
+    }
 }
