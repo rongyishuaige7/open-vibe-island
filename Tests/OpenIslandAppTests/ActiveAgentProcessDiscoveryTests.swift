@@ -451,4 +451,42 @@ struct ActiveAgentProcessDiscoveryTests {
         #expect(snapshots.first?.terminalApp == "Ghostty")
         #expect(snapshots.first?.transcriptPath?.contains(sessionUUID) == true)
     }
+
+    @MainActor
+    @Test
+    func coordinatorAgySessionLivenessReconciliation() {
+        let sessionUUID = "12345678-abcd-ef01-2345-6789abcdef01"
+        var state = SessionState(
+            sessions: [
+                AgentSession(
+                    id: sessionUUID,
+                    title: "Agy Live Session",
+                    tool: .geminiCLI,
+                    phase: .running,
+                    summary: "Working",
+                    updatedAt: .now,
+                    jumpTarget: JumpTarget(terminalApp: "Terminal", workspaceName: "Work", paneTitle: "Gemini", workingDirectory: "/tmp/work")
+                ),
+            ]
+        )
+
+        let coordinator = ProcessMonitoringCoordinator()
+        coordinator.stateAccessor = { state }
+        coordinator.stateUpdater = { state = $0 }
+
+        let snapshot = ActiveAgentProcessDiscovery.ProcessSnapshot(
+            tool: .geminiCLI,
+            sessionID: sessionUUID,
+            workingDirectory: "/tmp/work",
+            terminalTTY: "/dev/ttys001"
+        )
+
+        let aliveIDs = coordinator.sessionIDsWithAliveProcesses(
+            activeProcesses: [snapshot],
+            isCodexAppRunning: false,
+            sessions: state.sessions
+        )
+
+        #expect(aliveIDs.contains(sessionUUID))
+    }
 }

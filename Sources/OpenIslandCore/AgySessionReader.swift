@@ -192,6 +192,81 @@ public final class AgySessionReader: @unchecked Sendable {
         )
     }
 
+    /// Discovers recent sessions from all candidate databases updated on or after cutoff.
+    public static func fetchRecentRecords(
+        cutoff: Date = Date.now.addingTimeInterval(-86_400),
+        limit: Int = 50
+    ) -> [AgySessionRecord] {
+        var records: [AgySessionRecord] = []
+        var seenIDs = Set<String>()
+
+        for dbPath in candidateDatabasePaths() {
+            let dbRecords = queryRecentRecords(databasePath: dbPath, limit: limit)
+            for record in dbRecords {
+                guard record.lastModifiedTime >= cutoff else { continue }
+                if seenIDs.insert(record.sessionID).inserted {
+                    records.append(record)
+                }
+            }
+        }
+
+        return records.sorted(by: { $0.lastModifiedTime > $1.lastModifiedTime })
+    }
+
+    private static func queryRecentRecords(databasePath: String, limit: Int) -> [AgySessionRecord] {
+        var db: OpaquePointer?
+        guard sqlite3_open_v2(databasePath, &db, SQLITE_OPEN_READONLY | SQLITE_OPEN_NOMUTEX, nil) == SQLITE_OK else {
+            return []
+        }
+        defer { sqlite3_close(db) }
+
+        let sql = """
+        SELECT conversation_id, title, preview, not_fully_idle, status, last_modified_time, workspace_uris, step_count, app_data_dir 
+        FROM conversation_summaries 
+        ORDER BY last_modified_time DESC 
+        LIMIT ?;
+        """
+
+        var stmt: OpaquePointer?
+        guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK else {
+            return []
+        }
+        defer { sqlite3_finalize(stmt) }
+
+        sqlite3_bind_int(stmt, 1, Int32(limit))
+
+        var results: [AgySessionRecord] = []
+        while sqlite3_step(stmt) == SQLITE_ROW {
+            let sessionID = sqlite3_column_text(stmt, 0).map { String(cString: $0) } ?? ""
+            guard !sessionID.isEmpty else { continue }
+            let title = sqlite3_column_text(stmt, 1).map { String(cString: $0) } ?? ""
+            let preview = sqlite3_column_text(stmt, 2).map { String(cString: $0) } ?? ""
+            let notFullyIdle = sqlite3_column_int(stmt, 3)
+            let status = sqlite3_column_text(stmt, 4).map { String(cString: $0) } ?? ""
+            let lastModifiedStr = sqlite3_column_text(stmt, 5).map { String(cString: $0) } ?? ""
+            let workspaceURIsStr = sqlite3_column_text(stmt, 6).map { String(cString: $0) } ?? ""
+            let stepCount = Int(sqlite3_column_int(stmt, 7))
+            let appDataDir = sqlite3_column_text(stmt, 8).map { String(cString: $0) } ?? ""
+
+            let isRunning = (notFullyIdle == 1) || (status == "CASCADE_RUN_STATUS_RUNNING")
+            let lastModifiedTime = parseDate(lastModifiedStr) ?? .now
+            let workspaceURIs = parseWorkspaceURIs(workspaceURIsStr)
+
+            results.append(AgySessionRecord(
+                sessionID: sessionID,
+                title: title,
+                preview: preview,
+                isRunning: isRunning,
+                lastModifiedTime: lastModifiedTime,
+                workspaceURIs: workspaceURIs,
+                stepCount: stepCount,
+                appDataDir: appDataDir
+            ))
+        }
+
+        return results
+    }
+
     private static func parseWorkspaceURIs(_ jsonString: String) -> [String] {
         guard let data = jsonString.data(using: .utf8),
               let array = try? JSONSerialization.jsonObject(with: data) as? [String] else {
@@ -223,5 +298,48 @@ public final class AgySessionReader: @unchecked Sendable {
         }
 
         return nil
+    }
+}
+
+public extension AgySessionRecord {
+    func asAgentSession() -> AgentSession {
+        let firstWorkspace = workspaceURIs.first.flatMap { uri -> String? in
+            if uri.hasPrefix("file://") {
+                return URL(string: uri)?.path
+            }
+            return uri
+        }
+        let workspaceName = firstWorkspace.map { WorkspaceNameResolver.workspaceName(for: $0) } ?? "Workspace"
+        let displayTitle = !title.isEmpty ? title : "Gemini · \(workspaceName)"
+        let displayPreview = !preview.isEmpty ? preview : "Antigravity session in \(workspaceName)"
+        let transcriptPath = (appDataDir as NSString).appendingPathComponent("brain/\(sessionID)/.system_generated/logs/transcript.jsonl")
+
+        var session = AgentSession(
+            id: sessionID,
+            title: displayTitle,
+            tool: .geminiCLI,
+            origin: .live,
+            attachmentState: .detached,
+            phase: isRunning ? .running : .completed,
+            summary: displayPreview,
+            updatedAt: lastModifiedTime,
+            jumpTarget: firstWorkspace.map { cwd in
+                JumpTarget(
+                    terminalApp: "Terminal",
+                    workspaceName: workspaceName,
+                    paneTitle: "Gemini \(sessionID.prefix(8))",
+                    workingDirectory: cwd
+                )
+            },
+            geminiMetadata: GeminiSessionMetadata(
+                transcriptPath: transcriptPath,
+                initialUserPrompt: displayPreview,
+                lastUserPrompt: displayPreview
+            )
+        )
+        if !title.isEmpty {
+            session.conversationTitle = title
+        }
+        return session
     }
 }

@@ -303,7 +303,8 @@ final class ProcessMonitoringCoordinator {
         // Phase 1: populate isProcessAlive in parallel with existing system.
         let aliveIDs = sessionIDsWithAliveProcesses(
             activeProcesses: activeProcesses,
-            isCodexAppRunning: isCodexAppRunning
+            isCodexAppRunning: isCodexAppRunning,
+            sessions: local.sessions
         )
         _ = local.markProcessLiveness(
             aliveSessionIDs: aliveIDs,
@@ -421,10 +422,11 @@ final class ProcessMonitoringCoordinator {
     /// Codex/Claude/Gemini).
     func sessionIDsWithAliveProcesses(
         activeProcesses: [ActiveProcessSnapshot],
-        isCodexAppRunning: Bool
+        isCodexAppRunning: Bool,
+        sessions: [AgentSession]? = nil
     ) -> Set<String> {
         var aliveIDs: Set<String> = []
-        let sessions = state.sessions
+        let sessions = sessions ?? state.sessions
 
         // Codex CLI sessions: match by session ID directly.
         let codexProcessIDs = Set(
@@ -503,8 +505,8 @@ final class ProcessMonitoringCoordinator {
         let trackedGeminiSessions = sessions.filter { $0.tool == .geminiCLI && !$0.isDemoSession }
         var claimedGeminiSessionIDs: Set<String> = []
         for process in geminiProcesses {
-            if let sessionID = process.sessionID,
-               let directMatch = trackedGeminiSessions.first(where: { $0.id == sessionID && !claimedGeminiSessionIDs.contains($0.id) }) {
+            let sessionID = process.sessionID ?? agySyntheticSessionID(for: process)
+            if let directMatch = trackedGeminiSessions.first(where: { $0.id == sessionID && !claimedGeminiSessionIDs.contains($0.id) }) {
                 aliveIDs.insert(directMatch.id)
                 claimedGeminiSessionIDs.insert(directMatch.id)
                 continue
@@ -1059,6 +1061,16 @@ final class ProcessMonitoringCoordinator {
 
         var sessionsByID = Dictionary(uniqueKeysWithValues: existingSessions.map { ($0.id, $0) })
 
+        // Remove synthetic placeholder sessions if a real session ID is now available
+        for process in activeAgyProcesses {
+            if let realSessionID = process.sessionID {
+                let syntheticID = agySyntheticSessionID(for: process)
+                if syntheticID != realSessionID {
+                    sessionsByID.removeValue(forKey: syntheticID)
+                }
+            }
+        }
+
         for process in activeAgyProcesses {
             let sessionID = process.sessionID ?? agySyntheticSessionID(for: process)
             let workingDirectory = process.workingDirectory
@@ -1090,6 +1102,7 @@ final class ProcessMonitoringCoordinator {
 
             if var existing = sessionsByID[sessionID] {
                 existing.isProcessAlive = true
+                existing.processNotSeenCount = 0
                 existing.attachmentState = .attached
                 if var target = existing.jumpTarget {
                     if let tty = process.terminalTTY {
@@ -1141,6 +1154,7 @@ final class ProcessMonitoringCoordinator {
                     )
                 )
                 newSession.isProcessAlive = true
+                newSession.processNotSeenCount = 0
                 if let rawTitle, !rawTitle.isEmpty {
                     newSession.conversationTitle = rawTitle
                 }

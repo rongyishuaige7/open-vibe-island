@@ -118,4 +118,28 @@ struct AgySessionReaderTests {
 
         #expect(titles["agy-1"] == "Antigravity Session Title")
     }
+
+    @Test
+    func asAgentSessionConvertsRecordCorrectly() {
+        let record = AgySessionRecord(
+            sessionID: "test-uuid-1234",
+            title: "Test Task",
+            preview: "Test preview text",
+            isRunning: true,
+            lastModifiedTime: Date(timeIntervalSince1970: 1_700_000_000),
+            workspaceURIs: ["file:///Users/test/myproject"],
+            stepCount: 10,
+            appDataDir: "/Users/test/.gemini/antigravity-cli"
+        )
+
+        let session = record.asAgentSession()
+        #expect(session.id == "test-uuid-1234")
+        #expect(session.title == "Test Task")
+        #expect(session.tool == .geminiCLI)
+        #expect(session.phase == .running)
+        #expect(session.summary == "Test preview text")
+        #expect(session.jumpTarget?.workingDirectory == "/Users/test/myproject")
+        #expect(session.geminiMetadata?.transcriptPath == "/Users/test/.gemini/antigravity-cli/brain/test-uuid-1234/.system_generated/logs/transcript.jsonl")
+    }
 }
+

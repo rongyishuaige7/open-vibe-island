@@ -20,6 +20,7 @@ final class SessionDiscoveryCoordinator {
         var piRecordsNeedPrune: Bool
         var discoveredCodexRecords: [CodexTrackedSessionRecord]
         var discoveredClaudeSessions: [AgentSession]
+        var discoveredAgySessions: [AgentSession]
         var hooksBinaryURL: URL?
     }
 
@@ -119,6 +120,7 @@ final class SessionDiscoveryCoordinator {
 
         let discoveredCodex = codexRolloutDiscovery.discoverRecentSessions()
         let discoveredClaude = claudeTranscriptDiscovery.discoverRecentSessions()
+        let discoveredAgy = AgySessionReader.fetchRecentRecords(cutoff: cutoff).map { $0.asAgentSession() }
 
         return StartupDiscoveryPayload(
             codexRecords: codexRecords,
@@ -133,6 +135,7 @@ final class SessionDiscoveryCoordinator {
             piRecordsNeedPrune: piRecords != allPi,
             discoveredCodexRecords: discoveredCodex,
             discoveredClaudeSessions: discoveredClaude,
+            discoveredAgySessions: discoveredAgy,
             hooksBinaryURL: HooksBinaryLocator.locate(
                 executableDirectory: Bundle.main.executableURL?.deletingLastPathComponent()
             )
@@ -211,6 +214,13 @@ final class SessionDiscoveryCoordinator {
             onStatusMessage?("Discovered \(payload.discoveredClaudeSessions.count) recent Claude session(s) from local transcripts.")
         }
 
+        // Merge discovered Antigravity / Gemini sessions.
+        if !payload.discoveredAgySessions.isEmpty {
+            let mergedSessions = mergeDiscoveredSessions(payload.discoveredAgySessions)
+            state = SessionState(sessions: mergedSessions)
+            onStatusMessage?("Discovered \(payload.discoveredAgySessions.count) recent Antigravity session(s) from local databases.")
+        }
+
         // Sync rollout tracking with current sessions.
         refreshCodexRolloutTracking()
     }
@@ -237,14 +247,19 @@ final class SessionDiscoveryCoordinator {
         matchingTranscriptOf discovered: AgentSession,
         in sessions: [String: AgentSession]
     ) -> String? {
-        guard let discoveredPath = discovered.claudeMetadata?.transcriptPath,
-              !discoveredPath.isEmpty else {
-            return nil
+        if let claudePath = discovered.claudeMetadata?.transcriptPath, !claudePath.isEmpty {
+            return sessions.first(where: {
+                $0.value.claudeMetadata?.transcriptPath == claudePath
+            })?.key
         }
 
-        return sessions.first(where: {
-            $0.value.claudeMetadata?.transcriptPath == discoveredPath
-        })?.key
+        if let geminiPath = discovered.geminiMetadata?.transcriptPath, !geminiPath.isEmpty {
+            return sessions.first(where: {
+                $0.value.geminiMetadata?.transcriptPath == geminiPath
+            })?.key
+        }
+
+        return nil
     }
 
     private func merge(discovered: AgentSession, into existing: AgentSession) -> AgentSession {
@@ -265,6 +280,7 @@ final class SessionDiscoveryCoordinator {
         merged.jumpTarget = existing.jumpTarget ?? discovered.jumpTarget
         merged.codexMetadata = mergeCodexMetadata(existing.codexMetadata, discovered.codexMetadata)
         merged.claudeMetadata = mergeClaudeMetadata(existing.claudeMetadata, discovered.claudeMetadata)
+        merged.geminiMetadata = mergeGeminiMetadata(existing.geminiMetadata, discovered.geminiMetadata)
         merged.openCodeMetadata = mergeOpenCodeMetadata(existing.openCodeMetadata, discovered.openCodeMetadata)
         merged.cursorMetadata = mergeCursorMetadata(existing.cursorMetadata, discovered.cursorMetadata)
         merged.piMetadata = mergePiMetadata(existing.piMetadata, discovered.piMetadata)
@@ -274,6 +290,28 @@ final class SessionDiscoveryCoordinator {
         merged.isCodexAppSession = existing.isCodexAppSession || discovered.isCodexAppSession
 
         return merged
+    }
+
+    private func mergeGeminiMetadata(
+        _ existing: GeminiSessionMetadata?,
+        _ discovered: GeminiSessionMetadata?
+    ) -> GeminiSessionMetadata? {
+        guard let existing else {
+            return discovered?.isEmpty == true ? nil : discovered
+        }
+
+        guard let discovered else {
+            return existing.isEmpty ? nil : existing
+        }
+
+        let merged = GeminiSessionMetadata(
+            transcriptPath: discovered.transcriptPath ?? existing.transcriptPath,
+            initialUserPrompt: existing.initialUserPrompt ?? discovered.initialUserPrompt ?? discovered.lastUserPrompt,
+            lastUserPrompt: discovered.lastUserPrompt ?? existing.lastUserPrompt,
+            lastAssistantMessage: discovered.lastAssistantMessage ?? existing.lastAssistantMessage,
+            lastAssistantMessageBody: discovered.lastAssistantMessageBody ?? existing.lastAssistantMessageBody
+        )
+        return merged.isEmpty ? nil : merged
     }
 
     private func mergeOpenCodeMetadata(
