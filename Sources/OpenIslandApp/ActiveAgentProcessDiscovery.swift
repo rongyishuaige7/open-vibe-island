@@ -183,19 +183,37 @@ struct ActiveAgentProcessDiscovery {
             }
 
             if isGeminiProcess(command: process.command) {
-                let claimKey = "gemini:\(process.pid)"
+                let lsofOutput = lsofOutput(pid: process.pid)
+                let sessionID = agySessionID(in: lsofOutput, command: process.command)
+                let claimKey = "gemini:\(sessionID ?? process.pid)"
                 guard claimedKeys.insert(claimKey).inserted else {
                     continue
                 }
 
-                let lsofOutput = lsofOutput(pid: process.pid)
-                snapshots.append(ProcessSnapshot(
+                let transcriptPath = agyTranscriptPath(in: lsofOutput, sessionID: sessionID)
+
+                var snapshot = ProcessSnapshot(
                     tool: .geminiCLI,
-                    sessionID: nil,
+                    sessionID: sessionID,
                     workingDirectory: lsofOutput.flatMap(workingDirectory(from:)),
                     terminalTTY: process.terminalTTY,
-                    terminalApp: terminalApp(for: process, processesByPID: processesByPID)
-                ))
+                    terminalApp: terminalApp(for: process, processesByPID: processesByPID),
+                    transcriptPath: transcriptPath
+                )
+
+                if snapshot.terminalApp == nil, let agentTTY = process.terminalTTY {
+                    if let (tmuxTarget, hostTerminalApp, socketPath) = resolveTmuxInfo(
+                        agentTTY: agentTTY,
+                        processes: processesByPID.values.map { $0 },
+                        processesByPID: processesByPID
+                    ) {
+                        snapshot.terminalApp = hostTerminalApp
+                        snapshot.tmuxTarget = tmuxTarget
+                        snapshot.tmuxSocketPath = socketPath
+                    }
+                }
+
+                snapshots.append(snapshot)
                 continue
             }
 
@@ -801,12 +819,84 @@ struct ActiveAgentProcessDiscovery {
         guard let firstToken = lowered.split(separator: " ").first.map(String.init) else {
             return false
         }
+        let binaryName = (firstToken as NSString).lastPathComponent
 
-        return firstToken == "gemini"
+        return binaryName == "gemini"
+            || binaryName == "agy"
+            || binaryName == "antigravity"
+            || binaryName == "antigravity-cli"
+            || firstToken == "gemini"
             || firstToken.hasSuffix("/gemini")
+            || firstToken == "agy"
+            || firstToken.hasSuffix("/agy")
             || lowered.contains("/bin/gemini")
+            || lowered.contains("/.local/bin/agy")
             || lowered.contains("/google/gemini-cli")
             || lowered.contains("/@google/gemini-cli")
+    }
+
+    private func agySessionID(in lsofOutput: String?, command: String) -> String? {
+        if let lsofOutput {
+            for line in lsofOutput.split(whereSeparator: \.isNewline) {
+                guard line.first == "n" else { continue }
+                let path = String(line.dropFirst()).trimmingCharacters(in: .whitespacesAndNewlines)
+                if path.contains("/presence/") && path.hasSuffix(".lock"),
+                   let uuid = firstUUID(in: path) {
+                    return uuid
+                }
+                if path.contains("/conversations/") && (path.hasSuffix(".db") || path.hasSuffix(".db-wal") || path.hasSuffix(".db-shm")),
+                   let uuid = firstUUID(in: path) {
+                    return uuid
+                }
+                if path.contains("/brain/") && path.contains("/transcript"),
+                   let uuid = firstUUID(in: path) {
+                    return uuid
+                }
+            }
+        }
+        return agySessionID(from: command)
+    }
+
+    private func agySessionID(from command: String) -> String? {
+        let tokens = command.split(whereSeparator: \.isWhitespace).map(String.init)
+        for index in tokens.indices {
+            let token = tokens[index]
+            if token == "--conversation" || token == "-c" {
+                let nextIndex = tokens.index(after: index)
+                if tokens.indices.contains(nextIndex), let uuid = firstUUID(in: tokens[nextIndex]) {
+                    return uuid
+                }
+            }
+            if token.hasPrefix("--conversation=") {
+                let value = String(token.split(separator: "=", maxSplits: 1).last ?? "")
+                if let uuid = firstUUID(in: value) {
+                    return uuid
+                }
+            }
+        }
+        return nil
+    }
+
+    private func agyTranscriptPath(in lsofOutput: String?, sessionID: String?) -> String? {
+        guard let sessionID else { return nil }
+        if let lsofOutput {
+            for line in lsofOutput.split(whereSeparator: \.isNewline) {
+                guard line.first == "n" else { continue }
+                let path = String(line.dropFirst()).trimmingCharacters(in: .whitespacesAndNewlines)
+                if path.contains("/brain/\(sessionID)/") && path.hasSuffix("transcript.jsonl") {
+                    return path
+                }
+                if path.contains("/presence/\(sessionID).lock") || path.contains("/conversations/\(sessionID).db") {
+                    let pathComponents = (path as NSString).pathComponents
+                    if let pIndex = pathComponents.lastIndex(where: { $0 == "presence" || $0 == "conversations" }), pIndex > 0 {
+                        let appDataDir = NSString.path(withComponents: Array(pathComponents[..<pIndex]))
+                        let candidate = (appDataDir as NSString).appendingPathComponent("brain/\(sessionID)/.system_generated/logs/transcript.jsonl")
+                        return candidate
+                    }
+                }
+            }
+        }
+        return nil
     }
 
     /// Matches the `kimi` CLI (Moonshot) entry-point. `kimi-info` / `kimi-mcp` /
