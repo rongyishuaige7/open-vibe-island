@@ -7,6 +7,8 @@ public struct ConversationTitleRequest: Equatable, Hashable, Sendable {
         case codexIndex(codexHome: String)
         /// Claude Code: `custom-title` / `ai-title` lines in the transcript.
         case claudeTranscript(path: String)
+        /// Antigravity / Gemini: `title` in `<appDataDir>/conversation_summaries.db`.
+        case agyDatabase(databasePath: String)
     }
 
     public var sessionID: String
@@ -34,6 +36,13 @@ public struct ConversationTitleRequest: Equatable, Hashable, Sendable {
             case .claudeCode:
                 guard let path = session.claudeMetadata?.transcriptPath, !path.isEmpty else { return nil }
                 return ConversationTitleRequest(sessionID: session.id, source: .claudeTranscript(path: path))
+            case .geminiCLI:
+                let transcriptPath = session.geminiMetadata?.transcriptPath
+                if let dbPath = AgySessionReader.databasePath(forTranscriptPath: transcriptPath)
+                    ?? AgySessionReader.candidateDatabasePaths().first {
+                    return ConversationTitleRequest(sessionID: session.id, source: .agyDatabase(databasePath: dbPath))
+                }
+                return nil
             default:
                 return nil
             }
@@ -82,6 +91,11 @@ public final class ConversationTitleResolver: @unchecked Sendable {
         var aiTitle: String?
     }
 
+    private struct AgyDbEntry {
+        var stamp: FileStamp
+        var titles: [String: String]
+    }
+
     static let maxTitleLength = 200
     private static let maxCodexIndexBytes = 8 * 1_024 * 1_024
     private static let customTitleMarker = Data(#""type":"custom-title""#.utf8)
@@ -91,6 +105,7 @@ public final class ConversationTitleResolver: @unchecked Sendable {
     private let lock = NSLock()
     private var codexIndexes: [String: CodexIndexEntry] = [:]
     private var claudeTranscripts: [String: ClaudeEntry] = [:]
+    private var agyDatabases: [String: AgyDbEntry] = [:]
 
     /// `claudeTailWindows`: byte windows read from the end of a transcript,
     /// smallest first; a larger one is tried only when no title line is found.
@@ -112,6 +127,8 @@ public final class ConversationTitleResolver: @unchecked Sendable {
                 title = codexByHome[codexHome]?[request.sessionID]
             case let .claudeTranscript(path):
                 title = claudeTitle(transcriptPath: path)
+            case let .agyDatabase(databasePath):
+                title = agyTitle(sessionID: request.sessionID, databasePath: databasePath)
             }
             if let title {
                 result[request.sessionID] = title
@@ -203,6 +220,25 @@ public final class ConversationTitleResolver: @unchecked Sendable {
             }
         }
         return (custom, ai)
+    }
+
+    // MARK: - Antigravity / Gemini
+
+    private func agyTitle(sessionID: String, databasePath: String) -> String? {
+        guard let stamp = Self.stamp(databasePath) else { return nil }
+        if let cached = lock.withLock({ agyDatabases[databasePath] }), cached.stamp == stamp {
+            return cached.titles[sessionID]
+        }
+
+        var titles = lock.withLock({ agyDatabases[databasePath]?.titles }) ?? [:]
+        if let record = AgySessionReader.fetchRecord(sessionID: sessionID, databasePath: databasePath),
+           !record.title.isEmpty {
+            if let sanitized = Self.sanitizedTitle(record.title) {
+                titles[sessionID] = sanitized
+            }
+        }
+        lock.withLock { agyDatabases[databasePath] = AgyDbEntry(stamp: stamp, titles: titles) }
+        return titles[sessionID]
     }
 
     // MARK: - Helpers
