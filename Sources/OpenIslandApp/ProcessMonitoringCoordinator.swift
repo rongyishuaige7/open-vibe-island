@@ -41,6 +41,9 @@ final class ProcessMonitoringCoordinator {
     private let liveCodexTranscriptReader = CodexRolloutDiscovery()
 
     @ObservationIgnored
+    private let claudeTranscriptDiscovery = ClaudeTranscriptDiscovery()
+
+    @ObservationIgnored
     private let terminalSessionAttachmentProbe = TerminalSessionAttachmentProbe()
 
     @ObservationIgnored
@@ -321,6 +324,51 @@ final class ProcessMonitoringCoordinator {
             )
         if !resolverJumpTargets.isEmpty {
             _ = local.reconcileJumpTargets(resolverJumpTargets)
+        }
+
+        // Reconcile running states:
+        // 1. Detached sessions cannot be actively running.
+        // 2. Dead CLI processes cannot be actively running.
+        // 3. Claude sessions whose transcript indicates turn completion or interruption.
+        for session in local.sessions where session.phase == .running {
+            if session.origin == .demo || session.isRemote { continue }
+
+            if session.attachmentState == .detached {
+                var updated = session
+                updated.phase = .completed
+                local.upsert(updated)
+                continue
+            }
+
+            if !session.isProcessAlive && session.attachmentState == .stale {
+                var updated = session
+                updated.phase = .completed
+                local.upsert(updated)
+                continue
+            }
+
+            if session.tool == .claudeCode,
+               let transcriptPath = session.claudeMetadata?.transcriptPath,
+               !transcriptPath.isEmpty {
+                let fileURL = URL(fileURLWithPath: transcriptPath)
+                if let parsed = claudeTranscriptDiscovery.parseSession(at: fileURL) {
+                    if parsed.phase == .completed {
+                        var updated = session
+                        updated.phase = .completed
+                        updated.summary = parsed.summary
+                        if let metadata = parsed.claudeMetadata {
+                            updated.claudeMetadata = metadata
+                        }
+                        local.upsert(updated)
+                    } else if parsed.phase == .running, let tool = parsed.claudeMetadata?.currentTool {
+                        var updated = session
+                        updated.claudeMetadata?.currentTool = tool
+                        updated.claudeMetadata?.currentToolInputPreview = parsed.claudeMetadata?.currentToolInputPreview
+                        updated.summary = parsed.summary
+                        local.upsert(updated)
+                    }
+                }
+            }
         }
 
         // Phase 4: remove sessions that are no longer visible.
@@ -878,7 +926,7 @@ final class ProcessMonitoringCoordinator {
             tool: .claudeCode,
             origin: .live,
             attachmentState: .attached,
-            phase: .running,
+            phase: .completed,
             summary: Self.syntheticDetectedSummary(subject: "Claude session", terminalApp: terminalApp),
             updatedAt: now,
             jumpTarget: JumpTarget(

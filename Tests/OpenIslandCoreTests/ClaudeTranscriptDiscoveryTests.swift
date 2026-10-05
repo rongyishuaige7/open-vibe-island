@@ -164,4 +164,66 @@ struct ClaudeTranscriptDiscoveryTests {
         #expect(sessions.count == 1)
         #expect(sessions.first?.phase == .completed)
     }
+
+    @Test
+    func interruptedTurnDiscoversAsCompleted() throws {
+        let lines = [
+            #"{"type":"user","sessionId":"intr1111","cwd":"/Users/test/project","timestamp":"2026-07-22T18:00:00Z","message":{"role":"user","content":[{"type":"text","text":"Check status"}]}}"#,
+            #"{"type":"user","sessionId":"intr1111","cwd":"/Users/test/project","timestamp":"2026-07-22T18:00:02Z","message":{"role":"user","content":[{"type":"text","text":"[Request interrupted by user]"}]},"interruptedMessageId":"msg_123"}"#,
+        ]
+        let (discovery, root) = try makeDiscovery(line: lines.joined(separator: "\n"), fileName: "intr1111.jsonl")
+        defer { try? FileManager.default.removeItem(at: root) }
+
+        let sessions = discovery.discoverRecentSessions()
+
+        #expect(sessions.count == 1)
+        #expect(sessions.first?.phase == .completed)
+        #expect(sessions.first?.claudeMetadata?.lastUserPrompt == "Check status")
+    }
+
+    @Test
+    func awaySummaryDiscoversAsCompleted() throws {
+        let lines = [
+            #"{"type":"user","sessionId":"away1111","cwd":"/Users/test/project","timestamp":"2026-07-22T18:00:00Z","message":{"role":"user","content":[{"type":"text","text":"Analyze repo"}]}}"#,
+            #"{"type":"system","subtype":"away_summary","sessionId":"away1111","cwd":"/Users/test/project","content":"Summary of interrupted work.","timestamp":"2026-07-22T18:00:05Z"}"#,
+        ]
+        let (discovery, root) = try makeDiscovery(line: lines.joined(separator: "\n"), fileName: "away1111.jsonl")
+        defer { try? FileManager.default.removeItem(at: root) }
+
+        let sessions = discovery.discoverRecentSessions()
+
+        #expect(sessions.count == 1)
+        #expect(sessions.first?.phase == .completed)
+    }
+
+    @Test
+    func stopHookSummaryDiscoversAsCompleted() throws {
+        let lines = [
+            #"{"type":"user","sessionId":"stop1111","cwd":"/Users/test/project","timestamp":"2026-07-22T18:00:00Z","message":{"role":"user","content":[{"type":"text","text":"Run diagnostics"}]}}"#,
+            #"{"type":"system","subtype":"stop_hook_summary","sessionId":"stop1111","cwd":"/Users/test/project","timestamp":"2026-07-22T18:00:05Z"}"#,
+        ]
+        let (discovery, root) = try makeDiscovery(line: lines.joined(separator: "\n"), fileName: "stop1111.jsonl")
+        defer { try? FileManager.default.removeItem(at: root) }
+
+        let sessions = discovery.discoverRecentSessions()
+
+        #expect(sessions.count == 1)
+        #expect(sessions.first?.phase == .completed)
+    }
+
+    @Test
+    func stalePromptWithoutResponseDiscoversAsCompleted() throws {
+        let lines = [
+            #"{"type":"user","sessionId":"stale1111","cwd":"/Users/test/project","timestamp":"2026-07-22T18:00:00Z","message":{"role":"user","content":[{"type":"text","text":"Stale prompt"}]}}"#,
+        ]
+        let (discovery, root) = try makeDiscovery(line: lines.joined(separator: "\n"), fileName: "stale1111.jsonl")
+        defer { try? FileManager.default.removeItem(at: root) }
+
+        // When discovery runs with now > 60s after the file modification time, it should be completed
+        let futureDate = Date.now.addingTimeInterval(300)
+        let sessions = discovery.discoverRecentSessions(now: futureDate)
+
+        #expect(sessions.count == 1)
+        #expect(sessions.first?.phase == .completed)
+    }
 }

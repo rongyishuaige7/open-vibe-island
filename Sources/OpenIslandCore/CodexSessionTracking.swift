@@ -150,6 +150,9 @@ public extension CodexTrackedSessionRecord {
     var restorableSession: AgentSession {
         var session = session
         session.attachmentState = .stale
+        if session.phase == .running {
+            session.phase = .completed
+        }
         return session
     }
 

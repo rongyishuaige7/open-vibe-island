@@ -198,6 +198,41 @@ struct ClaudeProcessLivenessTests {
         #expect(currentState().session(id: "session-moved")?.jumpTarget?.terminalTTY == "/dev/ttys101")
     }
 
+    @Test
+    func runningClaudeSessionReconcilesToCompletedWhenTranscriptIsInterrupted() throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("open-island-reconcile-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+
+        let transcriptFile = root.appendingPathComponent("session-run.jsonl")
+        let lines = [
+            #"{"type":"user","sessionId":"session-run","cwd":"/Users/test/project","timestamp":"2026-07-22T18:00:00Z","message":{"role":"user","content":[{"type":"text","text":"Do work"}]}}"#,
+            #"{"type":"user","sessionId":"session-run","cwd":"/Users/test/project","timestamp":"2026-07-22T18:00:02Z","message":{"role":"user","content":[{"type":"text","text":"[Request interrupted by user]"}]},"interruptedMessageId":"msg_123"}"#,
+        ]
+        try lines.joined(separator: "\n").write(to: transcriptFile, atomically: true, encoding: .utf8)
+
+        var session = claudeSession(id: "session-run", tty: "/dev/ttys101", transcriptPath: transcriptFile.path)
+        session.phase = .running
+        let (coordinator, currentState) = coordinator(with: [session])
+
+        reconcile(coordinator, [claudeProcess(sessionID: "session-run", tty: "/dev/ttys101")])
+
+        #expect(currentState().session(id: "session-run")?.phase == .completed)
+    }
+
+    @Test
+    func runningClaudeSessionReconcilesToCompletedWhenProcessIsDetached() {
+        var session = claudeSession(id: "session-detached", tty: "/dev/ttys101")
+        session.phase = .running
+        session.attachmentState = .detached
+        let (coordinator, currentState) = coordinator(with: [session])
+
+        reconcile(coordinator, [])
+
+        #expect(currentState().session(id: "session-detached")?.phase == .completed)
+    }
+
     private func reconcile(
         _ coordinator: ProcessMonitoringCoordinator,
         _ processes: [ActiveAgentProcessDiscovery.ProcessSnapshot]

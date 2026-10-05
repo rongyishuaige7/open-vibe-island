@@ -555,7 +555,7 @@ public struct SessionState: Equatable, Sendable {
         return sessionsByID.count != before
     }
 
-    private mutating func upsert(_ session: AgentSession) {
+    public mutating func upsert(_ session: AgentSession) {
         sessionsByID[session.id] = session
     }
 }

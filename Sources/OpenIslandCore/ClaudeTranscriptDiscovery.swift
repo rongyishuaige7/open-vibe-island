@@ -62,11 +62,15 @@ public final class ClaudeTranscriptDiscovery: @unchecked Sendable {
             .prefix(maxFiles)
 
         return sortedCandidates.compactMap { candidate in
-            parseSession(at: candidate.fileURL, fallbackUpdatedAt: candidate.modifiedAt)
+            parseSession(at: candidate.fileURL, fallbackUpdatedAt: candidate.modifiedAt, now: now)
         }
     }
 
-    private func parseSession(at fileURL: URL, fallbackUpdatedAt: Date) -> AgentSession? {
+    public func parseSession(
+        at fileURL: URL,
+        fallbackUpdatedAt: Date? = nil,
+        now: Date = .now
+    ) -> AgentSession? {
         // Stream the transcript line by line. The original
         // `String(contentsOf:)` slurped the entire jsonl, which on
         // heavy Claude users (multi-hundred-MB transcripts) caused
@@ -81,7 +85,10 @@ public final class ClaudeTranscriptDiscovery: @unchecked Sendable {
         var sessionID = fileURL.deletingPathExtension().lastPathComponent
         var cwd: String?
         var entrypoint: String?
-        var updatedAt = fallbackUpdatedAt
+        let resolvedFallbackUpdatedAt = fallbackUpdatedAt
+            ?? (try? fileURL.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate)
+            ?? now
+        var updatedAt = resolvedFallbackUpdatedAt
         var initialUserPrompt: String?
         var lastUserPrompt: String?
         var lastAssistantMessage: String?
@@ -125,32 +132,46 @@ public final class ClaudeTranscriptDiscovery: @unchecked Sendable {
             let topLevelType = object["type"] as? String
             let message = object["message"] as? [String: Any]
             let role = message?["role"] as? String
+            let hasInterruptedMessageID = object["interruptedMessageId"] != nil
 
-            if role == "user" {
-                isTurnInProgress = true
-                if let prompt = self.promptText(from: message?["content"]) {
-                    if initialUserPrompt == nil {
-                        initialUserPrompt = prompt
+            if hasInterruptedMessageID {
+                isTurnInProgress = false
+                pendingToolUses.removeAll()
+                currentTool = nil
+                currentToolInputPreview = nil
+            } else if role == "user" {
+                let prompt = self.promptText(from: message?["content"])
+                if self.isInterruptionPrompt(prompt) {
+                    isTurnInProgress = false
+                    pendingToolUses.removeAll()
+                    currentTool = nil
+                    currentToolInputPreview = nil
+                } else {
+                    isTurnInProgress = true
+                    if let prompt {
+                        if initialUserPrompt == nil {
+                            initialUserPrompt = prompt
+                        }
+                        lastUserPrompt = prompt
                     }
-                    lastUserPrompt = prompt
-                }
 
-                if let toolResultIDs = self.toolResultIDs(from: message?["content"]) {
-                    for toolResultID in toolResultIDs {
-                        pendingToolUses.removeValue(forKey: toolResultID)
-                    }
+                    if let toolResultIDs = self.toolResultIDs(from: message?["content"]) {
+                        for toolResultID in toolResultIDs {
+                            pendingToolUses.removeValue(forKey: toolResultID)
+                        }
 
-                    if pendingToolUses.isEmpty {
-                        currentTool = nil
-                        currentToolInputPreview = nil
-                    } else if let lastPending = pendingToolUses.values.first {
-                        currentTool = lastPending.name
-                        currentToolInputPreview = lastPending.preview
+                        if pendingToolUses.isEmpty {
+                            currentTool = nil
+                            currentToolInputPreview = nil
+                        } else if let lastPending = pendingToolUses.values.first {
+                            currentTool = lastPending.name
+                            currentToolInputPreview = lastPending.preview
+                        }
                     }
                 }
             } else if role == "assistant" {
                 if let stopReason = message?["stop_reason"] as? String {
-                    if stopReason == "end_turn" {
+                    if stopReason == "end_turn" || stopReason == "stop_sequence" || stopReason == "max_tokens" {
                         isTurnInProgress = false
                     } else if stopReason == "tool_use" {
                         isTurnInProgress = true
@@ -176,9 +197,17 @@ public final class ClaudeTranscriptDiscovery: @unchecked Sendable {
                         currentToolInputPreview = lastToolUse.preview
                     }
                 }
-            } else if topLevelType == "system",
-                      object["subtype"] as? String == "turn_duration" {
-                isTurnInProgress = false
+            } else if topLevelType == "system" {
+                let subtype = object["subtype"] as? String
+                if subtype == "turn_duration"
+                    || subtype == "stop_hook_summary"
+                    || subtype == "away_summary"
+                    || subtype?.hasSuffix("_summary") == true {
+                    isTurnInProgress = false
+                    pendingToolUses.removeAll()
+                    currentTool = nil
+                    currentToolInputPreview = nil
+                }
             } else if topLevelType == "summary",
                       let summary = object["summary"] as? String,
                       !summary.isEmpty {
@@ -205,6 +234,14 @@ public final class ClaudeTranscriptDiscovery: @unchecked Sendable {
 
         if !pendingToolUses.isEmpty {
             isTurnInProgress = true
+        } else if isTurnInProgress {
+            // A completed or interrupted CLI turn without an assistant response
+            // or lingering idle at the prompt cannot be actively running if the file
+            // has not been written to for > 60s and no tool is executing.
+            let fileAge = now.timeIntervalSince(resolvedFallbackUpdatedAt)
+            if fileAge > 60 {
+                isTurnInProgress = false
+            }
         }
 
         guard let cwd else {
@@ -288,6 +325,11 @@ public final class ClaudeTranscriptDiscovery: @unchecked Sendable {
         }
 
         return nil
+    }
+
+    private func isInterruptionPrompt(_ prompt: String?) -> Bool {
+        guard let prompt else { return false }
+        return prompt.hasPrefix("[Request interrupted")
     }
 
     private func assistantText(from content: Any?) -> String? {

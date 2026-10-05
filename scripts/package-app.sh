@@ -240,33 +240,37 @@ fi
 # --- Styled DMG creation ---
 dmg_bg="$repo_root/Assets/Brand/dmg-background@2x.png"
 
-create-dmg \
-    --volname "$app_name" \
-    --background "$dmg_bg" \
-    --window-pos 200 120 \
-    --window-size 660 400 \
-    --icon-size 96 \
-    --text-size 13 \
-    --icon "$app_name.app" 180 210 \
-    --hide-extension "$app_name.app" \
-    --app-drop-link 480 210 \
-    --no-internet-enable \
-    "$dmg_path" \
-    "$bundle_dir"
+if command -v create-dmg >/dev/null 2>&1; then
+    create-dmg \
+        --volname "$app_name" \
+        --background "$dmg_bg" \
+        --window-pos 200 120 \
+        --window-size 660 400 \
+        --icon-size 96 \
+        --text-size 13 \
+        --icon "$app_name.app" 180 210 \
+        --hide-extension "$app_name.app" \
+        --app-drop-link 480 210 \
+        --no-internet-enable \
+        "$dmg_path" \
+        "$bundle_dir"
 
-# Sign the DMG itself (required before notarization)
-if [[ -n "$signing_identity" ]]; then
-    codesign \
-        --force \
-        --sign "$signing_identity" \
-        --timestamp \
-        "$dmg_path"
-fi
+    # Sign the DMG itself (required before notarization)
+    if [[ -n "$signing_identity" ]]; then
+        codesign \
+            --force \
+            --sign "$signing_identity" \
+            --timestamp \
+            "$dmg_path"
+    fi
 
-# Notarize and staple the DMG
-if [[ -n "$signing_identity" && -n "$notary_profile" ]]; then
-    xcrun notarytool submit "$dmg_path" --keychain-profile "$notary_profile" --wait
-    xcrun stapler staple -v "$dmg_path"
+    # Notarize and staple the DMG
+    if [[ -n "$signing_identity" && -n "$notary_profile" ]]; then
+        xcrun notarytool submit "$dmg_path" --keychain-profile "$notary_profile" --wait
+        xcrun stapler staple -v "$dmg_path"
+    fi
+else
+    echo "create-dmg not found; skipping DMG creation."
 fi
 
 echo "Bundle: $bundle_dir"

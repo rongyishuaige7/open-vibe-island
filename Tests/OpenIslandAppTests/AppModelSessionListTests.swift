@@ -1029,7 +1029,7 @@ struct AppModelSessionListTests {
         #expect(merged.count == 1)
         #expect(merged.first?.id.hasPrefix("claude-process:") == true)
         #expect(merged.first?.attachmentState == .attached)
-        #expect(merged.first?.phase == .running)
+        #expect(merged.first?.phase == .completed)
         #expect(merged.first?.jumpTarget?.terminalApp == "Ghostty")
         #expect(merged.first?.jumpTarget?.terminalTTY == "/dev/ttys002")
     }

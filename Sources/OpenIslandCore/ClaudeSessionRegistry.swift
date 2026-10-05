@@ -70,6 +70,9 @@ public struct ClaudeTrackedSessionRecord: Equatable, Codable, Sendable {
     public var restorableSession: AgentSession {
         var session = session
         session.attachmentState = .stale
+        if session.phase == .running {
+            session.phase = .completed
+        }
         return session
     }
 
