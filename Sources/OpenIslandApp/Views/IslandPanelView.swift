@@ -2479,13 +2479,13 @@ private struct IslandSessionRow: View {
     }
 
     private func statusTint(for presence: IslandSessionPresence) -> Color {
-        IslandDesignPalette.Status.tint(for: session.phase, presence: presence)
+        IslandDesignPalette.Status.tint(for: session.phase, presence: presence, tool: session.tool)
     }
 
     private func activityColor(for presence: IslandSessionPresence) -> Color {
         switch session.spotlightActivityTone {
         case .attention:
-            IslandDesignPalette.Status.tint(for: session.phase)
+            IslandDesignPalette.Status.tint(for: session.phase, tool: session.tool)
         case .live:
             statusTint(for: presence)
         case .idle:
