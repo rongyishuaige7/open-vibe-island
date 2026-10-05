@@ -106,6 +106,7 @@ struct IslandPanelView: View {
 
     @State private var isHovering = false
     @State private var showingQuitConfirmation = false
+    @State private var showingTokenDetailPopover = false
     @State private var keepsOpenedSurfaceMounted = false
     @State private var openedSurfaceMountGeneration: UInt64 = 0
 
@@ -191,6 +192,9 @@ struct IslandPanelView: View {
             syncOpenedSurfaceMount(with: model.notchStatus, immediate: true)
         }
         .onChange(of: model.notchStatus) { _, status in
+            if status != .opened {
+                showingTokenDetailPopover = false
+            }
             syncOpenedSurfaceMount(with: status)
         }
     }
@@ -338,16 +342,42 @@ struct IslandPanelView: View {
 
     @ViewBuilder
     private func openedSurfaceContent(width openedWidth: CGFloat, height openedHeight: CGFloat) -> some View {
-        VStack(spacing: 0) {
-            openedHeaderContent
-                .frame(height: closedNotchHeight)
+        ZStack(alignment: .topLeading) {
+            VStack(spacing: 0) {
+                openedHeaderContent
+                    .frame(height: closedNotchHeight)
 
-            openedContent
-                .frame(width: openedWidth)
-                .frame(maxHeight: max(0, openedHeight - closedNotchHeight), alignment: .top)
-                .clipped()
+                openedContent
+                    .frame(width: openedWidth)
+                    .frame(maxHeight: max(0, openedHeight - closedNotchHeight), alignment: .top)
+                    .clipped()
+            }
+            .frame(width: openedWidth, height: openedHeight, alignment: .top)
+
+            if showingTokenDetailPopover {
+                Color.black.opacity(0.001)
+                    .frame(width: openedWidth, height: openedHeight)
+                    .contentShape(Rectangle())
+                    .onTapGesture {
+                        withAnimation(.easeOut(duration: 0.15)) {
+                            showingTokenDetailPopover = false
+                        }
+                    }
+
+                tokenDetailPopoverView
+                    .padding(.leading, openedHeaderHorizontalPadding)
+                    .padding(.top, closedNotchHeight + 4)
+                    .contentShape(Rectangle())
+                    .onTapGesture {
+                        // Keep open when clicking inside the card
+                    }
+                    .transition(.asymmetric(
+                        insertion: .opacity.combined(with: .scale(scale: 0.95, anchor: .topLeading)),
+                        removal: .opacity
+                    ))
+            }
         }
-        .frame(width: openedWidth, height: openedHeight, alignment: .top)
+        .animation(.easeOut(duration: 0.18), value: showingTokenDetailPopover)
     }
 
     // MARK: - Closed state
@@ -915,6 +945,11 @@ struct IslandPanelView: View {
             return []
         }
 
+        if model.showTodayTokenUsage,
+           let todayTokens = todayTokenUsagePresentation {
+            return [todayTokens]
+        }
+
         var providers: [UsageProviderPresentation] = []
 
         if let snapshot = model.claudeUsageSnapshot,
@@ -977,15 +1012,10 @@ struct IslandPanelView: View {
             }
         }
 
-        if model.showTodayTokenUsage,
-           let todayTokens = todayTokenUsagePresentation {
-            providers.append(todayTokens)
-        }
-
         return providers
     }
 
-    /// The "Today" chip: Claude and Codex tokens CC Switch logged since local
+    /// The "Today" chip: Claude, Codex, AGY pool and AGY Pro token totals logged since local
     /// midnight, cache included.
     private var todayTokenUsagePresentation: UsageProviderPresentation? {
         let monitor = model.todayTokenUsageMonitor
@@ -997,17 +1027,21 @@ struct IslandPanelView: View {
         let candidateAgents: [(id: String, label: String, shortLabel: String, totals: AgentTokenTotals?)] = [
             ("claude", "Claude", "Cl", monitor.usage?.claude),
             ("codex", "Codex", "Cx", monitor.usage?.codex),
-            ("agy", "AGY", "Agy", monitor.usage?.agy),
-            ("agy-pro", "AGY Pro", "Pro", monitor.usage?.agyPro),
+            ("agy", lang.t("usage.todayTokens.agyPool"), "AGY", monitor.usage?.agy),
+            ("agy-pro", lang.t("usage.todayTokens.agyPro"), "Pro", monitor.usage?.agyPro),
         ]
 
-        let activeAgents = candidateAgents.filter { agent in
-            guard let totals = agent.totals else { return false }
-            return totals.totalTokens > 0 || totals.requestCount > 0
-        }
-        let agents = activeAgents.isEmpty ? Array(candidateAgents.prefix(2)) : activeAgents
-        var helpLines = [lang.t("usage.todayTokens.help")]
-        for agent in agents {
+        let grandTotal = (monitor.usage?.claude.totalTokens ?? 0)
+            + (monitor.usage?.codex.totalTokens ?? 0)
+            + (monitor.usage?.agy.totalTokens ?? 0)
+            + (monitor.usage?.agyPro.totalTokens ?? 0)
+        let totalFormatted = TokenCountFormatter.compact(grandTotal, languageCode: languageCode)
+
+        var helpLines = [
+            lang.t("usage.todayTokens.help"),
+            lang.t("usage.todayTokens.totalLabel") + "：" + totalFormatted
+        ]
+        for agent in candidateAgents {
             guard let totals = agent.totals else { continue }
             helpLines.append(lang.t(
                 "usage.todayTokens.helpLine",
@@ -1025,7 +1059,7 @@ struct IslandPanelView: View {
             id: "today-tokens",
             title: lang.t("usage.todayTokens.title"),
             windows: [],
-            tokens: agents.map { agent in
+            tokens: candidateAgents.map { agent in
                 UsageTokenPresentation(
                     id: "today-\(agent.id)",
                     label: agent.label,
@@ -1035,7 +1069,9 @@ struct IslandPanelView: View {
                     } ?? "—"
                 )
             },
-            helpText: helpLines.joined(separator: "\n")
+            helpText: helpLines.joined(separator: "\n"),
+            totalTokensCount: grandTotal,
+            totalTokensFormatted: totalFormatted
         )
     }
 
@@ -1138,7 +1174,69 @@ struct IslandPanelView: View {
         .fixedSize(horizontal: true, vertical: false)
     }
 
+    @ViewBuilder
     private func compactUsageChip(
+        _ provider: UsageProviderPresentation,
+        layout: UsageChipLayout
+    ) -> some View {
+        if provider.id == "today-tokens" {
+            todayTokensChip(provider, layout: layout)
+        } else {
+            legacyUsageChip(provider, layout: layout)
+        }
+    }
+
+    private func todayTokensChip(
+        _ provider: UsageProviderPresentation,
+        layout: UsageChipLayout
+    ) -> some View {
+        Button {
+            withAnimation(.spring(response: 0.28, dampingFraction: 0.82)) {
+                showingTokenDetailPopover.toggle()
+            }
+        } label: {
+            HStack(spacing: 5) {
+                Image(systemName: "bolt.fill")
+                    .font(.system(size: 9.5, weight: .bold))
+                    .foregroundStyle(Color.orange.opacity(0.95))
+
+                if !layout.usesShortTitle {
+                    Text(provider.title)
+                        .font(.system(size: 11, weight: .semibold))
+                        .foregroundStyle(.white.opacity(0.74))
+                }
+
+                Text(provider.totalTokensFormatted.isEmpty ? "0" : provider.totalTokensFormatted)
+                    .font(.system(size: 11.5, weight: .bold, design: .monospaced))
+                    .foregroundStyle(.white.opacity(0.95))
+
+                Image(systemName: showingTokenDetailPopover ? "chevron.up" : "chevron.down")
+                    .font(.system(size: 8, weight: .semibold))
+                    .foregroundStyle(.white.opacity(0.45))
+            }
+            .padding(.horizontal, 8)
+            .padding(.vertical, 4)
+            .background(
+                showingTokenDetailPopover
+                    ? Color.white.opacity(0.12)
+                    : Color.white.opacity(0.055),
+                in: Capsule()
+            )
+            .overlay(
+                Capsule()
+                    .strokeBorder(
+                        showingTokenDetailPopover
+                            ? Color.orange.opacity(0.4)
+                            : Color.white.opacity(0.06),
+                        lineWidth: 1
+                    )
+            )
+        }
+        .buttonStyle(.plain)
+        .help(usageHelpText(for: provider))
+    }
+
+    private func legacyUsageChip(
         _ provider: UsageProviderPresentation,
         layout: UsageChipLayout
     ) -> some View {
@@ -1191,6 +1289,170 @@ struct IslandPanelView: View {
                 .strokeBorder(.white.opacity(0.06), lineWidth: 1)
         )
         .help(usageHelpText(for: provider))
+    }
+
+    private var tokenDetailPopoverView: some View {
+        let monitor = model.todayTokenUsageMonitor
+        let usage = monitor.usage
+        let languageCode = lang.language.resolvedCode
+
+        return VStack(alignment: .leading, spacing: 9) {
+            HStack(spacing: 6) {
+                Image(systemName: "bolt.fill")
+                    .font(.system(size: 11, weight: .bold))
+                    .foregroundStyle(.orange)
+
+                Text(lang.t("usage.todayTokens.detailTitle"))
+                    .font(.system(size: 12, weight: .semibold))
+                    .foregroundStyle(.white.opacity(0.92))
+
+                Spacer()
+
+                Button {
+                    withAnimation(.easeOut(duration: 0.15)) {
+                        showingTokenDetailPopover = false
+                    }
+                } label: {
+                    Image(systemName: "xmark.circle.fill")
+                        .font(.system(size: 12))
+                        .foregroundStyle(.white.opacity(0.35))
+                }
+                .buttonStyle(.plain)
+            }
+
+            Rectangle()
+                .fill(Color.white.opacity(0.08))
+                .frame(height: 1)
+
+            VStack(spacing: 6) {
+                tokenDetailAgentRow(
+                    label: "Claude",
+                    dotColor: Color(red: 0.85, green: 0.5, blue: 0.2),
+                    totals: usage?.claude,
+                    accountHint: "CC Switch",
+                    languageCode: languageCode
+                )
+
+                tokenDetailAgentRow(
+                    label: "Codex",
+                    dotColor: Color(red: 0.25, green: 0.75, blue: 0.45),
+                    totals: usage?.codex,
+                    accountHint: "CC Switch",
+                    languageCode: languageCode
+                )
+
+                tokenDetailAgentRow(
+                    label: lang.t("usage.todayTokens.agyPool"),
+                    dotColor: Color(red: 0.3, green: 0.6, blue: 0.95),
+                    totals: usage?.agy,
+                    accountHint: "sk44989, victorcranston",
+                    languageCode: languageCode
+                )
+
+                tokenDetailAgentRow(
+                    label: lang.t("usage.todayTokens.agyPro"),
+                    dotColor: Color(red: 0.95, green: 0.75, blue: 0.2),
+                    totals: usage?.agyPro,
+                    accountHint: "wisnumandala302",
+                    languageCode: languageCode
+                )
+            }
+
+            Rectangle()
+                .fill(Color.white.opacity(0.08))
+                .frame(height: 1)
+
+            HStack {
+                Text(lang.t("usage.todayTokens.totalLabel"))
+                    .font(.system(size: 11, weight: .medium))
+                    .foregroundStyle(.white.opacity(0.55))
+
+                Spacer()
+
+                let totalTokens = (usage?.claude.totalTokens ?? 0)
+                    + (usage?.codex.totalTokens ?? 0)
+                    + (usage?.agy.totalTokens ?? 0)
+                    + (usage?.agyPro.totalTokens ?? 0)
+
+                Text(TokenCountFormatter.compact(totalTokens, languageCode: languageCode))
+                    .font(.system(size: 12, weight: .bold, design: .monospaced))
+                    .foregroundStyle(.white)
+            }
+
+            if let error = monitor.lastErrorMessage {
+                HStack(spacing: 4) {
+                    Image(systemName: "exclamationmark.triangle.fill")
+                        .font(.system(size: 9))
+                        .foregroundStyle(.orange)
+                    Text(error)
+                        .font(.system(size: 9.5))
+                        .foregroundStyle(.orange.opacity(0.85))
+                        .lineLimit(1)
+                }
+            } else {
+                Text(lang.t("usage.todayTokens.dataSource"))
+                    .font(.system(size: 9))
+                    .foregroundStyle(.white.opacity(0.32))
+            }
+        }
+        .padding(12)
+        .frame(width: 300)
+        .background(
+            RoundedRectangle(cornerRadius: 12, style: .continuous)
+                .fill(Color(red: 0.11, green: 0.11, blue: 0.13).opacity(0.97))
+                .overlay(
+                    RoundedRectangle(cornerRadius: 12, style: .continuous)
+                        .strokeBorder(Color.white.opacity(0.12), lineWidth: 1)
+                )
+                .shadow(color: .black.opacity(0.5), radius: 14, x: 0, y: 6)
+        )
+    }
+
+    private func tokenDetailAgentRow(
+        label: String,
+        dotColor: Color,
+        totals: AgentTokenTotals?,
+        accountHint: String,
+        languageCode: String
+    ) -> some View {
+        let total = totals?.totalTokens ?? 0
+        let reqCount = totals?.requestCount ?? 0
+        let cacheRead = totals?.cacheReadTokens ?? 0
+
+        return HStack(alignment: .center, spacing: 8) {
+            Circle()
+                .fill(dotColor)
+                .frame(width: 7, height: 7)
+
+            VStack(alignment: .leading, spacing: 1.5) {
+                HStack(spacing: 4) {
+                    Text(label)
+                        .font(.system(size: 11.5, weight: .semibold))
+                        .foregroundStyle(.white.opacity(0.88))
+
+                    Text("(\(accountHint))")
+                        .font(.system(size: 9.5))
+                        .foregroundStyle(.white.opacity(0.35))
+                        .lineLimit(1)
+                }
+
+                if reqCount > 0 || cacheRead > 0 {
+                    Text(lang.t(
+                        "usage.todayTokens.subtext",
+                        reqCount.formatted(),
+                        TokenCountFormatter.compact(cacheRead, languageCode: languageCode)
+                    ))
+                    .font(.system(size: 9, design: .monospaced))
+                    .foregroundStyle(.white.opacity(0.4))
+                }
+            }
+
+            Spacer(minLength: 4)
+
+            Text(TokenCountFormatter.compact(total, languageCode: languageCode))
+                .font(.system(size: 12, weight: .bold, design: .monospaced))
+                .foregroundStyle(.white.opacity(total > 0 ? 0.95 : 0.35))
+        }
     }
 
     private func usageHelpText(for provider: UsageProviderPresentation) -> String {
@@ -1276,6 +1538,8 @@ private struct UsageProviderPresentation: Identifiable {
     var tokens: [UsageTokenPresentation] = []
     /// Overrides the tooltip otherwise built from `windows`.
     var helpText: String?
+    var totalTokensCount: Int = 0
+    var totalTokensFormatted: String = ""
 
     var peakWindow: UsageWindowPresentation? {
         windows.max { lhs, rhs in

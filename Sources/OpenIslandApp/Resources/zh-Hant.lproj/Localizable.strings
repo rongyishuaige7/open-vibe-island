@@ -34,6 +34,12 @@
 "usage.todayTokens.help" = "本機請求日誌記錄的今日 Token（從當地午夜起），含快取";
 "usage.todayTokens.helpLine" = "%@：%@ Token，其中快取讀取 %@，%@ 次請求";
 "usage.todayTokens.readFailed" = "最近一次讀取失敗：%@";
+"usage.todayTokens.detailTitle" = "今日 Token 消耗統計";
+"usage.todayTokens.totalLabel" = "今日總消耗";
+"usage.todayTokens.dataSource" = "資料來源：CC Switch 與 KEEPER 本機日誌";
+"usage.todayTokens.agyPool" = "AGY 普通池";
+"usage.todayTokens.agyPro" = "AGY Pro 個人池";
+"usage.todayTokens.subtext" = "%@ 次請求 · 快取 %@";
 "settings.general.completionReply" = "在完成卡片中回覆";
 "settings.general.cliHooks" = "CLI Hooks";
 "settings.general.activated" = "已啟用";
