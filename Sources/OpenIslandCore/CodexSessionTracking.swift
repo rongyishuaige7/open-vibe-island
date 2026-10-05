@@ -393,7 +393,57 @@ public final class CodexRolloutDiscovery: @unchecked Sendable {
             .appendingPathComponent(".codex/sessions", isDirectory: true)
     }
 
-    private let rootURL: URL
+    /// Discovers candidate session roots across all CODEX_HOME locations,
+    /// including ~/.codex/sessions and any custom ~/.codex*/sessions (e.g. .codex-plus, .codex-pro, .codex-yi).
+    public static func candidateSessionRoots(fileManager: FileManager = .default) -> [URL] {
+        var roots: [URL] = []
+        var seenPaths: Set<String> = []
+
+        func addRoot(_ url: URL) {
+            let path = (url.path as NSString).standardizingPath
+            guard seenPaths.insert(path).inserted else { return }
+            roots.append(URL(fileURLWithPath: path, isDirectory: true))
+        }
+
+        // 1. If CODEX_HOME is in environment
+        if let envHome = ProcessInfo.processInfo.environment["CODEX_HOME"], !envHome.isEmpty {
+            let envURL = URL(fileURLWithPath: envHome, isDirectory: true)
+                .appendingPathComponent("sessions", isDirectory: true)
+            if fileManager.fileExists(atPath: envURL.path) {
+                addRoot(envURL)
+            }
+        }
+
+        // 2. Default ~/.codex/sessions
+        let defaultSessions = defaultRootURL
+        if fileManager.fileExists(atPath: defaultSessions.path) {
+            addRoot(defaultSessions)
+        }
+
+        // 3. Scan ~/.codex*/sessions (e.g. .codex-plus, .codex-pro, .codex-yi, etc.)
+        let home = fileManager.homeDirectoryForCurrentUser
+        if let homeContents = try? fileManager.contentsOfDirectory(
+            at: home,
+            includingPropertiesForKeys: [.isDirectoryKey],
+            options: [.skipsPackageDescendants]
+        ) {
+            for item in homeContents {
+                let name = item.lastPathComponent
+                guard name.hasPrefix(".codex"), name != ".codex" else { continue }
+                let sessionsDir = item.appendingPathComponent("sessions", isDirectory: true)
+                if fileManager.fileExists(atPath: sessionsDir.path) {
+                    addRoot(sessionsDir)
+                }
+            }
+        }
+
+        return roots.isEmpty ? [defaultSessions] : roots
+    }
+
+    public let rootURLs: [URL]
+    public var rootURL: URL {
+        rootURLs.first ?? Self.defaultRootURL
+    }
     private let fileManager: FileManager
     private let maxAge: TimeInterval
     private let maxFiles: Int
@@ -408,15 +458,23 @@ public final class CodexRolloutDiscovery: @unchecked Sendable {
     }
 
     public init(
-        rootURL: URL = CodexRolloutDiscovery.defaultRootURL,
+        rootURL: URL? = nil,
+        rootURLs: [URL]? = nil,
         fileManager: FileManager = .default,
         maxAge: TimeInterval = 86_400,
         maxFiles: Int = 40
     ) {
-        self.rootURL = rootURL
         self.fileManager = fileManager
         self.maxAge = maxAge
         self.maxFiles = maxFiles
+
+        if let rootURLs {
+            self.rootURLs = rootURLs
+        } else if let rootURL {
+            self.rootURLs = [rootURL]
+        } else {
+            self.rootURLs = Self.candidateSessionRoots(fileManager: fileManager)
+        }
     }
 
     public func discoverRecentSessions(now: Date = .now) -> [CodexTrackedSessionRecord] {
@@ -438,41 +496,43 @@ public final class CodexRolloutDiscovery: @unchecked Sendable {
             }
         }
 
-        guard fileManager.fileExists(atPath: rootURL.path),
-              let enumerator = fileManager.enumerator(
-                at: rootURL,
-                includingPropertiesForKeys: [.contentModificationDateKey, .isRegularFileKey, .fileSizeKey],
-                options: [.skipsHiddenFiles]
-              ) else {
-            return []
-        }
-
         let cutoff = now.addingTimeInterval(-maxAge)
         var candidates: [Candidate] = []
 
-        for case let fileURL as URL in enumerator {
-            guard fileURL.lastPathComponent.hasPrefix("rollout-"),
-                  fileURL.pathExtension == "jsonl" else {
+        for root in rootURLs {
+            guard fileManager.fileExists(atPath: root.path),
+                  let enumerator = fileManager.enumerator(
+                    at: root,
+                    includingPropertiesForKeys: [.contentModificationDateKey, .isRegularFileKey, .fileSizeKey],
+                    options: [.skipsHiddenFiles]
+                  ) else {
                 continue
             }
 
-            guard let resourceValues = try? fileURL.resourceValues(
-                forKeys: [.contentModificationDateKey, .isRegularFileKey, .fileSizeKey]
-            ),
-            resourceValues.isRegularFile == true else {
-                continue
-            }
+            for case let fileURL as URL in enumerator {
+                guard fileURL.lastPathComponent.hasPrefix("rollout-"),
+                      fileURL.pathExtension == "jsonl" else {
+                    continue
+                }
 
-            let modifiedAt = resourceValues.contentModificationDate ?? .distantPast
-            guard modifiedAt >= cutoff else {
-                continue
-            }
+                guard let resourceValues = try? fileURL.resourceValues(
+                    forKeys: [.contentModificationDateKey, .isRegularFileKey, .fileSizeKey]
+                ),
+                resourceValues.isRegularFile == true else {
+                    continue
+                }
 
-            candidates.append(Candidate(
-                fileURL: fileURL,
-                modifiedAt: modifiedAt,
-                fileSize: resourceValues.fileSize ?? 0
-            ))
+                let modifiedAt = resourceValues.contentModificationDate ?? .distantPast
+                guard modifiedAt >= cutoff else {
+                    continue
+                }
+
+                candidates.append(Candidate(
+                    fileURL: fileURL,
+                    modifiedAt: modifiedAt,
+                    fileSize: resourceValues.fileSize ?? 0
+                ))
+            }
         }
 
         let recentCandidates = candidates

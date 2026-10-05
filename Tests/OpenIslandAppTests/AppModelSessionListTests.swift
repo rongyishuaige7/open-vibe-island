@@ -1546,6 +1546,55 @@ struct AppModelSessionListTests {
         #expect(claudeSessions.count == 2)
     }
 
+    @Test
+    func cliCodexSessionTransitionsFromCompletedToRunningOnNewTurnRolloutEvent() {
+        let model = AppModel()
+        let sessionID = "cli-codex-turn-test"
+        var cliSession = listSession(id: sessionID, phase: .completed, updatedAt: Date(timeIntervalSince1970: 1_000))
+        cliSession.isCodexAppSession = false
+        model.state = SessionState(sessions: [cliSession])
+
+        #expect(model.state.session(id: sessionID)?.phase == .completed)
+
+        model.applyTrackedEvent(
+            .activityUpdated(SessionActivityUpdated(
+                sessionID: sessionID,
+                summary: "Running exec.",
+                phase: .running,
+                timestamp: Date(timeIntervalSince1970: 1_050)
+            )),
+            updateLastActionMessage: false,
+            ingress: .rollout
+        )
+
+        #expect(model.state.session(id: sessionID)?.phase == .running)
+        #expect(model.state.session(id: sessionID)?.summary == "Running exec.")
+    }
+
+    @Test
+    func codexAppSessionSuppressesStaleRolloutRunningEventWhenCompleted() {
+        let model = AppModel()
+        let sessionID = "codex-app-turn-test"
+        var appSession = listSession(id: sessionID, phase: .completed, updatedAt: Date(timeIntervalSince1970: 1_000))
+        appSession.isCodexAppSession = true
+        model.state = SessionState(sessions: [appSession])
+
+        #expect(model.state.session(id: sessionID)?.phase == .completed)
+
+        model.applyTrackedEvent(
+            .activityUpdated(SessionActivityUpdated(
+                sessionID: sessionID,
+                summary: "Running exec.",
+                phase: .running,
+                timestamp: Date(timeIntervalSince1970: 1_050)
+            )),
+            updateLastActionMessage: false,
+            ingress: .rollout
+        )
+
+        #expect(model.state.session(id: sessionID)?.phase == .completed)
+    }
+
     private func listSession(id: String, phase: SessionPhase, updatedAt: Date) -> AgentSession {
         AgentSession(
             id: id,

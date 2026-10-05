@@ -731,7 +731,14 @@ struct ActiveAgentProcessDiscovery {
             return false
         }
 
-        return firstToken == "codex"
+        let baseName = URL(fileURLWithPath: firstToken).lastPathComponent
+        return baseName == "codex"
+            || baseName.hasPrefix("codex-")
+            || baseName.hasPrefix("codex_")
+            || baseName.hasPrefix("codexplus")
+            || baseName.hasPrefix("codexpro")
+            || baseName.hasPrefix("codexyi")
+            || firstToken == "codex"
             || firstToken.hasSuffix("/codex")
             || lowered.contains("/codex/codex")
     }

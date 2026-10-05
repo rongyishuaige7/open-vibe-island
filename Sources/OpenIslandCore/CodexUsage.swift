@@ -68,36 +68,48 @@ public enum CodexUsageLoader {
     }
 
     public static func load(
-        fromRootURL rootURL: URL = defaultRootURL,
+        fromRootURL rootURL: URL? = nil,
+        fromRootURLs rootURLs: [URL]? = nil,
         fileManager: FileManager = .default
     ) throws -> CodexUsageSnapshot? {
-        guard fileManager.fileExists(atPath: rootURL.path),
-              let enumerator = fileManager.enumerator(
-                at: rootURL,
-                includingPropertiesForKeys: [.contentModificationDateKey, .isRegularFileKey],
-                options: [.skipsHiddenFiles]
-              ) else {
-            return nil
+        let roots: [URL]
+        if let rootURLs {
+            roots = rootURLs
+        } else if let rootURL {
+            roots = [rootURL]
+        } else {
+            roots = CodexRolloutDiscovery.candidateSessionRoots(fileManager: fileManager)
         }
 
         var candidates: [Candidate] = []
 
-        for case let fileURL as URL in enumerator {
-            guard fileURL.lastPathComponent.hasPrefix("rollout-"),
-                  fileURL.pathExtension == "jsonl",
-                  let resourceValues = try? fileURL.resourceValues(
-                    forKeys: [.contentModificationDateKey, .isRegularFileKey]
-                  ),
-                  resourceValues.isRegularFile == true else {
+        for root in roots {
+            guard fileManager.fileExists(atPath: root.path),
+                  let enumerator = fileManager.enumerator(
+                    at: root,
+                    includingPropertiesForKeys: [.contentModificationDateKey, .isRegularFileKey],
+                    options: [.skipsHiddenFiles]
+                  ) else {
                 continue
             }
 
-            candidates.append(
-                Candidate(
-                    fileURL: fileURL,
-                    modifiedAt: resourceValues.contentModificationDate ?? .distantPast
+            for case let fileURL as URL in enumerator {
+                guard fileURL.lastPathComponent.hasPrefix("rollout-"),
+                      fileURL.pathExtension == "jsonl",
+                      let resourceValues = try? fileURL.resourceValues(
+                        forKeys: [.contentModificationDateKey, .isRegularFileKey]
+                      ),
+                      resourceValues.isRegularFile == true else {
+                    continue
+                }
+
+                candidates.append(
+                    Candidate(
+                        fileURL: fileURL,
+                        modifiedAt: resourceValues.contentModificationDate ?? .distantPast
+                    )
                 )
-            )
+            }
         }
 
         let sortedCandidates = candidates.sorted { lhs, rhs in

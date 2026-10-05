@@ -1218,6 +1218,48 @@ struct CodexSessionTrackingTests {
     }
 
     @Test
+    func codexRolloutDiscoveryFindsSessionsAcrossMultipleRoots() throws {
+        let root1URL = FileManager.default.temporaryDirectory
+            .appendingPathComponent("open-island-multi-root-1-\(UUID().uuidString)", isDirectory: true)
+        let root2URL = FileManager.default.temporaryDirectory
+            .appendingPathComponent("open-island-multi-root-2-\(UUID().uuidString)", isDirectory: true)
+
+        let dir1 = root1URL.appendingPathComponent("2026/04/02", isDirectory: true)
+        let dir2 = root2URL.appendingPathComponent("2026/04/02", isDirectory: true)
+
+        try FileManager.default.createDirectory(at: dir1, withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: dir2, withIntermediateDirectories: true)
+
+        defer {
+            try? FileManager.default.removeItem(at: root1URL)
+            try? FileManager.default.removeItem(at: root2URL)
+        }
+
+        let rollout1 = dir1.appendingPathComponent("rollout-profile1.jsonl")
+        let rollout2 = dir2.appendingPathComponent("rollout-profile2.jsonl")
+
+        let lines1 = [
+            sessionMetaLine(sessionID: "session-root-1", timestamp: "2026-04-02T04:03:44.000Z", cwd: "/tmp/w1"),
+            rolloutLine(timestamp: "2026-04-02T04:03:45.000Z", type: "event_msg", payload: ["type": "user_message", "message": "Root 1 task"]),
+        ]
+        let lines2 = [
+            sessionMetaLine(sessionID: "session-root-2", timestamp: "2026-04-02T04:03:46.000Z", cwd: "/tmp/w2"),
+            rolloutLine(timestamp: "2026-04-02T04:03:47.000Z", type: "event_msg", payload: ["type": "user_message", "message": "Root 2 task"]),
+        ]
+
+        try lines1.joined(separator: "\n").write(to: rollout1, atomically: true, encoding: .utf8)
+        try lines2.joined(separator: "\n").write(to: rollout2, atomically: true, encoding: .utf8)
+
+        let discovery = CodexRolloutDiscovery(rootURLs: [root1URL, root2URL])
+        let records = discovery.discoverRecentSessions(now: Date(timeIntervalSince1970: 1_743_555_200))
+
+        #expect(records.count == 2)
+        let sessionIDs = Set(records.map(\.sessionID))
+        #expect(sessionIDs.contains("session-root-1"))
+        #expect(sessionIDs.contains("session-root-2"))
+    }
+
+    @Test
     func codexRolloutDiscoveryStreamsRolloutsLargerThanReadChunk() throws {
         // Pins streaming behavior across read-chunk boundaries. The
         // discovery path used to slurp the whole rollout via

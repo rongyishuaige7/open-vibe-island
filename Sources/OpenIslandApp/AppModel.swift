@@ -656,9 +656,9 @@ final class AppModel {
         if UserDefaults.standard.object(forKey: Self.showCodexUsageDefaultsKey) != nil {
             showCodexUsage = UserDefaults.standard.bool(forKey: Self.showCodexUsageDefaultsKey)
         } else {
-            showCodexUsage = FileManager.default.fileExists(
-                atPath: CodexRolloutDiscovery.defaultRootURL.path
-            )
+            showCodexUsage = CodexRolloutDiscovery.candidateSessionRoots().contains {
+                FileManager.default.fileExists(atPath: $0.path)
+            }
         }
         if UserDefaults.standard.object(forKey: Self.showTodayTokenUsageDefaultsKey) != nil {
             showTodayTokenUsage = UserDefaults.standard.bool(forKey: Self.showTodayTokenUsageDefaultsKey)
@@ -1598,14 +1598,18 @@ final class AppModel {
             return state.session(id: payload.sessionID)?.phase == .completed
         }()
 
-        // Guard: don't let rollout events downgrade a session from completed
-        // back to running. The bridge's sessionCompleted is authoritative; the
-        // rollout watcher may have read the JSONL before task_complete was
-        // flushed, producing a stale activityUpdated(phase: .running).
+        // Guard: don't let stale rollout events downgrade a Codex.app session from
+        // completed back to running. The bridge's sessionCompleted is authoritative
+        // for Codex.app sessions; the rollout watcher may have read the JSONL before
+        // task_complete was flushed, producing a stale activityUpdated(phase: .running).
+        // For CLI sessions (which have no bridge connection), rollout is the authoritative
+        // event source and must transition the session to running when a new turn begins.
         if ingress == .rollout,
            case let .activityUpdated(payload) = event,
            payload.phase == .running,
-           state.session(id: payload.sessionID)?.phase == .completed {
+           let session = state.session(id: payload.sessionID),
+           session.phase == .completed,
+           session.isCodexAppSession {
             return
         }
 
