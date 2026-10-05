@@ -101,4 +101,67 @@ struct ClaudeTranscriptDiscoveryTests {
         #expect(sessions.count == 1)
         #expect(sessions.first?.jumpTarget?.terminalApp == "Claude.app")
     }
+
+    @Test
+    func inProgressUserPromptDiscoversAsRunning() throws {
+        let lines = [
+            #"{"type":"user","sessionId":"run11111","cwd":"/Users/test/project","timestamp":"2026-07-22T18:00:00Z","message":{"role":"user","content":[{"type":"text","text":"Build the project"}]}}"#,
+        ]
+        let (discovery, root) = try makeDiscovery(line: lines.joined(separator: "\n"), fileName: "run11111.jsonl")
+        defer { try? FileManager.default.removeItem(at: root) }
+
+        let sessions = discovery.discoverRecentSessions()
+
+        #expect(sessions.count == 1)
+        #expect(sessions.first?.phase == .running)
+        #expect(sessions.first?.summary == "Build the project")
+    }
+
+    @Test
+    func toolUseTurnDiscoversAsRunning() throws {
+        let lines = [
+            #"{"type":"user","sessionId":"run22222","cwd":"/Users/test/project","timestamp":"2026-07-22T18:00:00Z","message":{"role":"user","content":[{"type":"text","text":"Run tests"}]}}"#,
+            #"{"type":"assistant","sessionId":"run22222","cwd":"/Users/test/project","timestamp":"2026-07-22T18:00:05Z","message":{"role":"assistant","stop_reason":"tool_use","content":[{"type":"tool_use","id":"tool_1","name":"Bash","input":{"command":"swift test"}}]}}"#,
+        ]
+        let (discovery, root) = try makeDiscovery(line: lines.joined(separator: "\n"), fileName: "run22222.jsonl")
+        defer { try? FileManager.default.removeItem(at: root) }
+
+        let sessions = discovery.discoverRecentSessions()
+
+        #expect(sessions.count == 1)
+        #expect(sessions.first?.phase == .running)
+        #expect(sessions.first?.summary.contains("Running Bash") == true)
+    }
+
+    @Test
+    func completedTurnWithEndTurnDiscoversAsCompleted() throws {
+        let lines = [
+            #"{"type":"user","sessionId":"done1111","cwd":"/Users/test/project","timestamp":"2026-07-22T18:00:00Z","message":{"role":"user","content":[{"type":"text","text":"Hello"}]}}"#,
+            #"{"type":"assistant","sessionId":"done1111","cwd":"/Users/test/project","timestamp":"2026-07-22T18:00:05Z","message":{"role":"assistant","stop_reason":"end_turn","content":[{"type":"text","text":"Hello there!"}]}}"#,
+        ]
+        let (discovery, root) = try makeDiscovery(line: lines.joined(separator: "\n"), fileName: "done1111.jsonl")
+        defer { try? FileManager.default.removeItem(at: root) }
+
+        let sessions = discovery.discoverRecentSessions()
+
+        #expect(sessions.count == 1)
+        #expect(sessions.first?.phase == .completed)
+        #expect(sessions.first?.summary == "Hello there!")
+    }
+
+    @Test
+    func completedTurnWithTurnDurationDiscoversAsCompleted() throws {
+        let lines = [
+            #"{"type":"user","sessionId":"done2222","cwd":"/Users/test/project","timestamp":"2026-07-22T18:00:00Z","message":{"role":"user","content":[{"type":"text","text":"Hello"}]}}"#,
+            #"{"type":"assistant","sessionId":"done2222","cwd":"/Users/test/project","timestamp":"2026-07-22T18:00:05Z","message":{"role":"assistant","content":[{"type":"text","text":"Working on it"}]}}"#,
+            #"{"type":"system","subtype":"turn_duration","durationMs":1234,"sessionId":"done2222","cwd":"/Users/test/project","timestamp":"2026-07-22T18:00:06Z"}"#,
+        ]
+        let (discovery, root) = try makeDiscovery(line: lines.joined(separator: "\n"), fileName: "done2222.jsonl")
+        defer { try? FileManager.default.removeItem(at: root) }
+
+        let sessions = discovery.discoverRecentSessions()
+
+        #expect(sessions.count == 1)
+        #expect(sessions.first?.phase == .completed)
+    }
 }

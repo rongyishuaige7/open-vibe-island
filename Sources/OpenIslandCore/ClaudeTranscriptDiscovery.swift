@@ -89,6 +89,7 @@ public final class ClaudeTranscriptDiscovery: @unchecked Sendable {
         var currentTool: String?
         var currentToolInputPreview: String?
         var pendingToolUses: [String: (name: String, preview: String?)] = [:]
+        var isTurnInProgress = false
 
         let processLine: (String) -> Void = { line in
             guard let data = line.data(using: .utf8),
@@ -126,6 +127,7 @@ public final class ClaudeTranscriptDiscovery: @unchecked Sendable {
             let role = message?["role"] as? String
 
             if role == "user" {
+                isTurnInProgress = true
                 if let prompt = self.promptText(from: message?["content"]) {
                     if initialUserPrompt == nil {
                         initialUserPrompt = prompt
@@ -147,6 +149,14 @@ public final class ClaudeTranscriptDiscovery: @unchecked Sendable {
                     }
                 }
             } else if role == "assistant" {
+                if let stopReason = message?["stop_reason"] as? String {
+                    if stopReason == "end_turn" {
+                        isTurnInProgress = false
+                    } else if stopReason == "tool_use" {
+                        isTurnInProgress = true
+                    }
+                }
+
                 if let assistantText = self.assistantText(from: message?["content"]) {
                     lastAssistantMessage = assistantText
                 }
@@ -166,6 +176,9 @@ public final class ClaudeTranscriptDiscovery: @unchecked Sendable {
                         currentToolInputPreview = lastToolUse.preview
                     }
                 }
+            } else if topLevelType == "system",
+                      object["subtype"] as? String == "turn_duration" {
+                isTurnInProgress = false
             } else if topLevelType == "summary",
                       let summary = object["summary"] as? String,
                       !summary.isEmpty {
@@ -190,6 +203,10 @@ public final class ClaudeTranscriptDiscovery: @unchecked Sendable {
             }
         }
 
+        if !pendingToolUses.isEmpty {
+            isTurnInProgress = true
+        }
+
         guard let cwd else {
             return nil
         }
@@ -204,9 +221,21 @@ public final class ClaudeTranscriptDiscovery: @unchecked Sendable {
             currentToolInputPreview: currentToolInputPreview,
             model: model
         )
-        let summary = lastAssistantMessage
-            ?? lastUserPrompt
-            ?? "Recovered Claude session in \(workspaceName)."
+        let summary: String
+        if isTurnInProgress, let currentTool {
+            let label = "Running \(currentTool)"
+            if let preview = currentToolInputPreview, !preview.isEmpty {
+                summary = "\(label): \(preview)"
+            } else {
+                summary = label
+            }
+        } else {
+            summary = lastAssistantMessage
+                ?? lastUserPrompt
+                ?? "Recovered Claude session in \(workspaceName)."
+        }
+
+        let phase: SessionPhase = isTurnInProgress ? .running : .completed
 
         return AgentSession(
             id: sessionID,
@@ -214,7 +243,7 @@ public final class ClaudeTranscriptDiscovery: @unchecked Sendable {
             tool: .claudeCode,
             origin: .live,
             attachmentState: .stale,
-            phase: .completed,
+            phase: phase,
             summary: summary,
             updatedAt: updatedAt,
             jumpTarget: JumpTarget(

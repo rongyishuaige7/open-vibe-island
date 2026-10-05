@@ -878,7 +878,7 @@ final class ProcessMonitoringCoordinator {
             tool: .claudeCode,
             origin: .live,
             attachmentState: .attached,
-            phase: .completed,
+            phase: .running,
             summary: Self.syntheticDetectedSummary(subject: "Claude session", terminalApp: terminalApp),
             updatedAt: now,
             jumpTarget: JumpTarget(

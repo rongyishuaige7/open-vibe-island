@@ -747,6 +747,11 @@ final class AppModel {
             self?.refreshOverlayPlacementIfVisible()
             // Reconcile can add live Codex sessions; start watching their rollouts.
             self?.discovery.refreshCodexRolloutTracking()
+            if let self, self.state.sessions.contains(where: { self.monitoring.isSyntheticClaudeSession($0) }) {
+                Task { @MainActor [weak self] in
+                    _ = await self?.hooks.repairHooksIfNeeded()
+                }
+            }
         }
         monitoring.onPersistenceNeeded = { [weak self] in
             self?.discovery.scheduleCodexSessionPersistence()
