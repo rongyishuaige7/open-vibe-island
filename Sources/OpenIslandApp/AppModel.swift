@@ -857,7 +857,21 @@ final class AppModel {
     private func sortIslandSessions(_ sessions: [AgentSession]) -> [AgentSession] {
         switch islandSessionSort {
         case .attention:
-            return sessions
+            let now = Date.now
+            return sessions.sorted { lhs, rhs in
+                let lhsScore = displayPriority(for: lhs, now: now)
+                let rhsScore = displayPriority(for: rhs, now: now)
+
+                if lhsScore == rhsScore {
+                    if lhs.islandActivityDate == rhs.islandActivityDate {
+                        return lhs.title.localizedStandardCompare(rhs.title) == .orderedAscending
+                    }
+
+                    return lhs.islandActivityDate > rhs.islandActivityDate
+                }
+
+                return lhsScore > rhsScore
+            }
         case .lastUpdate:
             return sessions.sorted { lhs, rhs in
                 if lhs.islandActivityDate == rhs.islandActivityDate {
@@ -1846,39 +1860,41 @@ final class AppModel {
     private func displayPriority(for session: AgentSession, now: Date) -> Int {
         var score = 0
 
-        let presence = session.islandPresence(at: now)
-
-        if session.isProcessAlive {
-            score += presence == .inactive ? 3_000 : 12_000
-        } else if session.isDemoSession || session.phase.requiresAttention {
-            score += 6_000
-        }
-
-        if session.phase.requiresAttention {
+        // Strict attention tier hierarchy:
+        // Tier 1: Actionable (Requires user attention: approval / question prompt)
+        // Tier 2: Running (Turn actively executing, thinking, running tools, breathing light)
+        // Tier 3: Completed (Turn finished, idle)
+        switch session.phase {
+        case .waitingForApproval:
+            score += 100_000
+        case .waitingForAnswer:
+            score += 90_000
+        case .running:
+            score += 50_000
+        case .completed:
             score += 10_000
         }
 
-        if session.currentToolName?.isEmpty == false {
-            score += 6_000
+        let presence = session.islandPresence(at: now)
+
+        if session.isProcessAlive {
+            score += presence == .inactive ? 500 : 2_000
+        } else if session.isDemoSession {
+            score += 1_000
         }
 
-        if session.jumpTarget != nil {
-            score += 4_000
-        }
-
-        switch session.phase {
-        case .running:
+        // Active tool execution bonus (only meaningful while actively running)
+        if session.phase == .running, session.currentToolName?.isEmpty == false {
             score += 2_000
-        case .waitingForApproval:
-            score += 1_500
-        case .waitingForAnswer:
-            score += 1_200
-        case .completed:
-            score += 600
+        }
+
+        // Interactive jump target available
+        if session.jumpTarget != nil {
+            score += 1_000
         }
 
         if session.isStaleCompletedForIsland(at: now, threshold: completedStaleThreshold.seconds) {
-            score -= 900
+            score -= 2_000
         }
 
         let age = now.timeIntervalSince(session.islandActivityDate)

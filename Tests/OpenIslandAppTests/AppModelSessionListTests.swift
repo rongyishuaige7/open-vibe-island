@@ -1616,6 +1616,33 @@ struct AppModelSessionListTests {
         )
     }
 
+    @Test
+    func runningSessionRanksAboveCompletedSessionsInAttentionSort() {
+        let now = Date()
+        let model = AppModel()
+
+        var completedWithJumpTarget = listSession(id: "completed-with-jump", phase: .completed, updatedAt: now.addingTimeInterval(-10))
+        completedWithJumpTarget.isProcessAlive = true
+
+        var runningSessionNoJumpTarget = AgentSession(
+            id: "running-no-jump",
+            title: "Codex · running",
+            tool: .codex,
+            origin: .live,
+            attachmentState: .attached,
+            phase: .running,
+            summary: "Thinking.",
+            updatedAt: now.addingTimeInterval(-60)
+        )
+        runningSessionNoJumpTarget.isProcessAlive = true
+
+        model.state = SessionState(sessions: [completedWithJumpTarget, runningSessionNoJumpTarget])
+        model.overlayPlacementDiagnostics = placementDiagnostics(mode: .topBar)
+
+        #expect(model.islandListSessions.first?.id == "running-no-jump")
+        #expect(model.islandClosedSpotlight?.id == "running-no-jump")
+    }
+
     private func placementDiagnostics(mode: OverlayPlacementMode) -> OverlayPlacementDiagnostics {
         OverlayPlacementDiagnostics(
             targetScreenID: mode == .notch ? "display-notch" : "display-topbar",
