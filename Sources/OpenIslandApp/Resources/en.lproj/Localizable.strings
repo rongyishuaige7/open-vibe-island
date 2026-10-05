@@ -29,9 +29,9 @@
 "settings.general.suppressFrontmostNotifications" = "Suppress notifications for focused sessions";
 "settings.general.showCodexUsage" = "Show Codex usage";
 "settings.general.showTodayTokenUsage" = "Show today's tokens";
-"settings.general.showTodayTokenUsage.caption" = "Claude and Codex totals from CC Switch's local request log, cache included. Requests that bypass CC Switch are not counted.";
+"settings.general.showTodayTokenUsage.caption" = "Agent totals from CC Switch and KEEPER local request logs, cache included.";
 "usage.todayTokens.title" = "Today";
-"usage.todayTokens.help" = "Tokens CC Switch logged since local midnight, cache included";
+"usage.todayTokens.help" = "Tokens logged since local midnight, cache included";
 "usage.todayTokens.helpLine" = "%@: %@ tokens, %@ from cache reads, %@ requests";
 "usage.todayTokens.readFailed" = "Last refresh failed: %@";
 "settings.general.completionReply" = "Reply from completion card";

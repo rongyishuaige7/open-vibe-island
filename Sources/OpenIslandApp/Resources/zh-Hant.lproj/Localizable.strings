@@ -29,9 +29,9 @@
 "settings.general.suppressFrontmostNotifications" = "前台工作階段不彈出通知";
 "settings.general.showCodexUsage" = "顯示 Codex 用量";
 "settings.general.showTodayTokenUsage" = "顯示今日 Token";
-"settings.general.showTodayTokenUsage.caption" = "讀取 CC Switch 本機請求日誌中 Claude 與 Codex 的今日總量，含快取。未經 CC Switch 的請求不計入。";
+"settings.general.showTodayTokenUsage.caption" = "讀取 CC Switch 與 KEEPER 本機請求日誌中各 Agent 的今日總量，含快取。";
 "usage.todayTokens.title" = "今日";
-"usage.todayTokens.help" = "CC Switch 記錄的今日 Token（從當地午夜起），含快取";
+"usage.todayTokens.help" = "本機請求日誌記錄的今日 Token（從當地午夜起），含快取";
 "usage.todayTokens.helpLine" = "%@：%@ Token，其中快取讀取 %@，%@ 次請求";
 "usage.todayTokens.readFailed" = "最近一次讀取失敗：%@";
 "settings.general.completionReply" = "在完成卡片中回覆";

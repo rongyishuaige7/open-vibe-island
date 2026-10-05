@@ -63,4 +63,24 @@ struct TodayTokenUsageMonitorTests {
         #expect(monitor.usage == nil)
         #expect(monitor.lastErrorMessage == nil)
     }
+
+    @Test
+    func antigravityPoolAndProTokensAreSupported() {
+        let monitor = makeMonitor()
+        let today = Self.calendar.startOfDay(for: Self.now)
+        let usage = TodayTokenUsage(
+            dayStart: today,
+            claude: AgentTokenTotals(requestCount: 1, totalTokens: 100),
+            agy: AgentTokenTotals(requestCount: 10, totalTokens: 50_000, cacheReadTokens: 40_000),
+            agyPro: AgentTokenTotals(requestCount: 2, totalTokens: 8_000, cacheReadTokens: 6_000)
+        )
+        monitor.apply(.success(usage), now: Self.now, calendar: Self.calendar)
+
+        #expect(monitor.usage?.claude.totalTokens == 100)
+        #expect(monitor.usage?.agy.totalTokens == 50_000)
+        #expect(monitor.usage?.agy.cacheReadTokens == 40_000)
+        #expect(monitor.usage?.agyPro.totalTokens == 8_000)
+        #expect(monitor.usage?.agyPro.cacheReadTokens == 6_000)
+        #expect(monitor.lastErrorMessage == nil)
+    }
 }

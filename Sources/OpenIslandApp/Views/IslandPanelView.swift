@@ -994,10 +994,18 @@ struct IslandPanelView: View {
         }
 
         let languageCode = lang.language.resolvedCode
-        let agents: [(id: String, label: String, shortLabel: String, totals: AgentTokenTotals?)] = [
+        let candidateAgents: [(id: String, label: String, shortLabel: String, totals: AgentTokenTotals?)] = [
             ("claude", "Claude", "Cl", monitor.usage?.claude),
             ("codex", "Codex", "Cx", monitor.usage?.codex),
+            ("agy", "AGY", "Agy", monitor.usage?.agy),
+            ("agy-pro", "AGY Pro", "Pro", monitor.usage?.agyPro),
         ]
+
+        let activeAgents = candidateAgents.filter { agent in
+            guard let totals = agent.totals else { return false }
+            return totals.totalTokens > 0 || totals.requestCount > 0
+        }
+        let agents = activeAgents.isEmpty ? Array(candidateAgents.prefix(2)) : activeAgents
         var helpLines = [lang.t("usage.todayTokens.help")]
         for agent in agents {
             guard let totals = agent.totals else { continue }

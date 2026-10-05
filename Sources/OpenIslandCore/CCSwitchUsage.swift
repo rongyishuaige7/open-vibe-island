@@ -18,17 +18,26 @@ public struct AgentTokenTotals: Equatable, Sendable {
     public static let zero = AgentTokenTotals()
 }
 
-/// Claude and Codex token totals since local midnight, read from CC Switch's
-/// local request log.
+/// Claude, Codex, and Antigravity token totals since local midnight.
 public struct TodayTokenUsage: Equatable, Sendable {
     public var dayStart: Date
     public var claude: AgentTokenTotals
     public var codex: AgentTokenTotals
+    public var agy: AgentTokenTotals
+    public var agyPro: AgentTokenTotals
 
-    public init(dayStart: Date, claude: AgentTokenTotals = .zero, codex: AgentTokenTotals = .zero) {
+    public init(
+        dayStart: Date,
+        claude: AgentTokenTotals = .zero,
+        codex: AgentTokenTotals = .zero,
+        agy: AgentTokenTotals = .zero,
+        agyPro: AgentTokenTotals = .zero
+    ) {
         self.dayStart = dayStart
         self.claude = claude
         self.codex = codex
+        self.agy = agy
+        self.agyPro = agyPro
     }
 }
 

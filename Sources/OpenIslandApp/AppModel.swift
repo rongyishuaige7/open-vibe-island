@@ -665,6 +665,8 @@ final class AppModel {
         } else {
             showTodayTokenUsage = FileManager.default.fileExists(
                 atPath: CCSwitchUsageReader.defaultDatabaseURL.path
+            ) || FileManager.default.fileExists(
+                atPath: KeeperUsageReader.defaultDatabaseURL.path
             )
         }
         completionReplyEnabled = UserDefaults.standard.bool(forKey: Self.completionReplyEnabledDefaultsKey)

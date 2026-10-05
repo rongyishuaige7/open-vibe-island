@@ -29,9 +29,9 @@
 "settings.general.suppressFrontmostNotifications" = "前台会话不弹出通知";
 "settings.general.showCodexUsage" = "显示 Codex 用量";
 "settings.general.showTodayTokenUsage" = "显示今日 Token";
-"settings.general.showTodayTokenUsage.caption" = "读取 CC Switch 本地请求日志中 Claude 和 Codex 的今日总量，含缓存。不经过 CC Switch 的请求不计入。";
+"settings.general.showTodayTokenUsage.caption" = "读取 CC Switch 和 KEEPER 本地请求日志中各 Agent 的今日总量，含缓存。";
 "usage.todayTokens.title" = "今日";
-"usage.todayTokens.help" = "CC Switch 记录的今日 Token（从本地零点起），含缓存";
+"usage.todayTokens.help" = "本地请求日志记录的今日 Token（从本地零点起），含缓存";
 "usage.todayTokens.helpLine" = "%@：%@ Token，其中缓存读取 %@，%@ 次请求";
 "usage.todayTokens.readFailed" = "最近一次读取失败：%@";
 "settings.general.completionReply" = "在完成卡片中回复";
