@@ -586,6 +586,9 @@ final class AppModel {
     @ObservationIgnored
     private var notificationPresentationTask: Task<Void, Never>?
 
+    @ObservationIgnored
+    private var lastHookRepairAttemptDate: Date?
+
     private static func appearanceDefaultsKey(_ profile: IslandAppearanceDisplayProfile, _ name: String) -> String {
         "appearance.island.v8.\(profile.rawValue).\(name)"
     }
@@ -748,8 +751,12 @@ final class AppModel {
             // Reconcile can add live Codex sessions; start watching their rollouts.
             self?.discovery.refreshCodexRolloutTracking()
             if let self, self.state.sessions.contains(where: { self.monitoring.isSyntheticClaudeSession($0) }) {
-                Task { @MainActor [weak self] in
-                    _ = await self?.hooks.repairHooksIfNeeded()
+                let now = Date.now
+                if self.lastHookRepairAttemptDate == nil || now.timeIntervalSince(self.lastHookRepairAttemptDate!) > 30 {
+                    self.lastHookRepairAttemptDate = now
+                    Task { @MainActor [weak self] in
+                        _ = await self?.hooks.repairHooksIfNeeded()
+                    }
                 }
             }
         }

@@ -37,19 +37,43 @@ public struct TodayTokenUsage: Equatable, Sendable {
     public var codex: AgentTokenTotals
     public var agy: AgentTokenTotals
     public var agyPro: AgentTokenTotals
+    public var agyAccounts: [String]
+    public var agyProAccounts: [String]
+    public var codexAccounts: [String]
+    public var claudeAccounts: [String]
 
     public init(
         dayStart: Date,
         claude: AgentTokenTotals = .zero,
         codex: AgentTokenTotals = .zero,
         agy: AgentTokenTotals = .zero,
-        agyPro: AgentTokenTotals = .zero
+        agyPro: AgentTokenTotals = .zero,
+        agyAccounts: [String] = [],
+        agyProAccounts: [String] = [],
+        codexAccounts: [String] = [],
+        claudeAccounts: [String] = []
     ) {
         self.dayStart = dayStart
         self.claude = claude
         self.codex = codex
         self.agy = agy
         self.agyPro = agyPro
+        self.agyAccounts = agyAccounts
+        self.agyProAccounts = agyProAccounts
+        self.codexAccounts = codexAccounts
+        self.claudeAccounts = claudeAccounts
+    }
+
+    public var codexAccountHint: String {
+        codexAccounts.isEmpty ? "rongyiplus4, CC Switch" : "\(codexAccounts.joined(separator: ", ")), CC Switch"
+    }
+
+    public var agyAccountHint: String {
+        agyAccounts.isEmpty ? "sk44989, victorcranston" : agyAccounts.joined(separator: ", ")
+    }
+
+    public var agyProAccountHint: String {
+        agyProAccounts.isEmpty ? "wisnumandala302" : agyProAccounts.joined(separator: ", ")
     }
 }
 

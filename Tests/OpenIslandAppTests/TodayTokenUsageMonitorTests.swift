@@ -106,5 +106,16 @@ struct TodayTokenUsageMonitorTests {
         #expect(monitor.usage?.codex.cacheReadTokens == 9_396_456)
         #expect(monitor.usage?.agy.totalTokens == 1_705_198)
         #expect(monitor.usage?.agyPro.totalTokens == 264_017)
+        #expect(monitor.usage?.codexAccountHint == "rongyiplus4, CC Switch")
+
+        let dynamicUsage = TodayTokenUsage(
+            dayStart: today,
+            agyAccounts: ["sk44989", "victorcranston465"],
+            agyProAccounts: ["wisnumandala302"],
+            codexAccounts: ["rongyiplus4", "rongyiplus5"]
+        )
+        #expect(dynamicUsage.codexAccountHint == "rongyiplus4, rongyiplus5, CC Switch")
+        #expect(dynamicUsage.agyAccountHint == "sk44989, victorcranston465")
+        #expect(dynamicUsage.agyProAccountHint == "wisnumandala302")
     }
 }

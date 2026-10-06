@@ -329,42 +329,77 @@ final class ProcessMonitoringCoordinator {
         // Reconcile running states:
         // 1. Detached sessions cannot be actively running.
         // 2. Dead CLI processes cannot be actively running.
-        // 3. Claude sessions whose transcript indicates turn completion or interruption.
-        for session in local.sessions where session.phase == .running {
+        // 3. Claude sessions whose transcript indicates phase change (running <-> completed).
+        // 4. Codex CLI sessions whose rollout indicates phase change (running <-> completed).
+        // 5. AGY sessions whose database indicates phase change (running <-> completed).
+        for session in local.sessions {
             if session.origin == .demo || session.isRemote { continue }
 
-            if session.attachmentState == .detached {
-                var updated = session
-                updated.phase = .completed
-                local.upsert(updated)
-                continue
+            if session.phase == .running {
+                if session.attachmentState == .detached {
+                    var updated = session
+                    updated.phase = .completed
+                    local.upsert(updated)
+                    continue
+                }
+
+                if !session.isProcessAlive {
+                    var updated = session
+                    updated.phase = .completed
+                    local.upsert(updated)
+                    continue
+                }
             }
 
-            if !session.isProcessAlive && session.attachmentState == .stale {
-                var updated = session
-                updated.phase = .completed
-                local.upsert(updated)
-                continue
-            }
+            guard session.isProcessAlive else { continue }
 
             if session.tool == .claudeCode,
                let transcriptPath = session.claudeMetadata?.transcriptPath,
                !transcriptPath.isEmpty {
                 let fileURL = URL(fileURLWithPath: transcriptPath)
                 if let parsed = claudeTranscriptDiscovery.parseSession(at: fileURL) {
-                    if parsed.phase == .completed {
+                    if parsed.phase != session.phase || (parsed.phase == .running && parsed.claudeMetadata?.currentTool != session.claudeMetadata?.currentTool) {
                         var updated = session
-                        updated.phase = .completed
+                        updated.phase = parsed.phase
                         updated.summary = parsed.summary
                         if let metadata = parsed.claudeMetadata {
                             updated.claudeMetadata = metadata
                         }
                         local.upsert(updated)
-                    } else if parsed.phase == .running, let tool = parsed.claudeMetadata?.currentTool {
+                    }
+                }
+            }
+
+            if session.tool == .codex,
+               !session.isCodexAppSession,
+               let transcriptPath = session.codexMetadata?.transcriptPath,
+               !transcriptPath.isEmpty {
+                if let parsed = liveCodexTranscriptReader.liveSessionRecord(transcriptPath: transcriptPath) {
+                    if parsed.phase != session.phase || (parsed.phase == .running && parsed.codexMetadata?.currentTool != session.codexMetadata?.currentTool) {
                         var updated = session
-                        updated.claudeMetadata?.currentTool = tool
-                        updated.claudeMetadata?.currentToolInputPreview = parsed.claudeMetadata?.currentToolInputPreview
+                        updated.phase = parsed.phase
                         updated.summary = parsed.summary
+                        if let metadata = parsed.codexMetadata {
+                            updated.codexMetadata = metadata
+                        }
+                        local.upsert(updated)
+                    }
+                }
+            }
+
+            if session.tool == .geminiCLI {
+                let record = AgySessionReader.fetchRecord(
+                    sessionID: session.id,
+                    transcriptPath: session.geminiMetadata?.transcriptPath
+                )
+                if let record {
+                    let targetPhase: SessionPhase = record.isRunning ? .running : .completed
+                    if session.phase != targetPhase {
+                        var updated = session
+                        updated.phase = targetPhase
+                        if !record.preview.isEmpty {
+                            updated.summary = record.preview
+                        }
                         local.upsert(updated)
                     }
                 }
@@ -940,6 +975,20 @@ final class ProcessMonitoringCoordinator {
             )
         )
         session.isProcessAlive = true
+
+        if let transcriptPath = process.transcriptPath, !transcriptPath.isEmpty {
+            session.claudeMetadata = ClaudeSessionMetadata(transcriptPath: transcriptPath)
+            let fileURL = URL(fileURLWithPath: transcriptPath)
+            if let parsed = claudeTranscriptDiscovery.parseSession(at: fileURL) {
+                session.phase = parsed.phase
+                session.summary = parsed.summary
+                if let meta = parsed.claudeMetadata {
+                    session.claudeMetadata = meta
+                }
+                session.updatedAt = parsed.updatedAt
+            }
+        }
+
         return session
     }
 
@@ -1132,7 +1181,7 @@ final class ProcessMonitoringCoordinator {
                 transcriptPath: process.transcriptPath
             )
 
-            let isRunning = record?.isRunning ?? true
+            let isRunning = record?.isRunning ?? false
             let phase: SessionPhase = isRunning ? .running : .completed
             let rawTitle = record?.title
             let title = (rawTitle != nil && !rawTitle!.isEmpty) ? rawTitle! : "Gemini · \(workspaceName)"

@@ -126,5 +126,9 @@ struct KeeperUsageReaderTests {
         #expect(usage.agyPro == AgentTokenTotals(requestCount: 5, totalTokens: 500, cacheReadTokens: 50))
         #expect(usage.codex == AgentTokenTotals(requestCount: 77, totalTokens: 10138778, cacheReadTokens: 9395456))
         #expect(usage.claude == AgentTokenTotals(requestCount: 8, totalTokens: 800, cacheReadTokens: 80))
+        #expect(usage.agyAccounts == ["sk44989"])
+        #expect(usage.agyProAccounts == ["wisnumandala302"])
+        #expect(usage.codexAccounts == ["rongyiplus4"])
+        #expect(usage.claudeAccounts == ["claude-bot"])
     }
 }

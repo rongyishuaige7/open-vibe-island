@@ -78,6 +78,10 @@ final class TodayTokenUsageMonitor {
                 usage.agyPro = keeperUsage.agyPro
                 usage.codex = ccCodex + keeperUsage.codex
                 usage.claude = ccClaude + keeperUsage.claude
+                usage.agyAccounts = keeperUsage.agyAccounts
+                usage.agyProAccounts = keeperUsage.agyProAccounts
+                usage.codexAccounts = keeperUsage.codexAccounts
+                usage.claudeAccounts = keeperUsage.claudeAccounts
                 hasAnyDatabase = true
             } catch {
                 usage.codex = ccCodex

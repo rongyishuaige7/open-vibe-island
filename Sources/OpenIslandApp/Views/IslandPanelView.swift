@@ -877,7 +877,7 @@ struct IslandPanelView: View {
     private func sectionTint(for section: IslandSessionSection) -> Color {
         guard let first = section.sessions.first else { return IslandDesignPalette.Status.idle }
         if section.id == "state-idle" { return IslandDesignPalette.Status.idle }
-        return IslandDesignPalette.Status.tint(for: first.phase)
+        return IslandDesignPalette.Status.tint(for: first.phase, tool: first.tool)
     }
 
     private func sessionSectionTitle(for section: IslandSessionSection) -> String {
@@ -1190,32 +1190,57 @@ struct IslandPanelView: View {
         _ provider: UsageProviderPresentation,
         layout: UsageChipLayout
     ) -> some View {
-        Button {
+        let monitor = model.todayTokenUsageMonitor
+        let languageCode = lang.language.resolvedCode
+        let claudeTokens = monitor.usage?.claude.totalTokens ?? 0
+        let codexTokens = monitor.usage?.codex.totalTokens ?? 0
+        let claudeFormatted = TokenCountFormatter.compact(claudeTokens, languageCode: languageCode)
+        let codexFormatted = TokenCountFormatter.compact(codexTokens, languageCode: languageCode)
+
+        return Button {
             withAnimation(.spring(response: 0.28, dampingFraction: 0.82)) {
                 showingTokenDetailPopover.toggle()
             }
         } label: {
             HStack(spacing: 5) {
                 Image(systemName: "bolt.fill")
-                    .font(.system(size: 9.5, weight: .bold))
+                    .font(.system(size: 9, weight: .bold))
                     .foregroundStyle(Color.orange.opacity(0.95))
 
-                if !layout.usesShortTitle {
-                    Text(provider.title)
-                        .font(.system(size: 11, weight: .semibold))
-                        .foregroundStyle(.white.opacity(0.74))
+                HStack(spacing: 3) {
+                    Circle()
+                        .fill(IslandDesignPalette.Status.runningClaude)
+                        .frame(width: 5, height: 5)
+                    Text("Cl")
+                        .font(.system(size: 9.5, weight: .semibold, design: .monospaced))
+                        .foregroundStyle(.white.opacity(0.52))
+                    Text(claudeFormatted)
+                        .font(.system(size: 10.5, weight: .bold, design: .monospaced))
+                        .foregroundStyle(.white.opacity(0.92))
                 }
 
-                Text(provider.totalTokensFormatted.isEmpty ? "0" : provider.totalTokensFormatted)
-                    .font(.system(size: 11.5, weight: .bold, design: .monospaced))
-                    .foregroundStyle(.white.opacity(0.95))
+                Text("·")
+                    .font(.system(size: 10, weight: .medium))
+                    .foregroundStyle(.white.opacity(0.3))
+
+                HStack(spacing: 3) {
+                    Circle()
+                        .fill(IslandDesignPalette.Status.runningCodex)
+                        .frame(width: 5, height: 5)
+                    Text("Cx")
+                        .font(.system(size: 9.5, weight: .semibold, design: .monospaced))
+                        .foregroundStyle(.white.opacity(0.52))
+                    Text(codexFormatted)
+                        .font(.system(size: 10.5, weight: .bold, design: .monospaced))
+                        .foregroundStyle(.white.opacity(0.92))
+                }
 
                 Image(systemName: showingTokenDetailPopover ? "chevron.up" : "chevron.down")
-                    .font(.system(size: 8, weight: .semibold))
+                    .font(.system(size: 7.5, weight: .semibold))
                     .foregroundStyle(.white.opacity(0.45))
             }
-            .padding(.horizontal, 8)
-            .padding(.vertical, 4)
+            .padding(.horizontal, 7)
+            .padding(.vertical, 3.5)
             .background(
                 showingTokenDetailPopover
                     ? Color.white.opacity(0.12)
@@ -1233,6 +1258,13 @@ struct IslandPanelView: View {
             )
         }
         .buttonStyle(.plain)
+        .onHover { isHovered in
+            if isHovered {
+                withAnimation(.easeOut(duration: 0.16)) {
+                    showingTokenDetailPopover = true
+                }
+            }
+        }
         .help(usageHelpText(for: provider))
     }
 
@@ -1337,7 +1369,7 @@ struct IslandPanelView: View {
                     label: "Codex",
                     dotColor: IslandDesignPalette.Status.runningCodex,
                     totals: usage?.codex,
-                    accountHint: "rongyiplus4, CC Switch",
+                    accountHint: usage?.codexAccountHint ?? "rongyiplus4, CC Switch",
                     languageCode: languageCode
                 )
 
@@ -1345,7 +1377,7 @@ struct IslandPanelView: View {
                     label: lang.t("usage.todayTokens.agyPool"),
                     dotColor: IslandDesignPalette.Status.runningAgy,
                     totals: usage?.agy,
-                    accountHint: "sk44989, victorcranston",
+                    accountHint: usage?.agyAccountHint ?? "sk44989, victorcranston",
                     languageCode: languageCode
                 )
 
@@ -1353,7 +1385,7 @@ struct IslandPanelView: View {
                     label: lang.t("usage.todayTokens.agyPro"),
                     dotColor: IslandDesignPalette.Status.runningAgy,
                     totals: usage?.agyPro,
-                    accountHint: "wisnumandala302",
+                    accountHint: usage?.agyProAccountHint ?? "wisnumandala302",
                     languageCode: languageCode
                 )
             }
@@ -2009,7 +2041,7 @@ private struct IslandSessionRow: View {
     }
 
     private var actionableStatusTint: Color {
-        IslandDesignPalette.Status.tint(for: session.phase)
+        IslandDesignPalette.Status.tint(for: session.phase, tool: session.tool)
     }
 
     @ViewBuilder

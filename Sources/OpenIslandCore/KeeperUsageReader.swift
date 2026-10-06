@@ -7,17 +7,29 @@ public struct KeeperTodayUsage: Equatable, Sendable {
     public var agyPro: AgentTokenTotals
     public var codex: AgentTokenTotals
     public var claude: AgentTokenTotals
+    public var agyAccounts: [String]
+    public var agyProAccounts: [String]
+    public var codexAccounts: [String]
+    public var claudeAccounts: [String]
 
     public init(
         agy: AgentTokenTotals = .zero,
         agyPro: AgentTokenTotals = .zero,
         codex: AgentTokenTotals = .zero,
-        claude: AgentTokenTotals = .zero
+        claude: AgentTokenTotals = .zero,
+        agyAccounts: [String] = [],
+        agyProAccounts: [String] = [],
+        codexAccounts: [String] = [],
+        claudeAccounts: [String] = []
     ) {
         self.agy = agy
         self.agyPro = agyPro
         self.codex = codex
         self.claude = claude
+        self.agyAccounts = agyAccounts
+        self.agyProAccounts = agyProAccounts
+        self.codexAccounts = codexAccounts
+        self.claudeAccounts = claudeAccounts
     }
 
     public static let zero = KeeperTodayUsage()
@@ -90,6 +102,10 @@ public enum KeeperUsageReader {
         var agyProTotals = AgentTokenTotals.zero
         var codexTotals = AgentTokenTotals.zero
         var claudeTotals = AgentTokenTotals.zero
+        var agyAccounts: [String] = []
+        var agyProAccounts: [String] = []
+        var codexAccounts: [String] = []
+        var claudeAccounts: [String] = []
 
         while true {
             let step = sqlite3_step(statement)
@@ -115,16 +131,29 @@ public enum KeeperUsageReader {
             let lowerProvider = provider.lowercased()
             let lowerName = name.lowercased()
             let lowerPlan = planType.lowercased()
+            let cleanName = name.contains("@") ? String(name.split(separator: "@").first ?? "") : name
 
             if lowerType.contains("codex") || lowerProvider.contains("codex") || lowerName.contains("codex") {
                 codexTotals += totals
+                if !cleanName.isEmpty && !codexAccounts.contains(cleanName) {
+                    codexAccounts.append(cleanName)
+                }
             } else if lowerType.contains("claude") || lowerProvider.contains("claude") || lowerType.contains("anthropic") || lowerProvider.contains("anthropic") || lowerName.contains("claude") {
                 claudeTotals += totals
+                if !cleanName.isEmpty && !claudeAccounts.contains(cleanName) {
+                    claudeAccounts.append(cleanName)
+                }
             } else if lowerType.contains("antigravity") || lowerProvider.contains("antigravity") || (lowerType.isEmpty && lowerProvider.isEmpty) || lowerName.contains("antigravity") || lowerName.contains("agy") {
                 if lowerName.contains("wisnumandala") || lowerName.contains("pro") || lowerPlan.contains("pro") {
                     agyProTotals += totals
+                    if !cleanName.isEmpty && !agyProAccounts.contains(cleanName) {
+                        agyProAccounts.append(cleanName)
+                    }
                 } else {
                     agyTotals += totals
+                    if !cleanName.isEmpty && !agyAccounts.contains(cleanName) {
+                        agyAccounts.append(cleanName)
+                    }
                 }
             }
         }
@@ -133,7 +162,11 @@ public enum KeeperUsageReader {
             agy: agyTotals,
             agyPro: agyProTotals,
             codex: codexTotals,
-            claude: claudeTotals
+            claude: claudeTotals,
+            agyAccounts: agyAccounts,
+            agyProAccounts: agyProAccounts,
+            codexAccounts: codexAccounts,
+            claudeAccounts: claudeAccounts
         )
     }
 

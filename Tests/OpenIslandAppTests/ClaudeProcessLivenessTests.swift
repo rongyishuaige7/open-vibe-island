@@ -233,6 +233,22 @@ struct ClaudeProcessLivenessTests {
         #expect(currentState().session(id: "session-detached")?.phase == .completed)
     }
 
+    @Test
+    func runningSessionReconcilesToCompletedWhenProcessIsDeadEvenIfAttached() {
+        var session = claudeSession(id: "session-dead-process", tty: "/dev/ttys101")
+        session.phase = .running
+        session.attachmentState = .attached
+        let (coordinator, currentState) = coordinator(with: [session])
+
+        // First reconcile: not seen count becomes 1
+        reconcile(coordinator, [])
+        // Second reconcile: not seen count becomes 2, isProcessAlive becomes false
+        reconcile(coordinator, [])
+
+        // When process is confirmed dead (2 missed cycles), invisible sessions are pruned.
+        #expect(currentState().session(id: "session-dead-process") == nil)
+    }
+
     private func reconcile(
         _ coordinator: ProcessMonitoringCoordinator,
         _ processes: [ActiveAgentProcessDiscovery.ProcessSnapshot]
