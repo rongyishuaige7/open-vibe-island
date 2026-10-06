@@ -1327,7 +1327,7 @@ struct IslandPanelView: View {
             VStack(spacing: 6) {
                 tokenDetailAgentRow(
                     label: "Claude",
-                    dotColor: Color(red: 0.85, green: 0.5, blue: 0.2),
+                    dotColor: IslandDesignPalette.Status.runningClaude,
                     totals: usage?.claude,
                     accountHint: "CC Switch",
                     languageCode: languageCode
@@ -1335,7 +1335,7 @@ struct IslandPanelView: View {
 
                 tokenDetailAgentRow(
                     label: "Codex",
-                    dotColor: Color(red: 0.25, green: 0.75, blue: 0.45),
+                    dotColor: IslandDesignPalette.Status.runningCodex,
                     totals: usage?.codex,
                     accountHint: "CC Switch",
                     languageCode: languageCode
@@ -1343,7 +1343,7 @@ struct IslandPanelView: View {
 
                 tokenDetailAgentRow(
                     label: lang.t("usage.todayTokens.agyPool"),
-                    dotColor: Color(red: 0.3, green: 0.6, blue: 0.95),
+                    dotColor: IslandDesignPalette.Status.runningAgy,
                     totals: usage?.agy,
                     accountHint: "sk44989, victorcranston",
                     languageCode: languageCode
@@ -1351,7 +1351,7 @@ struct IslandPanelView: View {
 
                 tokenDetailAgentRow(
                     label: lang.t("usage.todayTokens.agyPro"),
-                    dotColor: Color(red: 0.95, green: 0.75, blue: 0.2),
+                    dotColor: IslandDesignPalette.Status.runningAgy,
                     totals: usage?.agyPro,
                     accountHint: "wisnumandala302",
                     languageCode: languageCode
@@ -1422,7 +1422,8 @@ struct IslandPanelView: View {
         return HStack(alignment: .center, spacing: 8) {
             Circle()
                 .fill(dotColor)
-                .frame(width: 7, height: 7)
+                .frame(width: 7.5, height: 7.5)
+                .shadow(color: dotColor.opacity(0.48), radius: 2.5)
 
             VStack(alignment: .leading, spacing: 1.5) {
                 HStack(spacing: 4) {
