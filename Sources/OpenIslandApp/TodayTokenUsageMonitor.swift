@@ -58,23 +58,30 @@ final class TodayTokenUsageMonitor {
             var keeperError: (any Error)?
             var hasAnyDatabase = false
 
+            var ccClaude = AgentTokenTotals.zero
+            var ccCodex = AgentTokenTotals.zero
+
             // 1. Try reading CC Switch for Claude and Codex
             do {
                 let ccUsage = try CCSwitchUsageReader.loadToday(databaseURL: databaseURL, now: now, calendar: calendar)
-                usage.claude = ccUsage.claude
-                usage.codex = ccUsage.codex
+                ccClaude = ccUsage.claude
+                ccCodex = ccUsage.codex
                 hasAnyDatabase = true
             } catch {
                 ccError = error
             }
 
-            // 2. Try reading KEEPER for Antigravity (Pool and Pro)
+            // 2. Try reading KEEPER for Antigravity (Pool and Pro), Codex, and Claude
             do {
                 let keeperUsage = try KeeperUsageReader.loadToday(databaseURL: keeperDatabaseURL, now: now, calendar: calendar)
                 usage.agy = keeperUsage.agy
                 usage.agyPro = keeperUsage.agyPro
+                usage.codex = ccCodex + keeperUsage.codex
+                usage.claude = ccClaude + keeperUsage.claude
                 hasAnyDatabase = true
             } catch {
+                usage.codex = ccCodex
+                usage.claude = ccClaude
                 keeperError = error
             }
 

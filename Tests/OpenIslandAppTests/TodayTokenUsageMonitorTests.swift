@@ -83,4 +83,28 @@ struct TodayTokenUsageMonitorTests {
         #expect(monitor.usage?.agyPro.cacheReadTokens == 6_000)
         #expect(monitor.lastErrorMessage == nil)
     }
+
+    @Test
+    func codexAndClaudeCombinedFromKeeperAndCCSwitch() {
+        let monitor = makeMonitor()
+        let today = Self.calendar.startOfDay(for: Self.now)
+        let ccCodex = AgentTokenTotals(requestCount: 10, totalTokens: 5_000, cacheReadTokens: 1_000)
+        let keeperCodex = AgentTokenTotals(requestCount: 77, totalTokens: 10_138_778, cacheReadTokens: 9_395_456)
+        let combinedCodex = ccCodex + keeperCodex
+
+        let usage = TodayTokenUsage(
+            dayStart: today,
+            claude: AgentTokenTotals(requestCount: 5, totalTokens: 2_000),
+            codex: combinedCodex,
+            agy: AgentTokenTotals(requestCount: 9, totalTokens: 1_705_198, cacheReadTokens: 1_084_686),
+            agyPro: AgentTokenTotals(requestCount: 46, totalTokens: 264_017, cacheReadTokens: 1_941_049)
+        )
+        monitor.apply(.success(usage), now: Self.now, calendar: Self.calendar)
+
+        #expect(monitor.usage?.codex.requestCount == 87)
+        #expect(monitor.usage?.codex.totalTokens == 10_143_778)
+        #expect(monitor.usage?.codex.cacheReadTokens == 9_396_456)
+        #expect(monitor.usage?.agy.totalTokens == 1_705_198)
+        #expect(monitor.usage?.agyPro.totalTokens == 264_017)
+    }
 }

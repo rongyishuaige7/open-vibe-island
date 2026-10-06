@@ -1337,7 +1337,7 @@ struct IslandPanelView: View {
                     label: "Codex",
                     dotColor: IslandDesignPalette.Status.runningCodex,
                     totals: usage?.codex,
-                    accountHint: "CC Switch",
+                    accountHint: "rongyiplus4, CC Switch",
                     languageCode: languageCode
                 )
 

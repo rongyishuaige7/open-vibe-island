@@ -16,6 +16,18 @@ public struct AgentTokenTotals: Equatable, Sendable {
     }
 
     public static let zero = AgentTokenTotals()
+
+    public static func + (lhs: AgentTokenTotals, rhs: AgentTokenTotals) -> AgentTokenTotals {
+        AgentTokenTotals(
+            requestCount: lhs.requestCount + rhs.requestCount,
+            totalTokens: lhs.totalTokens + rhs.totalTokens,
+            cacheReadTokens: lhs.cacheReadTokens + rhs.cacheReadTokens
+        )
+    }
+
+    public static func += (lhs: inout AgentTokenTotals, rhs: AgentTokenTotals) {
+        lhs = lhs + rhs
+    }
 }
 
 /// Claude, Codex, and Antigravity token totals since local midnight.
