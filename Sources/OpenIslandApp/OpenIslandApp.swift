@@ -38,8 +38,11 @@ final class OpenIslandAppDelegate: NSObject, NSApplicationDelegate {
                 )
             }
 
-            // Hide all windows on launch — settings opens on demand only.
+            // Hide all standard application windows on launch — settings opens on demand only.
             OpenIslandAppDelegate.hideAllAppWindows()
+
+            // Ensure the overlay panel is ordered front and properly positioned on launch.
+            model.ensureOverlayPanel()
 
             harnessRuntimeMonitor.recordMilestone("bootstrapCompleted")
 
@@ -78,6 +81,8 @@ final class OpenIslandAppDelegate: NSObject, NSApplicationDelegate {
 
     private static func hideAllAppWindows() {
         for window in NSApp.windows {
+            // Never hide NSPanel instances (such as NotchPanel or floating overlay panels)
+            guard !(window is NSPanel) else { continue }
             window.orderOut(nil)
         }
     }

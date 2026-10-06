@@ -262,7 +262,10 @@ final class OverlayUICoordinator {
 
     func ensureOverlayPanel() {
         guard let appModel else { return }
-        overlayPanelController.ensurePanel(model: appModel, preferredScreenID: preferredOverlayScreenID)
+        overlayPlacementDiagnostics = overlayPanelController.ensurePanel(
+            model: appModel,
+            preferredScreenID: preferredOverlayScreenID
+        )
     }
 
     // Legacy compatibility
