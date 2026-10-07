@@ -494,13 +494,26 @@ final class SessionDiscoveryCoordinator {
         guard now.timeIntervalSince(lastCodexAppReconcileDate) >= 15 else { return }
         lastCodexAppReconcileDate = now
 
-        let archivedSessionIDs = CodexArchivedSessionIndex.archivedSessionIDs()
-        for event in CodexAppSessionReconciler.reconciliationEvents(
-            for: state.sessions,
-            archivedSessionIDs: archivedSessionIDs,
-            now: now
-        ) {
-            onAgentEvent?(event)
+        let hasCandidates = state.sessions.contains { session in
+            session.tool == .codex && !session.isSessionEnded
+                && (session.isCodexAppSession || session.jumpTarget?.terminalApp == "Codex.app")
+        }
+        guard hasCandidates else { return }
+
+        let sessions = state.sessions
+        Task.detached(priority: .utility) { [weak self] in
+            let archivedSessionIDs = CodexArchivedSessionIndex.archivedSessionIDs()
+            let events = CodexAppSessionReconciler.reconciliationEvents(
+                for: sessions,
+                archivedSessionIDs: archivedSessionIDs,
+                now: now
+            )
+            guard !events.isEmpty else { return }
+            await MainActor.run { [weak self] in
+                for event in events {
+                    self?.onAgentEvent?(event)
+                }
+            }
         }
     }
 

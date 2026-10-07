@@ -707,8 +707,12 @@ final class HookInstallationCoordinator {
                 guard let self else { return }
                 do {
                     let usageState = try self.readClaudeUsageState(repairManagedBridgeIfNeeded: true)
-                    self.claudeStatusLineStatus = usageState.status
-                    self.claudeUsageSnapshot = usageState.snapshot
+                    if self.claudeStatusLineStatus != usageState.status {
+                        self.claudeStatusLineStatus = usageState.status
+                    }
+                    if self.claudeUsageSnapshot != usageState.snapshot {
+                        self.claudeUsageSnapshot = usageState.snapshot
+                    }
                 } catch {
                     self.onStatusMessage?("Failed to read Claude usage state: \(error.localizedDescription)")
                 }
@@ -877,8 +881,12 @@ final class HookInstallationCoordinator {
                     let snapshot = try ClaudeUsageLoader.load()
                     return (status: status, snapshot: snapshot, repairedManagedBridge: repairedManagedBridge)
                 }.value
-                self.claudeStatusLineStatus = usageState.status
-                self.claudeUsageSnapshot = usageState.snapshot
+                if self.claudeStatusLineStatus != usageState.status {
+                    self.claudeStatusLineStatus = usageState.status
+                }
+                if self.claudeUsageSnapshot != usageState.snapshot {
+                    self.claudeUsageSnapshot = usageState.snapshot
+                }
                 if usageState.repairedManagedBridge {
                     self.onStatusMessage?("Recovered the Claude usage bridge after repairing a missing managed script.")
                 }
@@ -896,7 +904,9 @@ final class HookInstallationCoordinator {
                 let snapshot = try await Task.detached(priority: .utility) {
                     try CodexUsageLoader.load()
                 }.value
-                self.codexUsageSnapshot = snapshot
+                if self.codexUsageSnapshot != snapshot {
+                    self.codexUsageSnapshot = snapshot
+                }
             } catch {
                 self.onStatusMessage?("Failed to read Codex usage state: \(error.localizedDescription)")
             }
