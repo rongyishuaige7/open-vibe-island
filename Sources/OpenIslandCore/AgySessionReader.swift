@@ -167,6 +167,30 @@ public final class AgySessionReader: @unchecked Sendable {
         return nil
     }
 
+    /// Just the title column, without the transcript read `fetchRecord` does
+    /// to resolve the model. Nil when the row is missing or the title blank.
+    public static func fetchTitle(sessionID: String, databasePath: String) -> String? {
+        guard let db = openDatabase(databasePath: databasePath) else {
+            return nil
+        }
+        defer { sqlite3_close(db) }
+
+        var stmt: OpaquePointer?
+        let sql = "SELECT title FROM conversation_summaries WHERE conversation_id = ? LIMIT 1;"
+        guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK else {
+            return nil
+        }
+        defer { sqlite3_finalize(stmt) }
+
+        sqlite3_bind_text(stmt, 1, (sessionID as NSString).utf8String, -1, nil)
+        guard sqlite3_step(stmt) == SQLITE_ROW,
+              let title = sqlite3_column_text(stmt, 0).map({ String(cString: $0) }),
+              !title.isEmpty else {
+            return nil
+        }
+        return title
+    }
+
     private static func queryRecord(sessionID: String, databasePath: String) -> AgySessionRecord? {
         guard let db = openDatabase(databasePath: databasePath) else {
             return nil

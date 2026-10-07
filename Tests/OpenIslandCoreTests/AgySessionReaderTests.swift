@@ -171,6 +171,58 @@ struct AgySessionReaderTests {
     }
 
     @Test
+    func conversationTitleResolverReadsEverySessionAndWalRenames() throws {
+        let tempDir = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: tempDir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: tempDir) }
+
+        let dbPath = tempDir.appendingPathComponent("conversation_summaries.db").path
+        var db: OpaquePointer?
+        guard sqlite3_open_v2(dbPath, &db, SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE, nil) == SQLITE_OK else {
+            Issue.record("Failed to create test SQLite db")
+            return
+        }
+        defer { sqlite3_close(db) }
+
+        let setup = """
+        PRAGMA journal_mode=WAL;
+        PRAGMA wal_autocheckpoint=0;
+        CREATE TABLE conversation_summaries (
+            conversation_id text PRIMARY KEY,
+            title text NOT NULL DEFAULT "",
+            preview text NOT NULL DEFAULT "",
+            step_count integer NOT NULL DEFAULT 0,
+            last_modified_time datetime NOT NULL,
+            workspace_uris text NOT NULL,
+            status text NOT NULL DEFAULT "",
+            not_fully_idle numeric NOT NULL DEFAULT false,
+            app_data_dir text NOT NULL DEFAULT ""
+        );
+        INSERT INTO conversation_summaries (conversation_id, title, last_modified_time, workspace_uris)
+        VALUES ('agy-a', 'First', '2026-10-03 11:20:00+00:00', '[]'),
+               ('agy-b', 'Second', '2026-10-03 11:20:00+00:00', '[]');
+        """
+        guard sqlite3_exec(db, setup, nil, nil, nil) == SQLITE_OK else {
+            Issue.record("Failed to set up WAL database")
+            return
+        }
+
+        let resolver = ConversationTitleResolver()
+        let requestA = ConversationTitleRequest(sessionID: "agy-a", source: .agyDatabase(databasePath: dbPath))
+        let requestB = ConversationTitleRequest(sessionID: "agy-b", source: .agyDatabase(databasePath: dbPath))
+
+        // B is asked for only after A cached the same database stamp.
+        #expect(resolver.titles(for: [requestA])["agy-a"] == "First")
+        #expect(resolver.titles(for: [requestB])["agy-b"] == "Second")
+
+        guard sqlite3_exec(db, "UPDATE conversation_summaries SET title = 'Renamed' WHERE conversation_id = 'agy-a';", nil, nil, nil) == SQLITE_OK else {
+            Issue.record("Failed to rename")
+            return
+        }
+        #expect(resolver.titles(for: [requestA])["agy-a"] == "Renamed")
+    }
+
+    @Test
     func asAgentSessionConvertsRecordCorrectly() {
         let record = AgySessionRecord(
             sessionID: "test-uuid-1234",
