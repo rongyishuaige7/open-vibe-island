@@ -71,17 +71,19 @@ final class TodayTokenUsageMonitor {
                 ccError = error
             }
 
-            // 2. Try reading KEEPER for Antigravity (Pool and Pro), Codex, and Claude
+            // 2. Try reading KEEPER for Antigravity (Pool and Pro), Codex, Claude, and other upstreams
             do {
                 let keeperUsage = try KeeperUsageReader.loadToday(databaseURL: keeperDatabaseURL, now: now, calendar: calendar)
                 usage.agy = keeperUsage.agy
                 usage.agyPro = keeperUsage.agyPro
+                usage.other = keeperUsage.other
                 usage.codex = ccCodex + keeperUsage.codex
                 usage.claude = ccClaude + keeperUsage.claude
                 usage.agyAccounts = keeperUsage.agyAccounts
                 usage.agyProAccounts = keeperUsage.agyProAccounts
                 usage.codexAccounts = keeperUsage.codexAccounts
                 usage.claudeAccounts = keeperUsage.claudeAccounts
+                usage.otherAccounts = keeperUsage.otherAccounts
                 hasAnyDatabase = true
             } catch {
                 usage.codex = ccCodex
@@ -120,22 +122,29 @@ final class TodayTokenUsageMonitor {
         now: Date = Date(),
         calendar: Calendar = .current
     ) {
+        // Assign only on change: every write invalidates the island header,
+        // and most 30-second rounds read the same totals.
         switch result {
         case let .success(usage):
-            self.usage = usage
-            lastErrorMessage = nil
+            setIfChanged(usage: usage, errorMessage: nil)
         case let .failure(error):
             if (error as? CCSwitchUsageError) == .databaseMissing || (error as? KeeperUsageError) == .databaseMissing {
-                usage = nil
-                lastErrorMessage = nil
+                setIfChanged(usage: nil, errorMessage: nil)
                 return
             }
             // A busy database is usually free again by the next round, so keep
             // today's totals and only drop ones left over from an earlier day.
-            if let usage, !calendar.isDate(usage.dayStart, inSameDayAs: now) {
-                self.usage = nil
-            }
-            lastErrorMessage = error.localizedDescription
+            let kept = usage.flatMap { calendar.isDate($0.dayStart, inSameDayAs: now) ? $0 : nil }
+            setIfChanged(usage: kept, errorMessage: error.localizedDescription)
+        }
+    }
+
+    private func setIfChanged(usage newUsage: TodayTokenUsage?, errorMessage: String?) {
+        if usage != newUsage {
+            usage = newUsage
+        }
+        if lastErrorMessage != errorMessage {
+            lastErrorMessage = errorMessage
         }
     }
 }

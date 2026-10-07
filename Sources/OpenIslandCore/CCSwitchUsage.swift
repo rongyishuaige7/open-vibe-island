@@ -37,10 +37,13 @@ public struct TodayTokenUsage: Equatable, Sendable {
     public var codex: AgentTokenTotals
     public var agy: AgentTokenTotals
     public var agyPro: AgentTokenTotals
+    /// KEEPER usage from any other upstream, e.g. an OpenAI-compatible API key.
+    public var other: AgentTokenTotals
     public var agyAccounts: [String]
     public var agyProAccounts: [String]
     public var codexAccounts: [String]
     public var claudeAccounts: [String]
+    public var otherAccounts: [String]
 
     public init(
         dayStart: Date,
@@ -48,32 +51,51 @@ public struct TodayTokenUsage: Equatable, Sendable {
         codex: AgentTokenTotals = .zero,
         agy: AgentTokenTotals = .zero,
         agyPro: AgentTokenTotals = .zero,
+        other: AgentTokenTotals = .zero,
         agyAccounts: [String] = [],
         agyProAccounts: [String] = [],
         codexAccounts: [String] = [],
-        claudeAccounts: [String] = []
+        claudeAccounts: [String] = [],
+        otherAccounts: [String] = []
     ) {
         self.dayStart = dayStart
         self.claude = claude
         self.codex = codex
         self.agy = agy
         self.agyPro = agyPro
+        self.other = other
         self.agyAccounts = agyAccounts
         self.agyProAccounts = agyProAccounts
         self.codexAccounts = codexAccounts
         self.claudeAccounts = claudeAccounts
+        self.otherAccounts = otherAccounts
+    }
+
+    /// Every channel together, cache included.
+    public var totalTokens: Int {
+        claude.totalTokens + codex.totalTokens + agy.totalTokens + agyPro.totalTokens + other.totalTokens
+    }
+
+    /// Where each total came from: the KEEPER accounts that logged usage
+    /// today, plus CC Switch for the agents it proxies. Empty when unknown.
+    public var claudeAccountHint: String {
+        (claudeAccounts + ["CC Switch"]).joined(separator: ", ")
     }
 
     public var codexAccountHint: String {
-        codexAccounts.isEmpty ? "rongyiplus4, CC Switch" : "\(codexAccounts.joined(separator: ", ")), CC Switch"
+        (codexAccounts + ["CC Switch"]).joined(separator: ", ")
     }
 
     public var agyAccountHint: String {
-        agyAccounts.isEmpty ? "sk44989, victorcranston" : agyAccounts.joined(separator: ", ")
+        agyAccounts.joined(separator: ", ")
     }
 
     public var agyProAccountHint: String {
-        agyProAccounts.isEmpty ? "wisnumandala302" : agyProAccounts.joined(separator: ", ")
+        agyProAccounts.joined(separator: ", ")
+    }
+
+    public var otherAccountHint: String {
+        otherAccounts.joined(separator: ", ")
     }
 }
 

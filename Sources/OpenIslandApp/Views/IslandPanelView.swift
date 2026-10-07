@@ -107,6 +107,9 @@ struct IslandPanelView: View {
     @State private var isHovering = false
     @State private var showingQuitConfirmation = false
     @State private var showingTokenDetailPopover = false
+    /// Set while the pointer that opened the token popover by hovering is
+    /// still on the chip, so a click there keeps it open instead of closing it.
+    @State private var tokenPopoverOpenedByHover = false
     @State private var keepsOpenedSurfaceMounted = false
     @State private var openedSurfaceMountGeneration: UInt64 = 0
 
@@ -1016,7 +1019,7 @@ struct IslandPanelView: View {
     }
 
     /// The "Today" chip: Claude, Codex, AGY pool and AGY Pro token totals logged since local
-    /// midnight, cache included.
+    /// midnight, cache included, plus any other KEEPER upstream that logged usage today.
     private var todayTokenUsagePresentation: UsageProviderPresentation? {
         let monitor = model.todayTokenUsageMonitor
         guard monitor.usage != nil || monitor.lastErrorMessage != nil else {
@@ -1024,22 +1027,22 @@ struct IslandPanelView: View {
         }
 
         let languageCode = lang.language.resolvedCode
-        let candidateAgents: [(id: String, label: String, shortLabel: String, totals: AgentTokenTotals?)] = [
+        var candidateAgents: [(id: String, label: String, shortLabel: String, totals: AgentTokenTotals?)] = [
             ("claude", "Claude", "Cl", monitor.usage?.claude),
             ("codex", "Codex", "Cx", monitor.usage?.codex),
             ("agy", lang.t("usage.todayTokens.agyPool"), "AGY", monitor.usage?.agy),
             ("agy-pro", lang.t("usage.todayTokens.agyPro"), "Pro", monitor.usage?.agyPro),
         ]
+        if let other = monitor.usage?.other, other.totalTokens > 0 {
+            candidateAgents.append(("other", lang.t("usage.todayTokens.other"), "Oth", other))
+        }
 
-        let grandTotal = (monitor.usage?.claude.totalTokens ?? 0)
-            + (monitor.usage?.codex.totalTokens ?? 0)
-            + (monitor.usage?.agy.totalTokens ?? 0)
-            + (monitor.usage?.agyPro.totalTokens ?? 0)
+        let grandTotal = monitor.usage?.totalTokens ?? 0
         let totalFormatted = TokenCountFormatter.compact(grandTotal, languageCode: languageCode)
 
         var helpLines = [
             lang.t("usage.todayTokens.help"),
-            lang.t("usage.todayTokens.totalLabel") + "：" + totalFormatted
+            lang.t("usage.todayTokens.totalLine", totalFormatted)
         ]
         for agent in candidateAgents {
             guard let totals = agent.totals else { continue }
@@ -1192,7 +1195,11 @@ struct IslandPanelView: View {
     ) -> some View {
         Button {
             withAnimation(.spring(response: 0.28, dampingFraction: 0.82)) {
-                showingTokenDetailPopover.toggle()
+                if tokenPopoverOpenedByHover {
+                    tokenPopoverOpenedByHover = false
+                } else {
+                    showingTokenDetailPopover.toggle()
+                }
             }
         } label: {
             HStack(spacing: 5) {
@@ -1234,10 +1241,14 @@ struct IslandPanelView: View {
         }
         .buttonStyle(.plain)
         .onHover { isHovered in
-            if isHovered {
-                withAnimation(.easeOut(duration: 0.16)) {
-                    showingTokenDetailPopover = true
-                }
+            guard isHovered else {
+                tokenPopoverOpenedByHover = false
+                return
+            }
+            guard !showingTokenDetailPopover else { return }
+            tokenPopoverOpenedByHover = true
+            withAnimation(.easeOut(duration: 0.16)) {
+                showingTokenDetailPopover = true
             }
         }
         .help(usageHelpText(for: provider))
@@ -1336,7 +1347,7 @@ struct IslandPanelView: View {
                     label: "Claude",
                     dotColor: IslandDesignPalette.Status.runningClaude,
                     totals: usage?.claude,
-                    accountHint: "CC Switch",
+                    accountHint: usage?.claudeAccountHint ?? "",
                     languageCode: languageCode
                 )
 
@@ -1344,7 +1355,7 @@ struct IslandPanelView: View {
                     label: "Codex",
                     dotColor: IslandDesignPalette.Status.runningCodex,
                     totals: usage?.codex,
-                    accountHint: usage?.codexAccountHint ?? "rongyiplus4, CC Switch",
+                    accountHint: usage?.codexAccountHint ?? "",
                     languageCode: languageCode
                 )
 
@@ -1352,7 +1363,7 @@ struct IslandPanelView: View {
                     label: lang.t("usage.todayTokens.agyPool"),
                     dotColor: IslandDesignPalette.Status.runningAgy,
                     totals: usage?.agy,
-                    accountHint: usage?.agyAccountHint ?? "sk44989, victorcranston",
+                    accountHint: usage?.agyAccountHint ?? "",
                     languageCode: languageCode
                 )
 
@@ -1360,9 +1371,19 @@ struct IslandPanelView: View {
                     label: lang.t("usage.todayTokens.agyPro"),
                     dotColor: IslandDesignPalette.Status.runningAgy,
                     totals: usage?.agyPro,
-                    accountHint: usage?.agyProAccountHint ?? "wisnumandala302",
+                    accountHint: usage?.agyProAccountHint ?? "",
                     languageCode: languageCode
                 )
+
+                if let usage, usage.other.totalTokens > 0 {
+                    tokenDetailAgentRow(
+                        label: lang.t("usage.todayTokens.other"),
+                        dotColor: Color.white.opacity(0.5),
+                        totals: usage.other,
+                        accountHint: usage.otherAccountHint,
+                        languageCode: languageCode
+                    )
+                }
             }
 
             Rectangle()
@@ -1376,12 +1397,7 @@ struct IslandPanelView: View {
 
                 Spacer()
 
-                let totalTokens = (usage?.claude.totalTokens ?? 0)
-                    + (usage?.codex.totalTokens ?? 0)
-                    + (usage?.agy.totalTokens ?? 0)
-                    + (usage?.agyPro.totalTokens ?? 0)
-
-                Text(TokenCountFormatter.compact(totalTokens, languageCode: languageCode))
+                Text(TokenCountFormatter.compact(usage?.totalTokens ?? 0, languageCode: languageCode))
                     .font(.system(size: 12, weight: .bold, design: .monospaced))
                     .foregroundStyle(.white)
             }
@@ -1438,10 +1454,12 @@ struct IslandPanelView: View {
                         .font(.system(size: 11.5, weight: .semibold))
                         .foregroundStyle(.white.opacity(0.88))
 
-                    Text("(\(accountHint))")
-                        .font(.system(size: 9.5))
-                        .foregroundStyle(.white.opacity(0.35))
-                        .lineLimit(1)
+                    if !accountHint.isEmpty {
+                        Text("(\(accountHint))")
+                            .font(.system(size: 9.5))
+                            .foregroundStyle(.white.opacity(0.35))
+                            .lineLimit(1)
+                    }
                 }
 
                 if reqCount > 0 || cacheRead > 0 {
