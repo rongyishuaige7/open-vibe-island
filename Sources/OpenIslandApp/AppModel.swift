@@ -2,6 +2,7 @@ import AppKit
 import Foundation
 import Observation
 import OpenIslandCore
+import os
 import SwiftUI
 
 extension Notification.Name {
@@ -53,8 +54,13 @@ final class AppModel {
             _cachedSessionBuckets = nil
             pruneAgentsGridObservationTicketsIfNeeded()
             bridgeServer.updateStateSnapshot(state)
+            let sessionCount = state.sessions.count
+            sessionCountSnapshot.withLock { $0 = sessionCount }
         }
     }
+    /// `state.sessions.count`, readable off the main actor. The Watch HTTP
+    /// endpoint asks for it on its network queue.
+    private let sessionCountSnapshot = OSAllocatedUnfairLock(initialState: 0)
     @ObservationIgnored private var _cachedSessionBuckets: (primary: [AgentSession], overflow: [AgentSession])?
 
     /// Monotonic ticket assigned the first time a session ID shows up in the
@@ -533,13 +539,13 @@ final class AppModel {
             }
         }
 
-        relay.endpoint.activeSessionCountProvider = { [weak self] in
-            // Safe to call from any queue — reads a snapshot count.
-            guard let self else { return 0 }
-            return MainActor.assumeIsolated {
-                self.state.sessions.count
-            }
-        }
+        relay.endpoint.activeSessionCountProvider = activeSessionCountProvider
+    }
+
+    /// Safe to call from any queue; reads the count mirrored by `state`'s didSet.
+    nonisolated var activeSessionCountProvider: WatchActiveSessionCountProvider {
+        let snapshot = sessionCountSnapshot
+        return { snapshot.withLock { $0 } }
     }
 
     private func stopWatchRelay() {
