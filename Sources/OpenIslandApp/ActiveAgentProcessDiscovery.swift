@@ -306,16 +306,25 @@ struct ActiveAgentProcessDiscovery {
         for process: RunningProcess,
         processesByPID: [String: RunningProcess]
     ) -> ProcessSnapshot? {
-        guard let lsofOutput = lsofOutput(pid: process.pid),
-              let transcriptPath = bestCodexTranscriptPath(in: lsofOutput),
-              let sessionID = firstUUID(in: transcriptPath) else {
+        let lsofOutput = lsofOutput(pid: process.pid)
+        var transcriptPath = lsofOutput.flatMap(bestCodexTranscriptPath(in:))
+        var sessionID = transcriptPath.flatMap(firstUUID(in:))
+            ?? firstUUID(in: process.command)
+
+        if transcriptPath == nil, let currentID = sessionID {
+            transcriptPath = fallbackCodexTranscriptPath(sessionID: currentID)
+        } else if sessionID == nil, let transcriptPath {
+            sessionID = firstUUID(in: transcriptPath)
+        }
+
+        guard sessionID != nil || transcriptPath != nil else {
             return nil
         }
 
         var snapshot = ProcessSnapshot(
             tool: .codex,
             sessionID: sessionID,
-            workingDirectory: workingDirectory(from: lsofOutput),
+            workingDirectory: lsofOutput.flatMap(workingDirectory(from:)),
             terminalTTY: process.terminalTTY,
             terminalApp: terminalApp(for: process, processesByPID: processesByPID),
             transcriptPath: transcriptPath
@@ -388,6 +397,28 @@ struct ActiveAgentProcessDiscovery {
         URL(fileURLWithPath: path).deletingPathExtension().lastPathComponent
     }
 
+    private func fallbackCodexTranscriptPath(sessionID: String) -> String? {
+        let fileManager = FileManager.default
+        let roots = CodexRolloutDiscovery.candidateSessionRoots(fileManager: fileManager)
+        for root in roots {
+            guard fileManager.fileExists(atPath: root.path),
+                  let enumerator = fileManager.enumerator(
+                    at: root,
+                    includingPropertiesForKeys: [.isRegularFileKey],
+                    options: [.skipsHiddenFiles]
+                  ) else {
+                continue
+            }
+            for case let fileURL as URL in enumerator {
+                let name = fileURL.lastPathComponent
+                if name.hasPrefix("rollout-") && name.hasSuffix(".jsonl") && name.contains(sessionID) {
+                    return fileURL.path
+                }
+            }
+        }
+        return nil
+    }
+
     private func isClaudeSubagentWorktree(_ path: String) -> Bool {
         path.contains("/.claude/worktrees/agent-")
     }
@@ -405,11 +436,21 @@ struct ActiveAgentProcessDiscovery {
             return nil
         }
 
-        let transcriptPath = lsofOutput.flatMap {
+        var transcriptPath = lsofOutput.flatMap {
             bestClaudeTranscriptPath(in: $0, workingDirectory: workingDirectory)
         }
-        let sessionID = transcriptPath.flatMap(firstUUID(in:))
+        var sessionID = transcriptPath.flatMap(firstUUID(in:))
             ?? claudeSessionID(from: process.command)
+
+        if transcriptPath == nil {
+            transcriptPath = fallbackClaudeTranscriptPath(
+                workingDirectory: workingDirectory,
+                sessionID: sessionID
+            )
+            if sessionID == nil {
+                sessionID = transcriptPath.flatMap(firstUUID(in:))
+            }
+        }
 
         guard workingDirectory != nil || sessionID != nil else {
             return nil
@@ -458,6 +499,58 @@ struct ActiveAgentProcessDiscovery {
         }
 
         return paths.first
+    }
+
+    private func fallbackClaudeTranscriptPath(
+        workingDirectory: String?,
+        sessionID: String?
+    ) -> String? {
+        let fileManager = FileManager.default
+        let home = fileManager.homeDirectoryForCurrentUser
+        let projectsURL = home.appendingPathComponent(".claude/projects", isDirectory: true)
+        guard fileManager.fileExists(atPath: projectsURL.path) else { return nil }
+
+        if let cwd = workingDirectory {
+            let slug = cwd.replacingOccurrences(of: "/", with: "-")
+            let projectDir = projectsURL.appendingPathComponent(slug, isDirectory: true)
+            if fileManager.fileExists(atPath: projectDir.path) {
+                if let sessionID {
+                    let directPath = projectDir.appendingPathComponent("\(sessionID).jsonl").path
+                    if fileManager.fileExists(atPath: directPath) {
+                        return directPath
+                    }
+                }
+                if let items = try? fileManager.contentsOfDirectory(
+                    at: projectDir,
+                    includingPropertiesForKeys: [.contentModificationDateKey, .isRegularFileKey]
+                ) {
+                    let jsonlFiles = items.filter { $0.pathExtension == "jsonl" }
+                    if let newest = jsonlFiles.max(by: { a, b in
+                        let dateA = (try? a.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate) ?? .distantPast
+                        let dateB = (try? b.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate) ?? .distantPast
+                        return dateA < dateB
+                    }) {
+                        return newest.path
+                    }
+                }
+            }
+        }
+
+        if let sessionID {
+            if let subdirs = try? fileManager.contentsOfDirectory(
+                at: projectsURL,
+                includingPropertiesForKeys: [.isDirectoryKey]
+            ) {
+                for subdir in subdirs {
+                    let candidate = subdir.appendingPathComponent("\(sessionID).jsonl").path
+                    if fileManager.fileExists(atPath: candidate) {
+                        return candidate
+                    }
+                }
+            }
+        }
+
+        return nil
     }
 
     /// Every file path lsof reported (`n`-prefixed lines in `-F` output).

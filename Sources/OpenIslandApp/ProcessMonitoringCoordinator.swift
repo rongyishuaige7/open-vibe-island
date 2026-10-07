@@ -327,16 +327,15 @@ final class ProcessMonitoringCoordinator {
         }
 
         // Reconcile running states:
-        // 1. Detached sessions cannot be actively running.
-        // 2. Dead CLI processes cannot be actively running.
-        // 3. Claude sessions whose transcript indicates phase change (running <-> completed).
-        // 4. Codex CLI sessions whose rollout indicates phase change (running <-> completed).
-        // 5. AGY sessions whose database indicates phase change (running <-> completed).
+        // 1. Dead CLI processes cannot be actively running.
+        // 2. Claude sessions whose transcript indicates phase change (running <-> completed).
+        // 3. Codex CLI sessions whose rollout indicates phase change (running <-> completed).
+        // 4. AGY sessions whose database indicates phase change (running <-> completed).
         for session in local.sessions {
             if session.origin == .demo || session.isRemote { continue }
 
             if session.phase == .running {
-                if session.attachmentState == .detached {
+                if session.attachmentState == .detached && !aliveIDs.contains(session.id) {
                     var updated = session
                     updated.phase = .completed
                     local.upsert(updated)
@@ -1174,7 +1173,7 @@ final class ProcessMonitoringCoordinator {
             let workspaceName = workingDirectory.map { WorkspaceNameResolver.workspaceName(for: $0) } ?? "Workspace"
             let terminalApp = supportedTerminalApp(for: process.terminalApp)
                 ?? process.terminalApp?.trimmingCharacters(in: .whitespacesAndNewlines)
-                ?? "Terminal"
+                ?? "Antigravity"
 
             let record = AgySessionReader.fetchRecord(
                 sessionID: sessionID,

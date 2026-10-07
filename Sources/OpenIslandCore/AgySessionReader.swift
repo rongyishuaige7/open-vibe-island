@@ -423,13 +423,13 @@ public extension AgySessionRecord {
             title: displayTitle,
             tool: .geminiCLI,
             origin: .live,
-            attachmentState: .detached,
+            attachmentState: .attached,
             phase: isRunning ? .running : .completed,
             summary: displayPreview,
             updatedAt: lastModifiedTime,
             jumpTarget: firstWorkspace.map { cwd in
                 JumpTarget(
-                    terminalApp: "Terminal",
+                    terminalApp: "Antigravity",
                     workspaceName: workspaceName,
                     paneTitle: "Gemini \(sessionID.prefix(8))",
                     workingDirectory: cwd

@@ -249,6 +249,18 @@ struct ClaudeProcessLivenessTests {
         #expect(currentState().session(id: "session-dead-process") == nil)
     }
 
+    @Test
+    func runningSessionKeepsRunningPhaseWhenProcessIsAliveEvenIfDetached() {
+        var session = claudeSession(id: "session-running-detached", tty: "/dev/ttys101")
+        session.phase = .running
+        session.attachmentState = .detached
+        let (coordinator, currentState) = coordinator(with: [session])
+
+        reconcile(coordinator, [claudeProcess(sessionID: "session-running-detached", tty: "/dev/ttys101")])
+
+        #expect(currentState().session(id: "session-running-detached")?.phase == .running)
+    }
+
     private func reconcile(
         _ coordinator: ProcessMonitoringCoordinator,
         _ processes: [ActiveAgentProcessDiscovery.ProcessSnapshot]

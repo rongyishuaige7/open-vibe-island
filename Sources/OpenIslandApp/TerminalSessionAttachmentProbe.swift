@@ -947,6 +947,16 @@ struct TerminalSessionAttachmentProbe {
             }
         }
 
+        let activeGeminiProcesses = activeProcesses.filter { $0.tool == .geminiCLI }
+        for session in sessions where session.tool == .geminiCLI {
+            if let matched = activeGeminiProcesses.first(where: { $0.sessionID == session.id }) {
+                assignments[session.id] = matched
+            } else if let cwd = normalizedPathForMatching(session.jumpTarget?.workingDirectory),
+                      let matched = activeGeminiProcesses.first(where: { normalizedPathForMatching($0.workingDirectory) == cwd }) {
+                assignments[session.id] = matched
+            }
+        }
+
         var claimedClaudeSessionIDs = Set(assignments.keys)
         var claimedClaudeProcessIndexes: Set<Int> = []
 

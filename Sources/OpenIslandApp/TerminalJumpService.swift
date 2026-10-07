@@ -89,6 +89,11 @@ struct TerminalJumpService {
             aliases: ["kaku"]
         ),
         TerminalAppDescriptor(
+            displayName: "Antigravity",
+            bundleIdentifier: "com.google.antigravity",
+            aliases: ["antigravity", "agy"]
+        ),
+        TerminalAppDescriptor(
             displayName: "Cursor",
             bundleIdentifier: "com.todesktop.230313mzl4w4u92",
             aliases: ["cursor"]
@@ -481,6 +486,7 @@ struct TerminalJumpService {
     private static let vscodeFamilyCLI: [String: String] = [
         "com.microsoft.VSCode": "code",
         "com.microsoft.VSCodeInsiders": "code-insiders",
+        "com.google.antigravity": "agy",
         "com.todesktop.230313mzl4w4u92": "cursor",
         "com.exafunction.windsurf": "windsurf",
         "com.trae.app": "trae",
