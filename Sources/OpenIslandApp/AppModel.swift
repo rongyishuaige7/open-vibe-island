@@ -1811,8 +1811,7 @@ final class AppModel {
             await self.hooks.repairHooksIfNeeded()
         }
 
-        // Reconcile attachments and start monitoring (requires sessions to be loaded).
-        monitoring.reconcileSessionAttachments()
+        // Start monitoring in background (requires sessions to be loaded).
         monitoring.startMonitoringIfNeeded()
         discovery.startConversationTitleRefreshIfNeeded()
     }

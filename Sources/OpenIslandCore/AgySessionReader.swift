@@ -154,20 +154,19 @@ public final class AgySessionReader: @unchecked Sendable {
 
     private static func openDatabase(databasePath: String) -> OpaquePointer? {
         var db: OpaquePointer?
-        // First try READWRITE so WAL shared-memory (-shm) and locks coordinate seamlessly with agy.
-        var rc = sqlite3_open_v2(databasePath, &db, SQLITE_OPEN_READWRITE | SQLITE_OPEN_NOMUTEX, nil)
+        // Open READONLY to avoid blocking or contending with agy/Antigravity's WAL write locks.
+        let uri = "file://\(databasePath)?immutable=1"
+        var rc = sqlite3_open_v2(uri, &db, SQLITE_OPEN_READONLY | SQLITE_OPEN_URI | SQLITE_OPEN_NOMUTEX, nil)
         if rc == SQLITE_OK {
-            sqlite3_busy_timeout(db, 200)
+            sqlite3_busy_timeout(db, 50)
             return db
         }
         sqlite3_close(db)
         db = nil
 
-        // If READWRITE fails, try immutable URI (read-only without requiring WAL/SHM file creation).
-        let uri = "file://\(databasePath)?immutable=1"
-        rc = sqlite3_open_v2(uri, &db, SQLITE_OPEN_READONLY | SQLITE_OPEN_URI | SQLITE_OPEN_NOMUTEX, nil)
+        rc = sqlite3_open_v2(databasePath, &db, SQLITE_OPEN_READONLY | SQLITE_OPEN_NOMUTEX, nil)
         if rc == SQLITE_OK {
-            sqlite3_busy_timeout(db, 200)
+            sqlite3_busy_timeout(db, 50)
             return db
         }
         sqlite3_close(db)
