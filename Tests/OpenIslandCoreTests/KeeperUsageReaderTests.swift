@@ -130,5 +130,70 @@ struct KeeperUsageReaderTests {
         #expect(usage.agyProAccounts == ["wisnumandala302"])
         #expect(usage.codexAccounts == ["rongyiplus4"])
         #expect(usage.claudeAccounts == ["claude-bot"])
+        #expect(usage.other == AgentTokenTotals(requestCount: 99, totalTokens: 999999, cacheReadTokens: 10000))
+        #expect(usage.otherAccounts == ["YI-API"])
+    }
+
+    @Test
+    func classifiesByExecutorAndKeepsUsageWithoutIdentity() throws {
+        let dbURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent("test-keeper-executor-\(UUID().uuidString).db")
+        defer { try? FileManager.default.removeItem(at: dbURL) }
+
+        var handle: OpaquePointer?
+        guard sqlite3_open(dbURL.path, &handle) == SQLITE_OK, let db = handle else {
+            fatalError("Failed to open test db")
+        }
+        defer { sqlite3_close(db) }
+
+        // Mirrors the live schema: Pro accounts have an empty plan_type, and
+        // executor_type is what tells channels apart.
+        let schema = """
+            CREATE TABLE usage_identities (
+                id INTEGER PRIMARY KEY, name TEXT, identity TEXT, type TEXT, provider TEXT, plan_type TEXT
+            );
+            CREATE TABLE usage_overview_daily_stats (
+                id INTEGER PRIMARY KEY, bucket_start TEXT, auth_index TEXT, executor_type TEXT,
+                request_count INTEGER, total_tokens INTEGER, cache_read_tokens INTEGER
+            );
+            INSERT INTO usage_identities (id, name, identity, type, provider, plan_type) VALUES
+                (1, 'wisnumandala302@gmail.com', 'idx-pro', 'antigravity', 'antigravity', ''),
+                (2, 'project-alpha@gmail.com', 'idx-pool', 'antigravity', 'antigravity', ''),
+                (3, 'rongyiplus4@163.com', 'idx-codex', 'codex', 'codex', 'plus'),
+                (4, 'YI-API', 'idx-openai', 'openai', 'YI-API', '');
+            INSERT INTO usage_overview_daily_stats
+                (bucket_start, auth_index, executor_type, request_count, total_tokens, cache_read_tokens) VALUES
+                ('2026-10-05T00:00:00+08:00', 'idx-pro', 'AntigravityExecutor', 5, 500, 50),
+                ('2026-10-05T00:00:00+08:00', 'idx-pool', 'AntigravityExecutor', 10, 1000, 100),
+                ('2026-10-05T00:00:00+08:00', 'idx-codex', 'CodexExecutor', 7, 700, 70),
+                ('2026-10-05T00:00:00+08:00', 'idx-openai', 'OpenAICompatExecutor', 1, 44, 0),
+                ('2026-10-05T00:00:00+08:00', 'idx-gone', 'CodexExecutor', 2, 200, 20);
+        """
+        guard sqlite3_exec(db, schema, nil, nil, nil) == SQLITE_OK else {
+            fatalError("Failed to execute schema")
+        }
+
+        let usage = try KeeperUsageReader.loadToday(databaseURL: dbURL, now: Self.now, calendar: Self.calendar)
+
+        #expect(usage.agyPro == AgentTokenTotals(requestCount: 5, totalTokens: 500, cacheReadTokens: 50))
+        // "project-alpha" contains "pro" but is not a configured Pro account.
+        #expect(usage.agy == AgentTokenTotals(requestCount: 10, totalTokens: 1000, cacheReadTokens: 100))
+        // The orphaned auth index still counts, classified by its executor.
+        #expect(usage.codex == AgentTokenTotals(requestCount: 9, totalTokens: 900, cacheReadTokens: 90))
+        #expect(usage.codexAccounts == ["rongyiplus4"])
+        #expect(usage.other == AgentTokenTotals(requestCount: 1, totalTokens: 44, cacheReadTokens: 0))
+
+        let noPro = try KeeperUsageReader.loadToday(
+            databaseURL: dbURL, now: Self.now, calendar: Self.calendar, agyProAccounts: []
+        )
+        #expect(noPro.agyPro == .zero)
+        #expect(noPro.agy.totalTokens == 1500)
+    }
+
+    @Test
+    func bucketPrefixIsGregorianWhateverTheUserCalendar() {
+        var japanese = Calendar(identifier: .japanese)
+        japanese.timeZone = TimeZone(identifier: "Asia/Shanghai")!
+        #expect(KeeperUsageReader.bucketPrefix(for: Self.now, calendar: japanese) == "2026-10-05%")
     }
 }
