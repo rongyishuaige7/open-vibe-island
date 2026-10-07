@@ -7,29 +7,36 @@ public struct KeeperTodayUsage: Equatable, Sendable {
     public var agyPro: AgentTokenTotals
     public var codex: AgentTokenTotals
     public var claude: AgentTokenTotals
+    /// Usage KEEPER logged for any other upstream, e.g. an OpenAI-compatible API key.
+    public var other: AgentTokenTotals
     public var agyAccounts: [String]
     public var agyProAccounts: [String]
     public var codexAccounts: [String]
     public var claudeAccounts: [String]
+    public var otherAccounts: [String]
 
     public init(
         agy: AgentTokenTotals = .zero,
         agyPro: AgentTokenTotals = .zero,
         codex: AgentTokenTotals = .zero,
         claude: AgentTokenTotals = .zero,
+        other: AgentTokenTotals = .zero,
         agyAccounts: [String] = [],
         agyProAccounts: [String] = [],
         codexAccounts: [String] = [],
-        claudeAccounts: [String] = []
+        claudeAccounts: [String] = [],
+        otherAccounts: [String] = []
     ) {
         self.agy = agy
         self.agyPro = agyPro
         self.codex = codex
         self.claude = claude
+        self.other = other
         self.agyAccounts = agyAccounts
         self.agyProAccounts = agyProAccounts
         self.codexAccounts = codexAccounts
         self.claudeAccounts = claudeAccounts
+        self.otherAccounts = otherAccounts
     }
 
     public static let zero = KeeperTodayUsage()
@@ -60,11 +67,22 @@ public enum KeeperUsageReader {
         URL(fileURLWithPath: "/opt/homebrew/var/cpa-usage-keeper/app.db")
     }
 
-    /// Sums today's token usage (Antigravity pool vs pro, Codex, Claude) since local midnight of `now`.
+    /// Antigravity accounts counted as AGY Pro. KEEPER records nothing that
+    /// tells a Pro account apart (its `plan_type` is empty), so it is named here.
+    public static let defaultAgyProAccounts: Set<String> = ["wisnumandala302"]
+
+    enum Channel: Equatable {
+        case agy, agyPro, codex, claude, other
+    }
+
+    /// Sums today's token usage per channel since local midnight of `now`.
+    /// `agyProAccounts` are matched case-insensitively against the account
+    /// name without its `@domain`.
     public static func loadToday(
         databaseURL: URL = defaultDatabaseURL,
         now: Date = Date(),
-        calendar: Calendar = .current
+        calendar: Calendar = .current,
+        agyProAccounts: Set<String> = defaultAgyProAccounts
     ) throws -> KeeperTodayUsage {
         guard FileManager.default.fileExists(atPath: databaseURL.path) else {
             throw KeeperUsageError.databaseMissing
@@ -80,138 +98,163 @@ public enum KeeperUsageReader {
         defer { sqlite3_close(db) }
         sqlite3_busy_timeout(db, 200)
 
-        // Today's bucket prefix in business timezone, e.g. "2026-10-05%"
-        let formatter = DateFormatter()
-        formatter.calendar = calendar
-        formatter.timeZone = calendar.timeZone
-        formatter.dateFormat = "yyyy-MM-dd"
-        let datePrefix = formatter.string(from: now) + "%"
-
-        let hasExtendedColumns = tableHasColumns(db: db, table: "usage_identities", requiredColumns: ["type", "provider"])
-        let sql = hasExtendedColumns ? enhancedTotalsQuery : legacyTotalsQuery
-
         var statement: OpaquePointer?
+        let sql = totalsQuery(
+            identityColumns: columns(db: db, table: "usage_identities"),
+            statsColumns: columns(db: db, table: "usage_overview_daily_stats")
+        )
         guard sqlite3_prepare_v2(db, sql, -1, &statement, nil) == SQLITE_OK else {
             throw KeeperUsageError.sqlite(String(cString: sqlite3_errmsg(db)))
         }
         defer { sqlite3_finalize(statement) }
 
-        sqlite3_bind_text(statement, 1, (datePrefix as NSString).utf8String, -1, nil)
+        sqlite3_bind_text(statement, 1, (bucketPrefix(for: now, calendar: calendar) as NSString).utf8String, -1, nil)
 
-        var agyTotals = AgentTokenTotals.zero
-        var agyProTotals = AgentTokenTotals.zero
-        var codexTotals = AgentTokenTotals.zero
-        var claudeTotals = AgentTokenTotals.zero
-        var agyAccounts: [String] = []
-        var agyProAccounts: [String] = []
-        var codexAccounts: [String] = []
-        var claudeAccounts: [String] = []
-
+        let proAccounts = Set(agyProAccounts.map { $0.lowercased() })
+        var usage = KeeperTodayUsage()
         while true {
             let step = sqlite3_step(statement)
             if step == SQLITE_DONE { break }
             guard step == SQLITE_ROW else {
                 throw KeeperUsageError.sqlite(String(cString: sqlite3_errmsg(db)))
             }
-            let name = sqlite3_column_text(statement, 0).map { String(cString: $0) } ?? ""
-            let type = sqlite3_column_text(statement, 1).map { String(cString: $0) } ?? ""
-            let provider = sqlite3_column_text(statement, 2).map { String(cString: $0) } ?? ""
-            let planType = sqlite3_column_text(statement, 3).map { String(cString: $0) } ?? ""
-            let reqCount = Int(sqlite3_column_int64(statement, 4))
-            let totalTokens = Int(sqlite3_column_int64(statement, 5))
-            let cacheReadTokens = Int(sqlite3_column_int64(statement, 6))
-
-            let totals = AgentTokenTotals(
-                requestCount: reqCount,
-                totalTokens: totalTokens,
-                cacheReadTokens: cacheReadTokens
-            )
-
-            let lowerType = type.lowercased()
-            let lowerProvider = provider.lowercased()
-            let lowerName = name.lowercased()
-            let lowerPlan = planType.lowercased()
-            let cleanName = name.contains("@") ? String(name.split(separator: "@").first ?? "") : name
-
-            if lowerType.contains("codex") || lowerProvider.contains("codex") || lowerName.contains("codex") {
-                codexTotals += totals
-                if !cleanName.isEmpty && !codexAccounts.contains(cleanName) {
-                    codexAccounts.append(cleanName)
-                }
-            } else if lowerType.contains("claude") || lowerProvider.contains("claude") || lowerType.contains("anthropic") || lowerProvider.contains("anthropic") || lowerName.contains("claude") {
-                claudeTotals += totals
-                if !cleanName.isEmpty && !claudeAccounts.contains(cleanName) {
-                    claudeAccounts.append(cleanName)
-                }
-            } else if lowerType.contains("antigravity") || lowerProvider.contains("antigravity") || (lowerType.isEmpty && lowerProvider.isEmpty) || lowerName.contains("antigravity") || lowerName.contains("agy") {
-                if lowerName.contains("wisnumandala") || lowerName.contains("pro") || lowerPlan.contains("pro") {
-                    agyProTotals += totals
-                    if !cleanName.isEmpty && !agyProAccounts.contains(cleanName) {
-                        agyProAccounts.append(cleanName)
-                    }
-                } else {
-                    agyTotals += totals
-                    if !cleanName.isEmpty && !agyAccounts.contains(cleanName) {
-                        agyAccounts.append(cleanName)
-                    }
-                }
+            func text(_ column: Int32) -> String {
+                sqlite3_column_text(statement, column).map { String(cString: $0) } ?? ""
             }
+            let name = text(0)
+            let accountName = name.contains("@") ? String(name.split(separator: "@").first ?? "") : name
+            let totals = AgentTokenTotals(
+                requestCount: Int(sqlite3_column_int64(statement, 5)),
+                totalTokens: Int(sqlite3_column_int64(statement, 6)),
+                cacheReadTokens: Int(sqlite3_column_int64(statement, 7))
+            )
+            let channel = channel(
+                name: name,
+                type: text(1),
+                provider: text(2),
+                planType: text(3),
+                executorType: text(4),
+                isProAccount: proAccounts.contains(accountName.lowercased())
+            )
+            usage.add(totals, account: accountName, to: channel)
         }
-
-        return KeeperTodayUsage(
-            agy: agyTotals,
-            agyPro: agyProTotals,
-            codex: codexTotals,
-            claude: claudeTotals,
-            agyAccounts: agyAccounts,
-            agyProAccounts: agyProAccounts,
-            codexAccounts: codexAccounts,
-            claudeAccounts: claudeAccounts
-        )
+        return usage
     }
 
-    private static func tableHasColumns(db: OpaquePointer, table: String, requiredColumns: [String]) -> Bool {
+    /// Prefers the executor CPA ran the request with; identity fields and
+    /// the account name are only a fallback for rows or schemas without one.
+    static func channel(
+        name: String,
+        type: String,
+        provider: String,
+        planType: String,
+        executorType: String,
+        isProAccount: Bool
+    ) -> Channel {
+        let executor = executorType.lowercased()
+        let identity = [type.lowercased(), provider.lowercased()]
+        let lowerName = name.lowercased()
+
+        let base: Channel
+        if executor.contains("codex") {
+            base = .codex
+        } else if executor.contains("claude") || executor.contains("anthropic") {
+            base = .claude
+        } else if executor.contains("antigravity") {
+            base = .agy
+        } else if !executor.isEmpty {
+            base = .other
+        } else if identity.contains(where: { $0.contains("codex") }) || lowerName.contains("codex") {
+            base = .codex
+        } else if identity.contains(where: { $0.contains("claude") || $0.contains("anthropic") })
+                    || lowerName.contains("claude") {
+            base = .claude
+        } else if identity.contains(where: { $0.contains("antigravity") })
+                    || lowerName.contains("antigravity") || lowerName.contains("agy")
+                    // Legacy KEEPER identities had no type or provider and were all Antigravity.
+                    || (identity.allSatisfy(\.isEmpty) && !name.isEmpty) {
+            base = .agy
+        } else {
+            base = .other
+        }
+
+        guard base == .agy else { return base }
+        return isProAccount || planType.lowercased() == "pro" ? .agyPro : .agy
+    }
+
+    /// `bucket_start` holds the local day start, e.g. "2026-10-05T00:00:00+08:00".
+    static func bucketPrefix(for now: Date, calendar: Calendar) -> String {
+        let formatter = DateFormatter()
+        formatter.calendar = Calendar(identifier: .gregorian)
+        formatter.locale = Locale(identifier: "en_US_POSIX")
+        formatter.timeZone = calendar.timeZone
+        formatter.dateFormat = "yyyy-MM-dd"
+        return formatter.string(from: now) + "%"
+    }
+
+    private static func columns(db: OpaquePointer, table: String) -> Set<String> {
         var statement: OpaquePointer?
-        let query = "PRAGMA table_info(\(table));"
-        guard sqlite3_prepare_v2(db, query, -1, &statement, nil) == SQLITE_OK else {
-            return false
+        guard sqlite3_prepare_v2(db, "PRAGMA table_info(\(table));", -1, &statement, nil) == SQLITE_OK else {
+            return []
         }
         defer { sqlite3_finalize(statement) }
 
-        var foundColumns = Set<String>()
+        var found = Set<String>()
         while sqlite3_step(statement) == SQLITE_ROW {
             if let namePtr = sqlite3_column_text(statement, 1) {
-                foundColumns.insert(String(cString: namePtr).lowercased())
+                found.insert(String(cString: namePtr).lowercased())
             }
         }
-        return requiredColumns.allSatisfy { foundColumns.contains($0.lowercased()) }
+        return found
     }
 
-    static let enhancedTotalsQuery = """
-        SELECT ui.name,
-               COALESCE(ui.type, ''),
-               COALESCE(ui.provider, ''),
-               COALESCE(ui.plan_type, ''),
-               COALESCE(SUM(uds.request_count), 0),
-               COALESCE(SUM(uds.total_tokens), 0),
-               COALESCE(SUM(uds.cache_read_tokens), 0)
-        FROM usage_overview_daily_stats uds
-        JOIN usage_identities ui ON uds.auth_index = ui.identity
-        WHERE uds.bucket_start LIKE ?1
-        GROUP BY ui.name, ui.type, ui.provider, ui.plan_type
-        """
+    /// Older KEEPER schemas lack some columns; those read as ''. The LEFT
+    /// JOIN keeps usage whose auth index no longer has an identity row.
+    static func totalsQuery(identityColumns: Set<String>, statsColumns: Set<String>) -> String {
+        func identity(_ column: String) -> String {
+            identityColumns.contains(column) ? "COALESCE(ui.\(column), '')" : "''"
+        }
+        let executor = statsColumns.contains("executor_type") ? "COALESCE(uds.executor_type, '')" : "''"
+        return """
+            SELECT COALESCE(ui.name, ''),
+                   \(identity("type")),
+                   \(identity("provider")),
+                   \(identity("plan_type")),
+                   \(executor),
+                   COALESCE(SUM(uds.request_count), 0),
+                   COALESCE(SUM(uds.total_tokens), 0),
+                   COALESCE(SUM(uds.cache_read_tokens), 0)
+            FROM usage_overview_daily_stats uds
+            LEFT JOIN usage_identities ui ON uds.auth_index = ui.identity
+            WHERE uds.bucket_start LIKE ?1
+            GROUP BY 1, 2, 3, 4, 5
+            """
+    }
+}
 
-    static let legacyTotalsQuery = """
-        SELECT ui.name,
-               '',
-               '',
-               '',
-               COALESCE(SUM(uds.request_count), 0),
-               COALESCE(SUM(uds.total_tokens), 0),
-               COALESCE(SUM(uds.cache_read_tokens), 0)
-        FROM usage_overview_daily_stats uds
-        JOIN usage_identities ui ON uds.auth_index = ui.identity
-        WHERE uds.bucket_start LIKE ?1
-        GROUP BY ui.name
-        """
+extension KeeperTodayUsage {
+    mutating func add(_ totals: AgentTokenTotals, account: String, to channel: KeeperUsageReader.Channel) {
+        func append(_ accounts: inout [String]) {
+            if !account.isEmpty && !accounts.contains(account) {
+                accounts.append(account)
+            }
+        }
+        switch channel {
+        case .agy:
+            agy += totals
+            append(&agyAccounts)
+        case .agyPro:
+            agyPro += totals
+            append(&agyProAccounts)
+        case .codex:
+            codex += totals
+            append(&codexAccounts)
+        case .claude:
+            claude += totals
+            append(&claudeAccounts)
+        case .other:
+            other += totals
+            append(&otherAccounts)
+        }
+    }
 }
