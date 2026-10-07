@@ -242,9 +242,9 @@ final class ProcessMonitoringCoordinator {
         preResolvedJumpTargets: [String: JumpTarget]? = nil,
         observedCodexAppRunning: Bool? = nil,
         liveCodexRecords: [CodexTrackedSessionRecord] = [],
-        preloadedClaudeSessions: [String: AgentSession]? = nil,
-        preloadedAgyRecords: [String: AgySessionRecord]? = nil,
-        preloadedCodexLiveRecords: [String: CodexTrackedSessionRecord]? = nil
+        preloadedClaudeSessions: PreloadedReads<AgentSession>? = nil,
+        preloadedAgyRecords: PreloadedReads<AgySessionRecord>? = nil,
+        preloadedCodexLiveRecords: PreloadedReads<CodexTrackedSessionRecord>? = nil
     ) {
         let activeProcesses = activeProcesses ?? activeAgentProcessDiscovery.discover()
 
@@ -379,8 +379,9 @@ final class ProcessMonitoringCoordinator {
             if session.tool == .claudeCode,
                let transcriptPath = session.claudeMetadata?.transcriptPath,
                !transcriptPath.isEmpty {
-                let parsed = preloadedClaudeSessions?[transcriptPath]
-                    ?? claudeTranscriptDiscovery.parseSession(at: URL(fileURLWithPath: transcriptPath))
+                let parsed = Self.preloadedValue(preloadedClaudeSessions, for: transcriptPath) {
+                    claudeTranscriptDiscovery.parseSession(at: URL(fileURLWithPath: transcriptPath))
+                }
                 if let parsed {
                     if parsed.phase != session.phase || (parsed.phase == .running && parsed.claudeMetadata?.currentTool != session.claudeMetadata?.currentTool) {
                         var updated = session
@@ -398,8 +399,9 @@ final class ProcessMonitoringCoordinator {
                !session.isCodexAppSession,
                let transcriptPath = session.codexMetadata?.transcriptPath,
                !transcriptPath.isEmpty {
-                let parsed = preloadedCodexLiveRecords?[transcriptPath]
-                    ?? liveCodexTranscriptReader.liveSessionRecord(transcriptPath: transcriptPath)
+                let parsed = Self.preloadedValue(preloadedCodexLiveRecords, for: transcriptPath) {
+                    liveCodexTranscriptReader.liveSessionRecord(transcriptPath: transcriptPath)
+                }
                 if let parsed {
                     if parsed.phase != session.phase || (parsed.phase == .running && parsed.codexMetadata?.currentTool != session.codexMetadata?.currentTool) {
                         var updated = session
@@ -414,11 +416,12 @@ final class ProcessMonitoringCoordinator {
             }
 
             if session.tool == .geminiCLI {
-                let record = preloadedAgyRecords?[session.id]
-                    ?? AgySessionReader.fetchRecord(
+                let record = Self.preloadedValue(preloadedAgyRecords, for: session.id) {
+                    AgySessionReader.fetchRecord(
                         sessionID: session.id,
                         transcriptPath: session.geminiMetadata?.transcriptPath
                     )
+                }
                 if let record {
                     let targetPhase: SessionPhase = record.isRunning ? .running : .completed
                     if session.phase != targetPhase {
@@ -938,7 +941,7 @@ final class ProcessMonitoringCoordinator {
     func mergedWithSyntheticClaudeSessions(
         existingSessions: [AgentSession],
         activeProcesses: [ActiveProcessSnapshot],
-        preloadedClaudeSessions: [String: AgentSession]? = nil,
+        preloadedClaudeSessions: PreloadedReads<AgentSession>? = nil,
         now: Date = .now
     ) -> [AgentSession] {
         let baseSessions = existingSessions.filter { !isSyntheticClaudeSession($0) }
@@ -955,7 +958,7 @@ final class ProcessMonitoringCoordinator {
     private func syntheticClaudeSessions(
         existingSessions: [AgentSession],
         activeProcesses: [ActiveProcessSnapshot],
-        preloadedClaudeSessions: [String: AgentSession]? = nil,
+        preloadedClaudeSessions: PreloadedReads<AgentSession>? = nil,
         now: Date
     ) -> [AgentSession] {
         let activeClaudeProcesses = activeProcesses.filter { process in
@@ -978,7 +981,7 @@ final class ProcessMonitoringCoordinator {
 
     private func syntheticClaudeSession(
         for process: ActiveProcessSnapshot,
-        preloadedClaudeSessions: [String: AgentSession]? = nil,
+        preloadedClaudeSessions: PreloadedReads<AgentSession>? = nil,
         now: Date
     ) -> AgentSession {
         let workingDirectory = process.workingDirectory
@@ -1009,8 +1012,9 @@ final class ProcessMonitoringCoordinator {
 
         if let transcriptPath = process.transcriptPath, !transcriptPath.isEmpty {
             session.claudeMetadata = ClaudeSessionMetadata(transcriptPath: transcriptPath)
-            let parsed = preloadedClaudeSessions?[transcriptPath]
-                ?? claudeTranscriptDiscovery.parseSession(at: URL(fileURLWithPath: transcriptPath))
+            let parsed = Self.preloadedValue(preloadedClaudeSessions, for: transcriptPath) {
+                claudeTranscriptDiscovery.parseSession(at: URL(fileURLWithPath: transcriptPath))
+            }
             if let parsed {
                 session.phase = parsed.phase
                 session.summary = parsed.summary
@@ -1057,28 +1061,44 @@ final class ProcessMonitoringCoordinator {
         return records
     }
 
+    /// Background preload results keyed by transcript path or session ID. A
+    /// key mapped to `nil` was read and found nothing; only keys missing
+    /// entirely (sessions that appeared after the preload started) are read
+    /// again on the main actor.
+    typealias PreloadedReads<Value> = [String: Value?]
+
+    nonisolated static func preloadedValue<Value>(
+        _ reads: PreloadedReads<Value>?,
+        for key: String,
+        orLoad load: () -> Value?
+    ) -> Value? {
+        if let reads, let entry = reads[key] {
+            return entry
+        }
+        return load()
+    }
+
+    /// Only sessions whose process is alive are read: the reconcile loop
+    /// skips the rest, so parsing their transcripts would be wasted I/O.
     nonisolated static func preloadClaudeTranscripts(
         activeProcesses: [ActiveProcessSnapshot],
         sessions: [AgentSession],
         discovery: ClaudeTranscriptDiscovery
-    ) -> [String: AgentSession] {
+    ) -> PreloadedReads<AgentSession> {
         var paths = Set<String>()
         for process in activeProcesses where process.tool == .claudeCode {
             if let path = process.transcriptPath, !path.isEmpty {
                 paths.insert(path)
             }
         }
-        for session in sessions where session.tool == .claudeCode {
+        for session in sessions where session.tool == .claudeCode && session.isProcessAlive {
             if let path = session.claudeMetadata?.transcriptPath, !path.isEmpty {
                 paths.insert(path)
             }
         }
-        var result: [String: AgentSession] = [:]
+        var result: PreloadedReads<AgentSession> = [:]
         for path in paths {
-            let url = URL(fileURLWithPath: path)
-            if let parsed = discovery.parseSession(at: url) {
-                result[path] = parsed
-            }
+            result.updateValue(discovery.parseSession(at: URL(fileURLWithPath: path)), forKey: path)
         }
         return result
     }
@@ -1086,24 +1106,23 @@ final class ProcessMonitoringCoordinator {
     nonisolated static func preloadAgyRecords(
         activeProcesses: [ActiveProcessSnapshot],
         sessions: [AgentSession]
-    ) -> [String: AgySessionRecord] {
+    ) -> PreloadedReads<AgySessionRecord> {
         var targets: [(id: String, path: String?)] = []
         for process in activeProcesses where process.tool == .geminiCLI {
             let sessionID = process.sessionID ?? agySyntheticSessionID(for: process)
             targets.append((sessionID, process.transcriptPath))
         }
-        for session in sessions where session.tool == .geminiCLI {
+        for session in sessions where session.tool == .geminiCLI && session.isProcessAlive {
             targets.append((session.id, session.geminiMetadata?.transcriptPath))
         }
-        var result: [String: AgySessionRecord] = [:]
-        for target in targets {
-            if result[target.id] != nil { continue }
-            if let record = AgySessionReader.fetchRecord(
-                sessionID: target.id,
-                transcriptPath: target.path
-            ) {
-                result[target.id] = record
-            }
+        var result: PreloadedReads<AgySessionRecord> = [:]
+        // fetchRecord already falls back to every candidate database, so one
+        // attempt per ID is final even when it finds nothing.
+        for target in targets where result.index(forKey: target.id) == nil {
+            result.updateValue(
+                AgySessionReader.fetchRecord(sessionID: target.id, transcriptPath: target.path),
+                forKey: target.id
+            )
         }
         return result
     }
@@ -1111,13 +1130,12 @@ final class ProcessMonitoringCoordinator {
     nonisolated static func preloadCodexLiveRecords(
         sessions: [AgentSession],
         reader: CodexRolloutDiscovery
-    ) -> [String: CodexTrackedSessionRecord] {
-        var result: [String: CodexTrackedSessionRecord] = [:]
-        for session in sessions where session.tool == .codex && !session.isCodexAppSession {
+    ) -> PreloadedReads<CodexTrackedSessionRecord> {
+        var result: PreloadedReads<CodexTrackedSessionRecord> = [:]
+        for session in sessions
+        where session.tool == .codex && !session.isCodexAppSession && session.isProcessAlive {
             if let path = session.codexMetadata?.transcriptPath, !path.isEmpty {
-                if let record = reader.liveSessionRecord(transcriptPath: path) {
-                    result[path] = record
-                }
+                result.updateValue(reader.liveSessionRecord(transcriptPath: path), forKey: path)
             }
         }
         return result
@@ -1247,7 +1265,7 @@ final class ProcessMonitoringCoordinator {
     func mergedWithLiveAgySessions(
         existingSessions: [AgentSession],
         activeProcesses: [ActiveProcessSnapshot],
-        preloadedAgyRecords: [String: AgySessionRecord]? = nil,
+        preloadedAgyRecords: PreloadedReads<AgySessionRecord>? = nil,
         now: Date = .now
     ) -> [AgentSession] {
         let activeAgyProcesses = activeProcesses.filter { $0.tool == .geminiCLI }
@@ -1275,10 +1293,12 @@ final class ProcessMonitoringCoordinator {
                 ?? process.terminalApp?.trimmingCharacters(in: .whitespacesAndNewlines)
                 ?? "Antigravity"
 
-            let record = preloadedAgyRecords?[sessionID] ?? AgySessionReader.fetchRecord(
-                sessionID: sessionID,
-                transcriptPath: process.transcriptPath
-            )
+            let record = Self.preloadedValue(preloadedAgyRecords, for: sessionID) {
+                AgySessionReader.fetchRecord(
+                    sessionID: sessionID,
+                    transcriptPath: process.transcriptPath
+                )
+            }
 
             let isRunning = record?.isRunning ?? false
             let phase: SessionPhase = isRunning ? .running : .completed
