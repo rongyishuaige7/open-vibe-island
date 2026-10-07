@@ -1,4 +1,6 @@
 import Foundation
+import Observation
+import os
 import Testing
 @testable import OpenIslandApp
 import OpenIslandCore
@@ -32,6 +34,25 @@ struct TodayTokenUsageMonitorTests {
 
         #expect(monitor.usage?.claude.totalTokens == 42)
         #expect(monitor.lastErrorMessage == nil)
+    }
+
+    @Test
+    func identicalRefreshDoesNotNotifyObservers() {
+        let monitor = makeMonitor()
+        monitor.apply(.success(makeUsage(claudeTokens: 42)), now: Self.now, calendar: Self.calendar)
+
+        let changed = OSAllocatedUnfairLock(initialState: false)
+        withObservationTracking {
+            _ = monitor.usage
+            _ = monitor.lastErrorMessage
+        } onChange: {
+            changed.withLock { $0 = true }
+        }
+        monitor.apply(.success(makeUsage(claudeTokens: 42)), now: Self.now, calendar: Self.calendar)
+        #expect(!changed.withLock { $0 })
+
+        monitor.apply(.success(makeUsage(claudeTokens: 43)), now: Self.now, calendar: Self.calendar)
+        #expect(changed.withLock { $0 })
     }
 
     @Test
@@ -106,14 +127,18 @@ struct TodayTokenUsageMonitorTests {
         #expect(monitor.usage?.codex.cacheReadTokens == 9_396_456)
         #expect(monitor.usage?.agy.totalTokens == 1_705_198)
         #expect(monitor.usage?.agyPro.totalTokens == 264_017)
-        #expect(monitor.usage?.codexAccountHint == "rongyiplus4, CC Switch")
+        #expect(monitor.usage?.codexAccountHint == "CC Switch")
+        #expect(monitor.usage?.agyAccountHint == "")
+        #expect(monitor.usage?.totalTokens == 2_000 + 10_143_778 + 1_705_198 + 264_017)
 
         let dynamicUsage = TodayTokenUsage(
             dayStart: today,
             agyAccounts: ["sk44989", "victorcranston465"],
             agyProAccounts: ["wisnumandala302"],
-            codexAccounts: ["rongyiplus4", "rongyiplus5"]
+            codexAccounts: ["rongyiplus4", "rongyiplus5"],
+            claudeAccounts: ["keeper-claude"]
         )
+        #expect(dynamicUsage.claudeAccountHint == "keeper-claude, CC Switch")
         #expect(dynamicUsage.codexAccountHint == "rongyiplus4, rongyiplus5, CC Switch")
         #expect(dynamicUsage.agyAccountHint == "sk44989, victorcranston465")
         #expect(dynamicUsage.agyProAccountHint == "wisnumandala302")

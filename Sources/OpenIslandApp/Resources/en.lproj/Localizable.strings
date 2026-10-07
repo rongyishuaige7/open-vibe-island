@@ -36,9 +36,11 @@
 "usage.todayTokens.readFailed" = "Last refresh failed: %@";
 "usage.todayTokens.detailTitle" = "Today's Token Usage";
 "usage.todayTokens.totalLabel" = "Total Tokens Today";
+"usage.todayTokens.totalLine" = "Total Tokens Today: %@";
 "usage.todayTokens.dataSource" = "Sources: CC Switch & KEEPER local logs";
 "usage.todayTokens.agyPool" = "AGY Pool";
 "usage.todayTokens.agyPro" = "AGY Pro";
+"usage.todayTokens.other" = "Other";
 "usage.todayTokens.subtext" = "%@ requests · cache %@";
 "settings.general.completionReply" = "Reply from completion card";
 "settings.general.cliHooks" = "CLI Hooks";
