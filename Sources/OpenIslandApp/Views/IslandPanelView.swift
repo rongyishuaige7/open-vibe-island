@@ -1190,57 +1190,32 @@ struct IslandPanelView: View {
         _ provider: UsageProviderPresentation,
         layout: UsageChipLayout
     ) -> some View {
-        let monitor = model.todayTokenUsageMonitor
-        let languageCode = lang.language.resolvedCode
-        let claudeTokens = monitor.usage?.claude.totalTokens ?? 0
-        let codexTokens = monitor.usage?.codex.totalTokens ?? 0
-        let claudeFormatted = TokenCountFormatter.compact(claudeTokens, languageCode: languageCode)
-        let codexFormatted = TokenCountFormatter.compact(codexTokens, languageCode: languageCode)
-
-        return Button {
+        Button {
             withAnimation(.spring(response: 0.28, dampingFraction: 0.82)) {
                 showingTokenDetailPopover.toggle()
             }
         } label: {
             HStack(spacing: 5) {
                 Image(systemName: "bolt.fill")
-                    .font(.system(size: 9, weight: .bold))
+                    .font(.system(size: 9.5, weight: .bold))
                     .foregroundStyle(Color.orange.opacity(0.95))
 
-                HStack(spacing: 3) {
-                    Circle()
-                        .fill(IslandDesignPalette.Status.runningClaude)
-                        .frame(width: 5, height: 5)
-                    Text("Cl")
-                        .font(.system(size: 9.5, weight: .semibold, design: .monospaced))
-                        .foregroundStyle(.white.opacity(0.52))
-                    Text(claudeFormatted)
-                        .font(.system(size: 10.5, weight: .bold, design: .monospaced))
-                        .foregroundStyle(.white.opacity(0.92))
+                if !layout.usesShortTitle {
+                    Text(provider.title)
+                        .font(.system(size: 11, weight: .semibold))
+                        .foregroundStyle(.white.opacity(0.74))
                 }
 
-                Text("·")
-                    .font(.system(size: 10, weight: .medium))
-                    .foregroundStyle(.white.opacity(0.3))
-
-                HStack(spacing: 3) {
-                    Circle()
-                        .fill(IslandDesignPalette.Status.runningCodex)
-                        .frame(width: 5, height: 5)
-                    Text("Cx")
-                        .font(.system(size: 9.5, weight: .semibold, design: .monospaced))
-                        .foregroundStyle(.white.opacity(0.52))
-                    Text(codexFormatted)
-                        .font(.system(size: 10.5, weight: .bold, design: .monospaced))
-                        .foregroundStyle(.white.opacity(0.92))
-                }
+                Text(provider.totalTokensFormatted.isEmpty ? "0" : provider.totalTokensFormatted)
+                    .font(.system(size: 11.5, weight: .bold, design: .monospaced))
+                    .foregroundStyle(.white.opacity(0.95))
 
                 Image(systemName: showingTokenDetailPopover ? "chevron.up" : "chevron.down")
-                    .font(.system(size: 7.5, weight: .semibold))
+                    .font(.system(size: 8, weight: .semibold))
                     .foregroundStyle(.white.opacity(0.45))
             }
-            .padding(.horizontal, 7)
-            .padding(.vertical, 3.5)
+            .padding(.horizontal, 8)
+            .padding(.vertical, 4)
             .background(
                 showingTokenDetailPopover
                     ? Color.white.opacity(0.12)
