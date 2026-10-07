@@ -91,8 +91,11 @@ public final class ConversationTitleResolver: @unchecked Sendable {
     }
 
     private struct AgyDbEntry {
-        var stamp: FileStamp
-        var titles: [String: String]
+        /// The database file and its `-wal`: in WAL mode new writes land in
+        /// the `-wal` file, and the main file only changes on a checkpoint.
+        var stamp: [FileStamp?]
+        /// Every session ID read at this stamp; nil means no title yet.
+        var titles: [String: String?]
     }
 
     static let maxTitleLength = 200
@@ -224,20 +227,26 @@ public final class ConversationTitleResolver: @unchecked Sendable {
     // MARK: - Antigravity / Gemini
 
     private func agyTitle(sessionID: String, databasePath: String) -> String? {
-        guard let stamp = Self.stamp(databasePath) else { return nil }
-        if let cached = lock.withLock({ agyDatabases[databasePath] }), cached.stamp == stamp {
-            return cached.titles[sessionID]
+        guard let databaseStamp = Self.stamp(databasePath) else { return nil }
+        let stamp = [databaseStamp, Self.stamp(databasePath + "-wal")]
+        // Each session is read once per stamp; another session in the same
+        // database is not covered by a cached entry until it has been read.
+        if let cached = lock.withLock({ agyDatabases[databasePath] }), cached.stamp == stamp,
+           let title = cached.titles[sessionID] {
+            return title
         }
 
-        var titles = lock.withLock({ agyDatabases[databasePath]?.titles }) ?? [:]
-        if let record = AgySessionReader.fetchRecord(sessionID: sessionID, databasePath: databasePath),
-           !record.title.isEmpty {
-            if let sanitized = Self.sanitizedTitle(record.title) {
-                titles[sessionID] = sanitized
+        let title = AgySessionReader.fetchTitle(sessionID: sessionID, databasePath: databasePath)
+            .flatMap(Self.sanitizedTitle)
+        lock.withLock {
+            var entry = agyDatabases[databasePath]
+            if entry?.stamp != stamp {
+                entry = AgyDbEntry(stamp: stamp, titles: [:])
             }
+            entry?.titles.updateValue(title, forKey: sessionID)
+            agyDatabases[databasePath] = entry
         }
-        lock.withLock { agyDatabases[databasePath] = AgyDbEntry(stamp: stamp, titles: titles) }
-        return titles[sessionID]
+        return title
     }
 
     // MARK: - Helpers
