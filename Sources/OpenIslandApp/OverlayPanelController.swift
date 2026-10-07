@@ -904,12 +904,27 @@ final class NotchEventMonitors {
 
         nonisolated(unsafe) var sharedLastMove: TimeInterval = 0
 
+        let dispatchMove: @Sendable (NSPoint) -> Void = { location in
+            if Thread.isMainThread {
+                MainActor.assumeIsolated { mouseMoveHandler(location) }
+            } else {
+                Task { @MainActor in mouseMoveHandler(location) }
+            }
+        }
+        let dispatchClick: @Sendable (NSPoint, Bool) -> Void = { location, isLocal in
+            if Thread.isMainThread {
+                MainActor.assumeIsolated { mouseDownHandler(location, isLocal) }
+            } else {
+                Task { @MainActor in mouseDownHandler(location, isLocal) }
+            }
+        }
+
         globalMoveMonitor = NSEvent.addGlobalMonitorForEvents(matching: .mouseMoved) { event in
             let now = ProcessInfo.processInfo.systemUptime
             guard now - sharedLastMove >= throttleInterval else { return }
             sharedLastMove = now
             let location = NSEvent.mouseLocation
-            Task { @MainActor in mouseMoveHandler(location) }
+            dispatchMove(location)
         }
 
         localMoveMonitor = NSEvent.addLocalMonitorForEvents(matching: .mouseMoved) { event in
@@ -917,18 +932,18 @@ final class NotchEventMonitors {
             guard now - sharedLastMove >= throttleInterval else { return event }
             sharedLastMove = now
             let location = NSEvent.mouseLocation
-            Task { @MainActor in mouseMoveHandler(location) }
+            dispatchMove(location)
             return event
         }
 
         globalClickMonitor = NSEvent.addGlobalMonitorForEvents(matching: .leftMouseDown) { event in
             let location = NSEvent.mouseLocation
-            Task { @MainActor in mouseDownHandler(location, false) }
+            dispatchClick(location, false)
         }
 
         localClickMonitor = NSEvent.addLocalMonitorForEvents(matching: .leftMouseDown) { event in
             let location = NSEvent.mouseLocation
-            Task { @MainActor in mouseDownHandler(location, true) }
+            dispatchClick(location, true)
             return event
         }
     }

@@ -2369,7 +2369,7 @@ private struct IslandSessionRow: View {
             .fill(tint)
             .frame(width: 9, height: 9)
             .scaleEffect(1 + (pulse * 0.18))
-            .shadow(color: tint.opacity(presence == .inactive ? 0 : 0.36 + (pulse * 0.26)), radius: 4 + (pulse * 3))
+            .shadow(color: tint.opacity(presence == .inactive ? 0 : 0.36 + (pulse * 0.26)), radius: 5.5)
             .padding(.top, 6)
     }
 
