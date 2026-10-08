@@ -98,17 +98,37 @@ public enum KeeperUsageReader {
         defer { sqlite3_close(db) }
         sqlite3_busy_timeout(db, 200)
 
+        // KEEPER buckets carry its own business time zone (e.g. +08:00), not
+        // the user's. Hourly buckets can be cut at the user's local midnight;
+        // daily ones only line up when the two zones match, so they are the
+        // fallback for KEEPER versions without the hourly table.
+        let dayStart = calendar.startOfDay(for: now)
+        let dayEnd = calendar.date(byAdding: .day, value: 1, to: dayStart)
+            ?? dayStart.addingTimeInterval(86_400)
+        let identityColumns = columns(db: db, table: "usage_identities")
+        let hourlyColumns = columns(db: db, table: "usage_overview_hourly_stats")
+        let usesHourly = !hourlyColumns.isEmpty
+
         var statement: OpaquePointer?
-        let sql = totalsQuery(
-            identityColumns: columns(db: db, table: "usage_identities"),
-            statsColumns: columns(db: db, table: "usage_overview_daily_stats")
-        )
+        let sql = usesHourly
+            ? totalsQuery(table: "usage_overview_hourly_stats", identityColumns: identityColumns,
+                          statsColumns: hourlyColumns, dayFilter: .instantRange)
+            : totalsQuery(table: "usage_overview_daily_stats", identityColumns: identityColumns,
+                          statsColumns: columns(db: db, table: "usage_overview_daily_stats"), dayFilter: .datePrefix)
         guard sqlite3_prepare_v2(db, sql, -1, &statement, nil) == SQLITE_OK else {
             throw KeeperUsageError.sqlite(String(cString: sqlite3_errmsg(db)))
         }
         defer { sqlite3_finalize(statement) }
 
-        sqlite3_bind_text(statement, 1, (bucketPrefix(for: now, calendar: calendar) as NSString).utf8String, -1, nil)
+        if usesHourly {
+            let bounds = bucketStringBounds(dayStart: dayStart, dayEnd: dayEnd)
+            sqlite3_bind_text(statement, 1, (bounds.lower as NSString).utf8String, -1, nil)
+            sqlite3_bind_text(statement, 2, (bounds.upper as NSString).utf8String, -1, nil)
+            sqlite3_bind_int64(statement, 3, Int64(dayStart.timeIntervalSince1970))
+            sqlite3_bind_int64(statement, 4, Int64(dayEnd.timeIntervalSince1970))
+        } else {
+            sqlite3_bind_text(statement, 1, (bucketPrefix(for: now, calendar: calendar) as NSString).utf8String, -1, nil)
+        }
 
         let proAccounts = Set(agyProAccounts.map { $0.lowercased() })
         var usage = KeeperTodayUsage()
@@ -182,14 +202,31 @@ public enum KeeperUsageReader {
         return isProAccount || planType.lowercased() == "pro" ? .agyPro : .agy
     }
 
-    /// `bucket_start` holds the local day start, e.g. "2026-10-05T00:00:00+08:00".
+    /// Daily-table fallback: `bucket_start` holds KEEPER's day start, e.g.
+    /// "2026-10-05T00:00:00+08:00", matched by the user's local date.
     static func bucketPrefix(for now: Date, calendar: Calendar) -> String {
+        dayFormatter(timeZone: calendar.timeZone).string(from: now) + "%"
+    }
+
+    /// A coarse string range around the day for the `bucket_start` index.
+    /// A bucket's own date is within a day of its UTC date whatever its
+    /// offset, so a day of margin on each side keeps every candidate; the
+    /// exact cut is the epoch comparison.
+    static func bucketStringBounds(dayStart: Date, dayEnd: Date) -> (lower: String, upper: String) {
+        let utc = dayFormatter(timeZone: TimeZone(identifier: "UTC")!)
+        return (
+            utc.string(from: dayStart.addingTimeInterval(-86_400)),
+            utc.string(from: dayEnd.addingTimeInterval(2 * 86_400))
+        )
+    }
+
+    private static func dayFormatter(timeZone: TimeZone) -> DateFormatter {
         let formatter = DateFormatter()
         formatter.calendar = Calendar(identifier: .gregorian)
         formatter.locale = Locale(identifier: "en_US_POSIX")
-        formatter.timeZone = calendar.timeZone
+        formatter.timeZone = timeZone
         formatter.dateFormat = "yyyy-MM-dd"
-        return formatter.string(from: now) + "%"
+        return formatter
     }
 
     private static func columns(db: OpaquePointer, table: String) -> Set<String> {
@@ -208,13 +245,37 @@ public enum KeeperUsageReader {
         return found
     }
 
+    enum DayFilter {
+        /// ?1 `LIKE` prefix on the bucket's date.
+        case datePrefix
+        /// ?1/?2 string bounds for the index, then ?3 <= bucket epoch < ?4.
+        case instantRange
+    }
+
     /// Older KEEPER schemas lack some columns; those read as ''. The LEFT
     /// JOIN keeps usage whose auth index no longer has an identity row.
-    static func totalsQuery(identityColumns: Set<String>, statsColumns: Set<String>) -> String {
+    static func totalsQuery(
+        table: String,
+        identityColumns: Set<String>,
+        statsColumns: Set<String>,
+        dayFilter: DayFilter
+    ) -> String {
         func identity(_ column: String) -> String {
             identityColumns.contains(column) ? "COALESCE(ui.\(column), '')" : "''"
         }
         let executor = statsColumns.contains("executor_type") ? "COALESCE(uds.executor_type, '')" : "''"
+        let filter: String
+        switch dayFilter {
+        case .datePrefix:
+            filter = "uds.bucket_start LIKE ?1"
+        case .instantRange:
+            // SQLite reads the "+08:00" offset, so strftime gives the real instant.
+            filter = """
+                uds.bucket_start >= ?1 AND uds.bucket_start < ?2
+                  AND CAST(strftime('%s', uds.bucket_start) AS INTEGER) >= ?3
+                  AND CAST(strftime('%s', uds.bucket_start) AS INTEGER) < ?4
+                """
+        }
         return """
             SELECT COALESCE(ui.name, ''),
                    \(identity("type")),
@@ -224,9 +285,9 @@ public enum KeeperUsageReader {
                    COALESCE(SUM(uds.request_count), 0),
                    COALESCE(SUM(uds.total_tokens), 0),
                    COALESCE(SUM(uds.cache_read_tokens), 0)
-            FROM usage_overview_daily_stats uds
+            FROM \(table) uds
             LEFT JOIN usage_identities ui ON uds.auth_index = ui.identity
-            WHERE uds.bucket_start LIKE ?1
+            WHERE \(filter)
             GROUP BY 1, 2, 3, 4, 5
             """
     }

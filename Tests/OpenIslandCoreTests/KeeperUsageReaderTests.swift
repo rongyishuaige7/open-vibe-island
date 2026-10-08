@@ -190,6 +190,59 @@ struct KeeperUsageReaderTests {
         #expect(noPro.agy.totalTokens == 1500)
     }
 
+    /// KEEPER's buckets are in +08:00 while this user's day runs in New York:
+    /// the +08:00 "2026-10-08" day is New York's Oct 7 noon to Oct 8 noon.
+    @Test
+    func hourlyBucketsAreCutAtTheUsersLocalMidnight() throws {
+        let dbURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent("test-keeper-hourly-\(UUID().uuidString).db")
+        defer { try? FileManager.default.removeItem(at: dbURL) }
+
+        var handle: OpaquePointer?
+        guard sqlite3_open(dbURL.path, &handle) == SQLITE_OK, let db = handle else {
+            fatalError("Failed to open test db")
+        }
+        defer { sqlite3_close(db) }
+
+        let schema = """
+            CREATE TABLE usage_identities (id INTEGER PRIMARY KEY, name TEXT, identity TEXT);
+            CREATE TABLE usage_overview_daily_stats (
+                id INTEGER PRIMARY KEY, bucket_start TEXT, auth_index TEXT, executor_type TEXT,
+                request_count INTEGER, total_tokens INTEGER, cache_read_tokens INTEGER
+            );
+            CREATE TABLE usage_overview_hourly_stats (
+                id INTEGER PRIMARY KEY, bucket_start TEXT, auth_index TEXT, executor_type TEXT,
+                request_count INTEGER, total_tokens INTEGER, cache_read_tokens INTEGER
+            );
+            INSERT INTO usage_identities (id, name, identity) VALUES (1, 'rongyiplus4@163.com', 'idx-codex');
+            -- The daily table would give the misaligned +08:00 day.
+            INSERT INTO usage_overview_daily_stats
+                (bucket_start, auth_index, executor_type, request_count, total_tokens, cache_read_tokens) VALUES
+                ('2026-10-08T00:00:00+08:00', 'idx-codex', 'CodexExecutor', 999, 999999, 0);
+            INSERT INTO usage_overview_hourly_stats
+                (bucket_start, auth_index, executor_type, request_count, total_tokens, cache_read_tokens) VALUES
+                ('2026-10-08T11:00:00+08:00', 'idx-codex', 'CodexExecutor', 1, 1, 0),
+                ('2026-10-08T12:00:00+08:00', 'idx-codex', 'CodexExecutor', 10, 100, 10),
+                ('2026-10-09T11:00:00+08:00', 'idx-codex', 'CodexExecutor', 20, 200, 20),
+                ('2026-10-09T12:00:00+08:00', 'idx-codex', 'CodexExecutor', 300, 3000, 0);
+        """
+        guard sqlite3_exec(db, schema, nil, nil, nil) == SQLITE_OK else {
+            fatalError("Failed to execute schema")
+        }
+
+        var newYork = Calendar(identifier: .gregorian)
+        newYork.timeZone = TimeZone(identifier: "America/New_York")!
+        // 2026-10-08 07:00 EDT.
+        let now = Date(timeIntervalSince1970: 1_791_457_200)
+
+        let usage = try KeeperUsageReader.loadToday(databaseURL: dbURL, now: now, calendar: newYork)
+
+        // 12:00+08:00 is 00:00 EDT (in); 11:00+08:00 the next day is 23:00 EDT (in);
+        // the buckets an hour either side belong to Oct 7 and Oct 9 in New York.
+        #expect(usage.codex == AgentTokenTotals(requestCount: 30, totalTokens: 300, cacheReadTokens: 30))
+        #expect(usage.codexAccounts == ["rongyiplus4"])
+    }
+
     @Test
     func bucketPrefixIsGregorianWhateverTheUserCalendar() {
         var japanese = Calendar(identifier: .japanese)
