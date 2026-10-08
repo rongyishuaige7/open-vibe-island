@@ -130,6 +130,51 @@ struct AgySessionReaderTests {
     }
 
     @Test
+    func readsWalModeDatabaseAfterWriterRemovedWalFiles() throws {
+        let tempDir = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: tempDir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: tempDir) }
+
+        let dbPath = tempDir.appendingPathComponent("conversation_summaries.db").path
+        var db: OpaquePointer?
+        guard sqlite3_open_v2(dbPath, &db, SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE, nil) == SQLITE_OK else {
+            Issue.record("Failed to create test SQLite db")
+            return
+        }
+        let setup = """
+        PRAGMA journal_mode=WAL;
+        CREATE TABLE conversation_summaries (
+            conversation_id text PRIMARY KEY,
+            title text NOT NULL DEFAULT "",
+            preview text NOT NULL DEFAULT "",
+            step_count integer NOT NULL DEFAULT 0,
+            last_modified_time datetime NOT NULL,
+            workspace_uris text NOT NULL,
+            status text NOT NULL DEFAULT "",
+            not_fully_idle numeric NOT NULL DEFAULT false,
+            app_data_dir text NOT NULL DEFAULT ""
+        );
+        INSERT INTO conversation_summaries (conversation_id, title, last_modified_time, workspace_uris)
+        VALUES ('closed-session', 'Closed', '2026-10-03 11:20:00+00:00', '[]');
+        PRAGMA wal_checkpoint(TRUNCATE);
+        """
+        let setupResult = sqlite3_exec(db, setup, nil, nil, nil)
+        sqlite3_close(db)
+        guard setupResult == SQLITE_OK else {
+            Issue.record("Failed to set up WAL database")
+            return
+        }
+
+        // Antigravity exited and its SQLite deleted the WAL files; the
+        // database header still says WAL mode.
+        try? FileManager.default.removeItem(atPath: dbPath + "-wal")
+        try? FileManager.default.removeItem(atPath: dbPath + "-shm")
+
+        #expect(AgySessionReader.fetchRecord(sessionID: "closed-session", databasePath: dbPath)?.title == "Closed")
+        #expect(AgySessionReader.fetchTitle(sessionID: "closed-session", databasePath: dbPath) == "Closed")
+    }
+
+    @Test
     func conversationTitleResolverSupportsAgyDatabase() throws {
         let tempDir = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         try FileManager.default.createDirectory(at: tempDir, withIntermediateDirectories: true)
