@@ -58,18 +58,23 @@ struct BridgeSnapshotReplayTests {
         // The next hook must find the session instead of re-creating it.
         _ = try BridgeCommandClient(socketURL: socketURL).send(.processCodexHook(promptPayload("replay-1")))
 
+        // The prompt hook may emit metadata updates before its activity
+        // update; what must not appear is a second sessionStarted.
         var iterator = stream.makeAsyncIterator()
-        let first = try await next(&iterator)
-        let second = try await next(&iterator)
-        guard case .sessionStarted = first else {
-            Issue.record("Expected sessionStarted first, got \(String(describing: first))")
-            return
+        var sessionStartedCount = 0
+        var update: SessionActivityUpdated?
+        for _ in 0..<6 {
+            guard let event = try await next(&iterator) else { break }
+            if case .sessionStarted = event {
+                sessionStartedCount += 1
+            }
+            if case let .activityUpdated(payload) = event {
+                update = payload
+                break
+            }
         }
-        guard case let .activityUpdated(update) = second else {
-            Issue.record("Expected activityUpdated, not a duplicate sessionStarted: \(String(describing: second))")
-            return
-        }
-        #expect(update.phase == .running)
+        #expect(sessionStartedCount == 1)
+        #expect(update?.phase == .running)
         #expect(server.sessionStateSnapshotForTests().session(id: "replay-1")?.phase == .running)
     }
 
@@ -81,8 +86,12 @@ struct BridgeSnapshotReplayTests {
         defer { server.stop() }
 
         let observer = LocalBridgeClient(socketURL: socketURL)
-        _ = try observer.connect()
-        defer { observer.disconnect() }
+        // Dropping the stream terminates it, which disconnects the observer.
+        let stream = try observer.connect()
+        defer {
+            withExtendedLifetime(stream) {}
+            observer.disconnect()
+        }
         try await observer.send(.registerClient(role: .observer))
 
         _ = try BridgeCommandClient(socketURL: socketURL).send(.processCodexHook(startPayload("replay-2")))
@@ -103,11 +112,16 @@ struct BridgeSnapshotReplayTests {
         defer { server.stop() }
 
         let observer = LocalBridgeClient(socketURL: socketURL)
-        _ = try observer.connect()
-        defer { observer.disconnect() }
+        // Dropping the stream terminates it, which disconnects the observer.
+        let stream = try observer.connect()
+        defer {
+            withExtendedLifetime(stream) {}
+            observer.disconnect()
+        }
         try await observer.send(.registerClient(role: .observer))
 
         _ = try BridgeCommandClient(socketURL: socketURL).send(.processCodexHook(startPayload("replay-3")))
+        #expect(server.observerEventCountsForTests().sent == 1)
 
         // A count from an earlier connection, beyond what this observer was sent.
         server.updateStateSnapshot(SessionState(), appliedObserverEvents: 99)
