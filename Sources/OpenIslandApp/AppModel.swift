@@ -53,7 +53,7 @@ final class AppModel {
         didSet {
             _cachedSessionBuckets = nil
             pruneAgentsGridObservationTicketsIfNeeded()
-            bridgeServer.updateStateSnapshot(state)
+            bridgeServer.updateStateSnapshot(state, appliedObserverEvents: appliedBridgeEventCount)
             let sessionCount = state.sessions.count
             sessionCountSnapshot.withLock { $0 = sessionCount }
         }
@@ -61,6 +61,9 @@ final class AppModel {
     /// `state.sessions.count`, readable off the main actor. The Watch HTTP
     /// endpoint asks for it on its network queue.
     private let sessionCountSnapshot = OSAllocatedUnfairLock(initialState: 0)
+    /// Events applied from the current bridge observer connection. Every
+    /// snapshot carries it so the bridge can replay the events still in flight.
+    @ObservationIgnored private var appliedBridgeEventCount = 0
     @ObservationIgnored private var _cachedSessionBuckets: (primary: [AgentSession], overflow: [AgentSession])?
 
     /// Monotonic ticket assigned the first time a session ID shows up in the
@@ -1268,6 +1271,7 @@ final class AppModel {
         // have to worry about stale file-descriptor state.
         let client = LocalBridgeClient()
         bridgeClient = client
+        appliedBridgeEventCount = 0
 
         let stream: AsyncThrowingStream<AgentEvent, Error>
         do {
@@ -1303,6 +1307,11 @@ final class AppModel {
 
             do {
                 for try await event in stream {
+                    // A reconnect has already reset the count for its new client.
+                    guard self.bridgeClient === client else { break }
+                    // Count first: applying the event pushes a snapshot that
+                    // already includes it.
+                    self.appliedBridgeEventCount += 1
                     self.applyTrackedEvent(event)
                 }
             } catch {}
