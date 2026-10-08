@@ -9,6 +9,10 @@ public final class BridgeServer: @unchecked Sendable {
         let readSource: DispatchSourceRead
         var role: BridgeClientRole?
         var buffer = Data()
+        /// `.event` envelopes written to this client since it connected. An
+        /// observer counts the events it receives the same way, so the two
+        /// counts name the same position in the stream.
+        var sentEventCount = 0
     }
 
     private struct PendingApproval {
@@ -83,12 +87,18 @@ public final class BridgeServer: @unchecked Sendable {
     /// Tracks the portion of each live Claude transcript already inspected for
     /// terminal background-agent task notifications.
     private var claudeTranscriptCursors: [String: ClaudeTranscriptCursor] = [:]
-    private var stateSnapshot = SessionState()
-    /// Local working state: tracks sessions emitted by this server between
-    /// snapshot pushes from AppModel. This is NOT a duplicate of AppModel's
-    /// state — it only contains sessions created via bridge hooks and is
-    /// overwritten whenever AppModel pushes a fresh snapshot.
+    /// Local working state: AppModel's latest snapshot plus the events this
+    /// server emitted that the snapshot does not cover yet.
     private var localState = SessionState()
+    /// The client that registered as observer (AppModel), whose snapshots
+    /// report how many of its events they include.
+    private var observerClientID: UUID?
+    /// Events sent to the observer that its latest snapshot did not cover,
+    /// with their 1-based position in that client's event stream.
+    private var unacknowledgedObserverEvents: [(index: Int, event: AgentEvent)] = []
+    /// A cap for an observer that stops reporting; past it the oldest events
+    /// stop being replayed, which is how every snapshot behaved before.
+    static let maxUnacknowledgedObserverEvents = 512
 
     public init(
         socketURL: URL = BridgeSocketLocation.defaultURL
@@ -178,12 +188,39 @@ public final class BridgeServer: @unchecked Sendable {
         }
     }
 
-    /// Pushes the authoritative session state from AppModel so BridgeServer
-    /// can read session data without maintaining its own copy.
-    public func updateStateSnapshot(_ snapshot: SessionState) {
+    /// Pushes the authoritative session state from AppModel.
+    ///
+    /// Events reach AppModel over the observer socket, so a snapshot usually
+    /// lags what this server already emitted: replacing `localState` with it
+    /// outright would drop those events until AppModel catches up, and a
+    /// hook arriving in between would act on the stale state (a duplicate
+    /// `sessionStarted` resets the session it re-creates). So the snapshot
+    /// replaces the state, then the observer's events it does not cover are
+    /// replayed on top.
+    ///
+    /// - Parameter appliedObserverEvents: how many events AppModel's current
+    ///   observer connection had applied when it took the snapshot. Nil
+    ///   replaces the state outright and forgets pending events.
+    public func updateStateSnapshot(_ snapshot: SessionState, appliedObserverEvents: Int? = nil) {
         queue.async { [self] in
-            stateSnapshot = snapshot
-            localState = snapshot
+            applyStateSnapshot(snapshot, appliedObserverEvents: appliedObserverEvents)
+        }
+    }
+
+    private func applyStateSnapshot(_ snapshot: SessionState, appliedObserverEvents: Int?) {
+        localState = snapshot
+        guard let applied = appliedObserverEvents,
+              let observerClientID,
+              let observer = clients[observerClientID],
+              applied <= observer.sentEventCount else {
+            // No observer to match the count against, or a count from another
+            // connection: nothing can be replayed safely.
+            unacknowledgedObserverEvents.removeAll()
+            return
+        }
+        unacknowledgedObserverEvents.removeAll { $0.index <= applied }
+        for pending in unacknowledgedObserverEvents {
+            localState.apply(pending.event)
         }
     }
 
@@ -195,6 +232,8 @@ public final class BridgeServer: @unchecked Sendable {
         pendingTaskCreations.removeAll()
         pendingOpenCodeInteractions.removeAll()
         pendingCursorInteractions.removeAll()
+        observerClientID = nil
+        unacknowledgedObserverEvents.removeAll()
 
         let activeConnections = Array(clients.values)
         activeConnections.forEach { $0.readSource.cancel() }
@@ -317,6 +356,12 @@ public final class BridgeServer: @unchecked Sendable {
 
             client.role = role
             clients[clientID] = client
+            if role == .observer {
+                // Events sent before registration still count toward the
+                // index; only those sent from here on can be replayed.
+                observerClientID = clientID
+                unacknowledgedObserverEvents.removeAll()
+            }
             send(.response(.acknowledged), to: clientID)
 
         case let .requestQuestion(sessionID, prompt):
@@ -2736,6 +2781,15 @@ public final class BridgeServer: @unchecked Sendable {
         }
     }
 
+    /// Test-only accessor: `.event` envelopes sent to the observer, and how
+    /// many of them still wait for a snapshot that covers them.
+    func observerEventCountsForTests() -> (sent: Int, unacknowledged: Int) {
+        queue.sync {
+            let sent = observerClientID.flatMap { clients[$0]?.sentEventCount } ?? 0
+            return (sent, unacknowledgedObserverEvents.count)
+        }
+    }
+
     /// Test-only accessor for the bridge's local session state after hook events.
     /// Reuses the `queueKey` guard from `stop()` so a caller already on the
     /// bridge queue reads directly instead of deadlocking in `queue.sync`.
@@ -3126,6 +3180,17 @@ public final class BridgeServer: @unchecked Sendable {
             try writeAll(data, to: client.fileDescriptor)
         } catch {
             removeClient(clientID)
+            return
+        }
+
+        guard case let .event(event) = envelope else { return }
+        let index = client.sentEventCount + 1
+        clients[clientID]?.sentEventCount = index
+        if clientID == observerClientID {
+            unacknowledgedObserverEvents.append((index: index, event: event))
+            if unacknowledgedObserverEvents.count > Self.maxUnacknowledgedObserverEvents {
+                unacknowledgedObserverEvents.removeFirst()
+            }
         }
     }
 
@@ -3142,6 +3207,10 @@ public final class BridgeServer: @unchecked Sendable {
     private func removeClient(_ clientID: UUID) {
         guard let client = clients.removeValue(forKey: clientID) else {
             return
+        }
+        if clientID == observerClientID {
+            observerClientID = nil
+            unacknowledgedObserverEvents.removeAll()
         }
 
         let pendingSessionIDs = pendingApprovals.compactMap { entry -> String? in
