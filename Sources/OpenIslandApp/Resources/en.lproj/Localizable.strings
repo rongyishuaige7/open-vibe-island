@@ -37,7 +37,8 @@
 "usage.todayTokens.detailTitle" = "Today's Token Usage";
 "usage.todayTokens.totalLabel" = "Total Tokens Today";
 "usage.todayTokens.totalLine" = "Total Tokens Today: %@";
-"usage.todayTokens.dataSource" = "Sources: CC Switch & KEEPER local logs";
+"usage.todayTokens.dataSource" = "Sources: CC Switch, KEEPER & Claude Pro logs";
+"usage.todayTokens.claudePro" = "Claude Pro";
 "usage.todayTokens.agyPool" = "AGY Pool";
 "usage.todayTokens.agyPro" = "AGY Pro";
 "usage.todayTokens.other" = "Other";

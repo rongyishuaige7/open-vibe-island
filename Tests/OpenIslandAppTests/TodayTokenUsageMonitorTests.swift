@@ -143,4 +143,29 @@ struct TodayTokenUsageMonitorTests {
         #expect(dynamicUsage.agyAccountHint == "sk44989, victorcranston465")
         #expect(dynamicUsage.agyProAccountHint == "wisnumandala302")
     }
+
+    @Test
+    func claudeProUsageIncludedInTotals() {
+        let monitor = makeMonitor()
+        let today = Self.calendar.startOfDay(for: Self.now)
+        let usage = TodayTokenUsage(
+            dayStart: today,
+            claude: AgentTokenTotals(requestCount: 2, totalTokens: 10_000),
+            claudePro: AgentTokenTotals(requestCount: 50, totalTokens: 2_000_000, cacheReadTokens: 1_800_000),
+            claudeProAccounts: ["Pro-Sandbox"],
+            claudeProCostUSD: 4.50,
+            claudeProRateLimit5h: 30,
+            claudeProRateLimit7d: 45
+        )
+        monitor.apply(.success(usage), now: Self.now, calendar: Self.calendar)
+
+        #expect(monitor.usage?.claudePro.requestCount == 50)
+        #expect(monitor.usage?.claudePro.totalTokens == 2_000_000)
+        #expect(monitor.usage?.claudePro.cacheReadTokens == 1_800_000)
+        #expect(monitor.usage?.claudeProCostUSD == 4.50)
+        #expect(monitor.usage?.claudeProRateLimit5h == 30)
+        #expect(monitor.usage?.claudeProRateLimit7d == 45)
+        #expect(monitor.usage?.claudeProAccountHint == "Pro-Sandbox")
+        #expect(monitor.usage?.totalTokens == 10_000 + 2_000_000)
+    }
 }

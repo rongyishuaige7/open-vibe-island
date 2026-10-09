@@ -66,7 +66,12 @@ struct ActiveAgentProcessDiscovery {
         var snapshots: [ProcessSnapshot] = []
         var claimedKeys: Set<String> = []
 
-        for process in processes {
+        for rawProcess in processes {
+            var process = rawProcess
+            if process.terminalTTY == nil {
+                process.terminalTTY = effectiveTerminalTTY(for: process, processesByPID: processesByPID)
+            }
+
             // Most agent detection requires a TTY (terminal-attached process).
             // OpenCode is an exception: it can run inside IDE integrated terminals
             // that don't expose a TTY in `ps` output. Let OpenCode processes
@@ -421,6 +426,7 @@ struct ActiveAgentProcessDiscovery {
 
     private func isClaudeSubagentWorktree(_ path: String) -> Bool {
         path.contains("/.claude/worktrees/agent-")
+            || path.contains("/.claude-pro-hardened/worktrees/agent-")
     }
 
     private func claudeSnapshot(
@@ -481,8 +487,19 @@ struct ActiveAgentProcessDiscovery {
         return snapshot
     }
 
+    private func candidateClaudeProjectsURLs() -> [URL] {
+        let fileManager = FileManager.default
+        let home = fileManager.homeDirectoryForCurrentUser
+        let paths = [
+            home.appendingPathComponent(".claude/projects", isDirectory: true),
+            home.appendingPathComponent(".claude-pro-hardened/projects", isDirectory: true),
+        ]
+        return paths.filter { fileManager.fileExists(atPath: $0.path) }
+    }
+
     private func bestClaudeTranscriptPath(in lsofOutput: String, workingDirectory: String?) -> String? {
         let paths = allMatchingPaths(in: lsofOutput, containing: "/.claude/projects/", suffix: ".jsonl")
+            + allMatchingPaths(in: lsofOutput, containing: "/.claude-pro-hardened/projects/", suffix: ".jsonl")
         guard !paths.isEmpty else {
             return nil
         }
@@ -506,45 +523,46 @@ struct ActiveAgentProcessDiscovery {
         sessionID: String?
     ) -> String? {
         let fileManager = FileManager.default
-        let home = fileManager.homeDirectoryForCurrentUser
-        let projectsURL = home.appendingPathComponent(".claude/projects", isDirectory: true)
-        guard fileManager.fileExists(atPath: projectsURL.path) else { return nil }
+        let candidateRoots = candidateClaudeProjectsURLs()
+        guard !candidateRoots.isEmpty else { return nil }
 
-        if let cwd = workingDirectory {
-            let slug = cwd.replacingOccurrences(of: "/", with: "-")
-            let projectDir = projectsURL.appendingPathComponent(slug, isDirectory: true)
-            if fileManager.fileExists(atPath: projectDir.path) {
-                if let sessionID {
-                    let directPath = projectDir.appendingPathComponent("\(sessionID).jsonl").path
-                    if fileManager.fileExists(atPath: directPath) {
-                        return directPath
+        for projectsURL in candidateRoots {
+            if let cwd = workingDirectory {
+                let slug = cwd.replacingOccurrences(of: "/", with: "-")
+                let projectDir = projectsURL.appendingPathComponent(slug, isDirectory: true)
+                if fileManager.fileExists(atPath: projectDir.path) {
+                    if let sessionID {
+                        let directPath = projectDir.appendingPathComponent("\(sessionID).jsonl").path
+                        if fileManager.fileExists(atPath: directPath) {
+                            return directPath
+                        }
                     }
-                }
-                if let items = try? fileManager.contentsOfDirectory(
-                    at: projectDir,
-                    includingPropertiesForKeys: [.contentModificationDateKey, .isRegularFileKey]
-                ) {
-                    let jsonlFiles = items.filter { $0.pathExtension == "jsonl" }
-                    if let newest = jsonlFiles.max(by: { a, b in
-                        let dateA = (try? a.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate) ?? .distantPast
-                        let dateB = (try? b.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate) ?? .distantPast
-                        return dateA < dateB
-                    }) {
-                        return newest.path
+                    if let items = try? fileManager.contentsOfDirectory(
+                        at: projectDir,
+                        includingPropertiesForKeys: [.contentModificationDateKey, .isRegularFileKey]
+                    ) {
+                        let jsonlFiles = items.filter { $0.pathExtension == "jsonl" }
+                        if let newest = jsonlFiles.max(by: { a, b in
+                            let dateA = (try? a.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate) ?? .distantPast
+                            let dateB = (try? b.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate) ?? .distantPast
+                            return dateA < dateB
+                        }) {
+                            return newest.path
+                        }
                     }
                 }
             }
-        }
 
-        if let sessionID {
-            if let subdirs = try? fileManager.contentsOfDirectory(
-                at: projectsURL,
-                includingPropertiesForKeys: [.isDirectoryKey]
-            ) {
-                for subdir in subdirs {
-                    let candidate = subdir.appendingPathComponent("\(sessionID).jsonl").path
-                    if fileManager.fileExists(atPath: candidate) {
-                        return candidate
+            if let sessionID {
+                if let subdirs = try? fileManager.contentsOfDirectory(
+                    at: projectsURL,
+                    includingPropertiesForKeys: [.isDirectoryKey]
+                ) {
+                    for subdir in subdirs {
+                        let candidate = subdir.appendingPathComponent("\(sessionID).jsonl").path
+                        if fileManager.fileExists(atPath: candidate) {
+                            return candidate
+                        }
                     }
                 }
             }
@@ -818,6 +836,31 @@ struct ActiveAgentProcessDiscovery {
         return "/dev/\(trimmed)"
     }
 
+    private func effectiveTerminalTTY(
+        for process: RunningProcess,
+        processesByPID: [String: RunningProcess]
+    ) -> String? {
+        if let tty = process.terminalTTY {
+            return tty
+        }
+
+        var currentParentPID = process.parentPID
+        var visited: Set<String> = []
+
+        while !currentParentPID.isEmpty,
+              currentParentPID != "0",
+              currentParentPID != "1",
+              visited.insert(currentParentPID).inserted,
+              let parent = processesByPID[currentParentPID] {
+            if let tty = parent.terminalTTY {
+                return tty
+            }
+            currentParentPID = parent.parentPID
+        }
+
+        return nil
+    }
+
     private func isCodexProcess(command: String) -> Bool {
         let lowered = command.lowercased()
         guard let firstToken = lowered.split(separator: " ").first.map(String.init) else {
@@ -1057,12 +1100,14 @@ struct ActiveAgentProcessDiscovery {
         return nil
     }
 
-    /// Returns `true` when the given `ps` command string belongs to a Claude Code process.
-    /// Matches the official `~/.local/bin/claude` path as well as any absolute path whose
-    /// last component is `claude` (e.g. `~/.codefuse/.../claude`).
+    /// Returns `true` when the given `ps` command string belongs to a Claude Code process,
+    /// including the isolated hardened `claude-pro` sandbox CLI and wrapper scripts.
     private func isClaudeProcess(command: String) -> Bool {
         let lowered = command.lowercased()
-        if lowered.contains("/.local/bin/claude") {
+        if lowered.contains("/.local/bin/claude")
+            || lowered.contains("/.local/bin/claude-pro")
+            || lowered.contains("/claude-pro-bin/claude-pro-exec")
+            || lowered.contains("claude-pro-hardening/guard.cjs run") {
             return true
         }
 
@@ -1071,7 +1116,11 @@ struct ActiveAgentProcessDiscovery {
         }
 
         return firstToken == "claude"
+            || firstToken == "claude-pro"
+            || firstToken == "claude-pro-exec"
             || firstToken.hasSuffix("/claude")
+            || firstToken.hasSuffix("/claude-pro")
+            || firstToken.hasSuffix("/claude-pro-exec")
     }
 
     private static func commandOutput(executablePath: String, arguments: [String]) -> String? {

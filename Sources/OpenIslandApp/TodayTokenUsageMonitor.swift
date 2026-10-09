@@ -13,16 +13,22 @@ final class TodayTokenUsageMonitor {
 
     private let databaseURL: URL
     private let keeperDatabaseURL: URL
+    private let claudeProSessionsDirectoryURL: URL
+    private let claudeProProjectsDirectoryURL: URL
     private let interval: Duration
     @ObservationIgnored private var task: Task<Void, Never>?
 
     init(
         databaseURL: URL = CCSwitchUsageReader.defaultDatabaseURL,
         keeperDatabaseURL: URL = KeeperUsageReader.defaultDatabaseURL,
+        claudeProSessionsDirectoryURL: URL = ClaudeProUsageReader.defaultSessionsDirectoryURL,
+        claudeProProjectsDirectoryURL: URL = ClaudeProUsageReader.defaultProjectsDirectoryURL,
         interval: Duration = .seconds(30)
     ) {
         self.databaseURL = databaseURL
         self.keeperDatabaseURL = keeperDatabaseURL
+        self.claudeProSessionsDirectoryURL = claudeProSessionsDirectoryURL
+        self.claudeProProjectsDirectoryURL = claudeProProjectsDirectoryURL
         self.interval = interval
     }
 
@@ -48,6 +54,8 @@ final class TodayTokenUsageMonitor {
     func refresh() async {
         let databaseURL = self.databaseURL
         let keeperDatabaseURL = self.keeperDatabaseURL
+        let claudeProSessionsDirectoryURL = self.claudeProSessionsDirectoryURL
+        let claudeProProjectsDirectoryURL = self.claudeProProjectsDirectoryURL
         let result = await Task.detached(priority: .utility) { () -> Result<TodayTokenUsage, any Error> in
             let calendar = Calendar.current
             let now = Date()
@@ -91,15 +99,35 @@ final class TodayTokenUsageMonitor {
                 keeperError = error
             }
 
+            // 3. Try reading Claude Pro (isolated CLI)
+            do {
+                let proUsage = try ClaudeProUsageReader.loadToday(
+                    sessionsDirectoryURL: claudeProSessionsDirectoryURL,
+                    projectsDirectoryURL: claudeProProjectsDirectoryURL,
+                    now: now,
+                    calendar: calendar
+                )
+                if proUsage.totals.totalTokens > 0 || proUsage.estimatedCostUSD > 0 {
+                    usage.claudePro = proUsage.totals
+                    usage.claudeProAccounts = [proUsage.accountHint]
+                    usage.claudeProCostUSD = proUsage.estimatedCostUSD > 0 ? proUsage.estimatedCostUSD : nil
+                    usage.claudeProRateLimit5h = proUsage.rateLimit5hPercent
+                    usage.claudeProRateLimit7d = proUsage.rateLimit7dPercent
+                    hasAnyDatabase = true
+                }
+            } catch {
+                // Best-effort; Claude Pro is optional
+            }
+
             let ccMissing = (ccError as? CCSwitchUsageError) == .databaseMissing
             let keeperMissing = (keeperError as? KeeperUsageError) == .databaseMissing
 
-            // If both databases are missing, return missing error
-            if ccMissing && keeperMissing {
+            // If both databases are missing and no Claude Pro usage found, return missing error
+            if ccMissing && keeperMissing && usage.claudePro.totalTokens == 0 {
                 return .failure(CCSwitchUsageError.databaseMissing)
             }
 
-            // If both failed with actual query/sqlite errors
+            // If databases failed with actual query/sqlite errors and no other sources succeeded
             if !hasAnyDatabase {
                 if let ccError, !ccMissing {
                     return .failure(ccError)

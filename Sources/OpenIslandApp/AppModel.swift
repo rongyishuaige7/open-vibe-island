@@ -679,6 +679,10 @@ final class AppModel {
                 atPath: CCSwitchUsageReader.defaultDatabaseURL.path
             ) || FileManager.default.fileExists(
                 atPath: KeeperUsageReader.defaultDatabaseURL.path
+            ) || FileManager.default.fileExists(
+                atPath: ClaudeProUsageReader.defaultProjectsDirectoryURL.path
+            ) || FileManager.default.fileExists(
+                atPath: ClaudeProUsageReader.defaultSessionsDirectoryURL.path
             )
         }
         completionReplyEnabled = UserDefaults.standard.bool(forKey: Self.completionReplyEnabledDefaultsKey)

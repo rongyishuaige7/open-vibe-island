@@ -1028,13 +1028,16 @@ struct IslandPanelView: View {
 
         let languageCode = lang.language.resolvedCode
         var candidateAgents: [(id: String, label: String, shortLabel: String, totals: AgentTokenTotals?)] = [
-            ("claude", "Claude", "Cl", monitor.usage?.claude),
-            ("codex", "Codex", "Cx", monitor.usage?.codex),
-            ("agy", lang.t("usage.todayTokens.agyPool"), "AGY", monitor.usage?.agy),
-            ("agy-pro", lang.t("usage.todayTokens.agyPro"), "Pro", monitor.usage?.agyPro),
+            (id: "claude", label: "Claude", shortLabel: "Cl", totals: monitor.usage?.claude),
         ]
+        if isClaudeProAvailable(usage: monitor.usage) {
+            candidateAgents.append((id: "claude-pro", label: lang.t("usage.todayTokens.claudePro"), shortLabel: "C-Pro", totals: monitor.usage?.claudePro))
+        }
+        candidateAgents.append((id: "codex", label: "Codex", shortLabel: "Cx", totals: monitor.usage?.codex))
+        candidateAgents.append((id: "agy", label: lang.t("usage.todayTokens.agyPool"), shortLabel: "AGY", totals: monitor.usage?.agy))
+        candidateAgents.append((id: "agy-pro", label: lang.t("usage.todayTokens.agyPro"), shortLabel: "Pro", totals: monitor.usage?.agyPro))
         if let other = monitor.usage?.other, other.totalTokens > 0 {
-            candidateAgents.append(("other", lang.t("usage.todayTokens.other"), "Oth", other))
+            candidateAgents.append((id: "other", label: lang.t("usage.todayTokens.other"), shortLabel: "Oth", totals: other))
         }
 
         let grandTotal = monitor.usage?.totalTokens ?? 0
@@ -1053,6 +1056,9 @@ struct IslandPanelView: View {
                 totals.cacheReadTokens.formatted(),
                 totals.requestCount.formatted()
             ))
+            if agent.id == "claude-pro", let subtext = claudeProSecondarySubtext(usage: monitor.usage) {
+                helpLines.append("  ↳ \(subtext)")
+            }
         }
         if let message = monitor.lastErrorMessage {
             helpLines.append(lang.t("usage.todayTokens.readFailed", message))
@@ -1351,6 +1357,17 @@ struct IslandPanelView: View {
                     languageCode: languageCode
                 )
 
+                if isClaudeProAvailable(usage: usage) {
+                    tokenDetailAgentRow(
+                        label: lang.t("usage.todayTokens.claudePro"),
+                        dotColor: IslandDesignPalette.Status.runningClaude,
+                        totals: usage?.claudePro,
+                        accountHint: usage?.claudeProAccountHint ?? "",
+                        secondarySubtext: claudeProSecondarySubtext(usage: usage),
+                        languageCode: languageCode
+                    )
+                }
+
                 tokenDetailAgentRow(
                     label: "Codex",
                     dotColor: IslandDesignPalette.Status.runningCodex,
@@ -1436,6 +1453,7 @@ struct IslandPanelView: View {
         dotColor: Color,
         totals: AgentTokenTotals?,
         accountHint: String,
+        secondarySubtext: String? = nil,
         languageCode: String
     ) -> some View {
         let total = totals?.totalTokens ?? 0
@@ -1471,6 +1489,12 @@ struct IslandPanelView: View {
                     .font(.system(size: 9, design: .monospaced))
                     .foregroundStyle(.white.opacity(0.4))
                 }
+
+                if let secondarySubtext, !secondarySubtext.isEmpty {
+                    Text(secondarySubtext)
+                        .font(.system(size: 8.5, design: .monospaced))
+                        .foregroundStyle(.white.opacity(0.45))
+                }
             }
 
             Spacer(minLength: 4)
@@ -1479,6 +1503,29 @@ struct IslandPanelView: View {
                 .font(.system(size: 12, weight: .bold, design: .monospaced))
                 .foregroundStyle(.white.opacity(total > 0 ? 0.95 : 0.35))
         }
+    }
+
+    private func isClaudeProAvailable(usage: TodayTokenUsage?) -> Bool {
+        if let usage, usage.claudePro.totalTokens > 0 || usage.claudeProCostUSD != nil {
+            return true
+        }
+        return FileManager.default.fileExists(atPath: ClaudeProUsageReader.defaultProjectsDirectoryURL.path)
+            || FileManager.default.fileExists(atPath: ClaudeProUsageReader.defaultSessionsDirectoryURL.path)
+    }
+
+    private func claudeProSecondarySubtext(usage: TodayTokenUsage?) -> String? {
+        guard let usage else { return nil }
+        var parts: [String] = []
+        if let cost = usage.claudeProCostUSD, cost > 0 {
+            parts.append(String(format: "$%.2f", cost))
+        }
+        if let r5 = usage.claudeProRateLimit5h {
+            parts.append("5h: \(r5)%")
+        }
+        if let r7 = usage.claudeProRateLimit7d {
+            parts.append("7d: \(r7)%")
+        }
+        return parts.isEmpty ? nil : parts.joined(separator: " · ")
     }
 
     private func usageHelpText(for provider: UsageProviderPresentation) -> String {
