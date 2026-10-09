@@ -34,6 +34,7 @@ public struct AgentTokenTotals: Equatable, Sendable {
 public struct TodayTokenUsage: Equatable, Sendable {
     public var dayStart: Date
     public var claude: AgentTokenTotals
+    public var claudePro: AgentTokenTotals
     public var codex: AgentTokenTotals
     public var agy: AgentTokenTotals
     public var agyPro: AgentTokenTotals
@@ -43,11 +44,16 @@ public struct TodayTokenUsage: Equatable, Sendable {
     public var agyProAccounts: [String]
     public var codexAccounts: [String]
     public var claudeAccounts: [String]
+    public var claudeProAccounts: [String]
     public var otherAccounts: [String]
+    public var claudeProCostUSD: Double?
+    public var claudeProRateLimit5h: Int?
+    public var claudeProRateLimit7d: Int?
 
     public init(
         dayStart: Date,
         claude: AgentTokenTotals = .zero,
+        claudePro: AgentTokenTotals = .zero,
         codex: AgentTokenTotals = .zero,
         agy: AgentTokenTotals = .zero,
         agyPro: AgentTokenTotals = .zero,
@@ -56,10 +62,15 @@ public struct TodayTokenUsage: Equatable, Sendable {
         agyProAccounts: [String] = [],
         codexAccounts: [String] = [],
         claudeAccounts: [String] = [],
-        otherAccounts: [String] = []
+        claudeProAccounts: [String] = [],
+        otherAccounts: [String] = [],
+        claudeProCostUSD: Double? = nil,
+        claudeProRateLimit5h: Int? = nil,
+        claudeProRateLimit7d: Int? = nil
     ) {
         self.dayStart = dayStart
         self.claude = claude
+        self.claudePro = claudePro
         self.codex = codex
         self.agy = agy
         self.agyPro = agyPro
@@ -68,18 +79,34 @@ public struct TodayTokenUsage: Equatable, Sendable {
         self.agyProAccounts = agyProAccounts
         self.codexAccounts = codexAccounts
         self.claudeAccounts = claudeAccounts
+        self.claudeProAccounts = claudeProAccounts
         self.otherAccounts = otherAccounts
+        self.claudeProCostUSD = claudeProCostUSD
+        self.claudeProRateLimit5h = claudeProRateLimit5h
+        self.claudeProRateLimit7d = claudeProRateLimit7d
     }
 
     /// Every channel together, cache included.
     public var totalTokens: Int {
-        claude.totalTokens + codex.totalTokens + agy.totalTokens + agyPro.totalTokens + other.totalTokens
+        claude.totalTokens
+            + claudePro.totalTokens
+            + codex.totalTokens
+            + agy.totalTokens
+            + agyPro.totalTokens
+            + other.totalTokens
     }
 
     /// Where each total came from: the KEEPER accounts that logged usage
     /// today, plus CC Switch for the agents it proxies. Empty when unknown.
     public var claudeAccountHint: String {
         (claudeAccounts + ["CC Switch"]).joined(separator: ", ")
+    }
+
+    public var claudeProAccountHint: String {
+        if claudeProAccounts.isEmpty {
+            return "Pro"
+        }
+        return claudeProAccounts.joined(separator: ", ")
     }
 
     public var codexAccountHint: String {

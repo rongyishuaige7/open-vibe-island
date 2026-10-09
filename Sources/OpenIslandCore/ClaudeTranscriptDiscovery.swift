@@ -11,50 +11,74 @@ public final class ClaudeTranscriptDiscovery: @unchecked Sendable {
             .appendingPathComponent(".claude/projects", isDirectory: true)
     }
 
-    private let rootURL: URL
+    public static var defaultRootURLs: [URL] {
+        let home = FileManager.default.homeDirectoryForCurrentUser
+        return [
+            home.appendingPathComponent(".claude/projects", isDirectory: true),
+            home.appendingPathComponent(".claude-pro-hardened/projects", isDirectory: true)
+        ]
+    }
+
+    private let rootURLs: [URL]
     private let fileManager: FileManager
     private let maxAge: TimeInterval
     private let maxFiles: Int
 
     public init(
-        rootURL: URL = ClaudeTranscriptDiscovery.defaultRootURL,
+        rootURLs: [URL] = ClaudeTranscriptDiscovery.defaultRootURLs,
         fileManager: FileManager = .default,
         maxAge: TimeInterval = 86_400,
         maxFiles: Int = 40
     ) {
-        self.rootURL = rootURL
+        self.rootURLs = rootURLs
         self.fileManager = fileManager
         self.maxAge = maxAge
         self.maxFiles = maxFiles
     }
 
-    public func discoverRecentSessions(now: Date = .now) -> [AgentSession] {
-        guard fileManager.fileExists(atPath: rootURL.path),
-              let enumerator = fileManager.enumerator(
-                at: rootURL,
-                includingPropertiesForKeys: [.contentModificationDateKey, .isRegularFileKey],
-                options: [.skipsHiddenFiles]
-              ) else {
-            return []
-        }
+    public convenience init(
+        rootURL: URL,
+        fileManager: FileManager = .default,
+        maxAge: TimeInterval = 86_400,
+        maxFiles: Int = 40
+    ) {
+        self.init(
+            rootURLs: [rootURL],
+            fileManager: fileManager,
+            maxAge: maxAge,
+            maxFiles: maxFiles
+        )
+    }
 
+    public func discoverRecentSessions(now: Date = .now) -> [AgentSession] {
         let cutoff = now.addingTimeInterval(-maxAge)
         var candidates: [Candidate] = []
 
-        for case let fileURL as URL in enumerator {
-            guard fileURL.pathExtension == "jsonl",
-                  !fileURL.path.contains("/subagents/") else {
+        for rootURL in rootURLs {
+            guard fileManager.fileExists(atPath: rootURL.path),
+                  let enumerator = fileManager.enumerator(
+                    at: rootURL,
+                    includingPropertiesForKeys: [.contentModificationDateKey, .isRegularFileKey],
+                    options: [.skipsHiddenFiles]
+                  ) else {
                 continue
             }
 
-            let values = try? fileURL.resourceValues(forKeys: [.isRegularFileKey, .contentModificationDateKey])
-            guard values?.isRegularFile == true,
-                  let modifiedAt = values?.contentModificationDate,
-                  modifiedAt >= cutoff else {
-                continue
-            }
+            for case let fileURL as URL in enumerator {
+                guard fileURL.pathExtension == "jsonl",
+                      !fileURL.path.contains("/subagents/") else {
+                    continue
+                }
 
-            candidates.append(Candidate(fileURL: fileURL, modifiedAt: modifiedAt))
+                let values = try? fileURL.resourceValues(forKeys: [.isRegularFileKey, .contentModificationDateKey])
+                guard values?.isRegularFile == true,
+                      let modifiedAt = values?.contentModificationDate,
+                      modifiedAt >= cutoff else {
+                    continue
+                }
+
+                candidates.append(Candidate(fileURL: fileURL, modifiedAt: modifiedAt))
+            }
         }
 
         let sortedCandidates = candidates
