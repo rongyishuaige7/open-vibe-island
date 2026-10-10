@@ -325,6 +325,14 @@ public enum KeeperUsageReader {
         let hasPlan = identityColumns.contains("plan_type")
 
         let sql = """
+            WITH latest_account AS (
+                SELECT qc.auth_index
+                FROM quota_cycles qc
+                JOIN quota_percent_segments qps ON qps.cycle_id = qc.id
+                WHERE qc.provider = 'codex'
+                ORDER BY qps.last_observed_at DESC, qps.id DESC
+                LIMIT 1
+            )
             SELECT qc.quota_key,
                    qc.window_seconds,
                    qc.reset_at,
@@ -334,11 +342,12 @@ public enum KeeperUsageReader {
                    \(hasPlan ? "COALESCE(ui.plan_type, '')" : "''")
             FROM quota_cycles qc
             JOIN quota_percent_segments qps ON qps.cycle_id = qc.id
+            JOIN latest_account la ON qc.auth_index = la.auth_index
             LEFT JOIN usage_identities ui ON ui.identity = qc.auth_index
             WHERE qc.provider = 'codex'
               AND qc.quota_key IN ('rate_limit.primary_window', 'rate_limit.secondary_window')
             ORDER BY qps.last_observed_at DESC, qps.id DESC
-            LIMIT 20;
+            LIMIT 10;
             """
 
         var statement: OpaquePointer?
@@ -386,9 +395,11 @@ public enum KeeperUsageReader {
             if windowsByKey[windowKey] == nil {
                 let windowMinutes = max(1, windowSeconds / 60)
                 let label = formatWindowLabel(minutes: windowMinutes)
-                let leftPercentage = Double(remainingPercent)
-                let usedPercentage = max(0, 100.0 - leftPercentage)
                 let resetsAt = parseISO8601Date(resetAtString)
+                let isWindowExpired = resetsAt.map { $0 <= now } ?? false
+
+                let leftPercentage = isWindowExpired ? 100.0 : Double(remainingPercent)
+                let usedPercentage = isWindowExpired ? 0.0 : max(0, 100.0 - Double(remainingPercent))
 
                 windowsByKey[windowKey] = CodexUsageWindow(
                     key: windowKey,

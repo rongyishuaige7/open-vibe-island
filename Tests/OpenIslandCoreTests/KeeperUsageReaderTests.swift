@@ -348,7 +348,8 @@ struct KeeperUsageReaderTests {
             fatalError("Failed to execute quota schema")
         }
 
-        let snapshot = try KeeperUsageReader.loadCodexRateLimits(databaseURL: dbURL)
+        let testNow = Date(timeIntervalSince1970: 1_791_626_400) // 2026-10-10 10:00:00 UTC (before 12:02:09Z reset)
+        let snapshot = try KeeperUsageReader.loadCodexRateLimits(databaseURL: dbURL, now: testNow)
         #expect(snapshot != nil)
         guard let s = snapshot else { return }
         #expect(s.limitID == "codex")
@@ -366,6 +367,13 @@ struct KeeperUsageReaderTests {
         #expect(secondary?.leftPercentage == 34.0)
         #expect(secondary?.usedPercentage == 66.0)
         #expect(secondary?.windowMinutes == 10080)
+
+        // Expired window test: after resetsAt (12:02:09Z), quota automatically resets to 0% used
+        let expiredNow = Date(timeIntervalSince1970: 1_791_650_000) // 2026-10-10 14:33:20 UTC
+        let expiredSnapshot = try KeeperUsageReader.loadCodexRateLimits(databaseURL: dbURL, now: expiredNow)
+        let expiredPrimary = expiredSnapshot?.windows.first { $0.key == "primary" }
+        #expect(expiredPrimary?.leftPercentage == 100.0)
+        #expect(expiredPrimary?.usedPercentage == 0.0)
 
         // Also test CodexUsageLoader with keeperDatabaseURL
         let loaderSnapshot = try CodexUsageLoader.load(fromRootURLs: [], keeperDatabaseURL: dbURL)
