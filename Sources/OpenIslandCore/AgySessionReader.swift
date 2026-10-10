@@ -153,37 +153,7 @@ public final class AgySessionReader: @unchecked Sendable {
     }
 
     private static func openDatabase(databasePath: String) -> OpaquePointer? {
-        // Plain READONLY, not `immutable=1`: Antigravity writes in WAL mode and
-        // immutable ignores the -wal file, so recent status changes would stay
-        // invisible until the next checkpoint. WAL readers don't block the
-        // writer; the short busy timeout only covers a checkpoint in flight.
-        if let db = open(databasePath, flags: SQLITE_OPEN_READONLY | SQLITE_OPEN_NOMUTEX) {
-            if sqlite3_exec(db, "SELECT 1 FROM sqlite_master LIMIT 1;", nil, nil, nil) == SQLITE_OK {
-                return db
-            }
-            sqlite3_close(db)
-        }
-
-        // Once Antigravity exits and its SQLite removes the -wal and -shm
-        // files, a read-only connection cannot create them and every read
-        // fails. With no -wal file the main file holds everything, so
-        // immutable misses nothing. With one, the failure was something else
-        // (a busy checkpoint, say), and immutable could serve stale rows.
-        guard !FileManager.default.fileExists(atPath: databasePath + "-wal") else {
-            return nil
-        }
-        let uri = URL(fileURLWithPath: databasePath).absoluteString + "?immutable=1"
-        return open(uri, flags: SQLITE_OPEN_READONLY | SQLITE_OPEN_URI | SQLITE_OPEN_NOMUTEX)
-    }
-
-    private static func open(_ filename: String, flags: Int32) -> OpaquePointer? {
-        var db: OpaquePointer?
-        guard sqlite3_open_v2(filename, &db, flags, nil) == SQLITE_OK, let db else {
-            sqlite3_close(db)
-            return nil
-        }
-        sqlite3_busy_timeout(db, 50)
-        return db
+        try? SQLiteReadOnly.open(path: databasePath, busyTimeoutMilliseconds: 50).get()
     }
 
     /// Just the title column, without the transcript read `fetchRecord` does
