@@ -114,8 +114,6 @@ public final class ClaudeStatusLineInstallationManager: @unchecked Sendable {
     public func status() throws -> ClaudeStatusLineInstallationStatus {
         let settingsURL = claudeDirectory.appendingPathComponent("settings.json")
         let scriptURL = scriptDirectoryURL.appendingPathComponent(Self.managedScriptName)
-        let legacyScriptURL = legacyScriptDirectoryURL.appendingPathComponent(Self.legacyManagedScriptName)
-
         let delegateScriptURL = scriptDirectoryURL.appendingPathComponent(Self.wrappedDelegateScriptName)
 
         let settings = try loadSettings(at: settingsURL)

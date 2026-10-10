@@ -357,7 +357,7 @@ public extension GrokHookPayload {
     /// (Ctrl+C, declining a permission) is an interrupt; `"runtime"` means
     /// Grok itself bailed out (`max_turns`, `no_progress`) and the user has
     /// not seen it yet. Missing/unknown values are treated as user-initiated.
-    public var isUserInitiatedCancellation: Bool {
+    var isUserInitiatedCancellation: Bool {
         guard hookEventName == .stopCancelled else { return false }
         return cancelledBy != "runtime"
     }
