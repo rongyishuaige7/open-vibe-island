@@ -74,6 +74,58 @@ struct KeeperUsageReaderTests {
     }
 
     @Test
+    func readsWalModeDatabaseWhileKeeperRunsAndAfterItStops() throws {
+        let tempDir = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: tempDir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: tempDir) }
+        let dbURL = tempDir.appendingPathComponent("app.db")
+
+        var handle: OpaquePointer?
+        guard sqlite3_open(dbURL.path, &handle) == SQLITE_OK, let writer = handle else {
+            fatalError("Failed to open test db")
+        }
+        // No auto-checkpoint, so the rows below live only in the -wal file
+        // while the writer is open.
+        let schema = """
+            PRAGMA journal_mode=WAL;
+            PRAGMA wal_autocheckpoint=0;
+            CREATE TABLE usage_identities (
+                id INTEGER PRIMARY KEY,
+                name TEXT,
+                identity TEXT
+            );
+            CREATE TABLE usage_overview_daily_stats (
+                id INTEGER PRIMARY KEY,
+                bucket_start TEXT,
+                auth_index TEXT,
+                request_count INTEGER,
+                total_tokens INTEGER,
+                cache_read_tokens INTEGER
+            );
+            INSERT INTO usage_identities (id, name, identity) VALUES (1, 'pool@gmail.com', 'idx-pool');
+            INSERT INTO usage_overview_daily_stats (bucket_start, auth_index, request_count, total_tokens, cache_read_tokens) VALUES
+                ('2026-10-05T00:00:00+08:00', 'idx-pool', 3, 300, 30);
+        """
+        guard sqlite3_exec(writer, schema, nil, nil, nil) == SQLITE_OK else {
+            sqlite3_close(writer)
+            fatalError("Failed to execute schema")
+        }
+        let expected = AgentTokenTotals(requestCount: 3, totalTokens: 300, cacheReadTokens: 30)
+
+        let running = try KeeperUsageReader.loadToday(databaseURL: dbURL, now: Self.now, calendar: Self.calendar)
+        #expect(running.agy == expected)
+
+        // KEEPER stopped: its SQLite checkpoints and removes the WAL files,
+        // and the header still says WAL mode.
+        sqlite3_close(writer)
+        try? FileManager.default.removeItem(atPath: dbURL.path + "-wal")
+        try? FileManager.default.removeItem(atPath: dbURL.path + "-shm")
+
+        let stopped = try KeeperUsageReader.loadToday(databaseURL: dbURL, now: Self.now, calendar: Self.calendar)
+        #expect(stopped.agy == expected)
+    }
+
+    @Test
     func sumsTodayTokensWithExtendedIdentities() throws {
         let tempDir = FileManager.default.temporaryDirectory
         let dbURL = tempDir.appendingPathComponent("test-keeper-extended-\(UUID().uuidString).db")

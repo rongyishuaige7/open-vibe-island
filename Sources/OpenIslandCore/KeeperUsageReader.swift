@@ -88,15 +88,16 @@ public enum KeeperUsageReader {
             throw KeeperUsageError.databaseMissing
         }
 
-        var handle: OpaquePointer?
-        let flags: Int32 = SQLITE_OPEN_READONLY | SQLITE_OPEN_NOMUTEX
-        guard sqlite3_open_v2(databaseURL.path, &handle, flags, nil) == SQLITE_OK, let db = handle else {
-            let message = handle.map { String(cString: sqlite3_errmsg($0)) } ?? "open failed"
-            sqlite3_close(handle)
-            throw KeeperUsageError.sqlite(message)
+        // KEEPER writes in WAL mode; see SQLiteReadOnly for why the read
+        // survives KEEPER stopping and removing its -wal file.
+        let db: OpaquePointer
+        switch SQLiteReadOnly.open(path: databaseURL.path, busyTimeoutMilliseconds: 200) {
+        case let .success(handle):
+            db = handle
+        case let .failure(error):
+            throw KeeperUsageError.sqlite(error.message)
         }
         defer { sqlite3_close(db) }
-        sqlite3_busy_timeout(db, 200)
 
         // KEEPER buckets carry its own business time zone (e.g. +08:00), not
         // the user's. Hourly buckets can be cut at the user's local midnight;
