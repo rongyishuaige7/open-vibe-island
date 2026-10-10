@@ -301,4 +301,74 @@ struct KeeperUsageReaderTests {
         japanese.timeZone = TimeZone(identifier: "Asia/Shanghai")!
         #expect(KeeperUsageReader.bucketPrefix(for: Self.now, calendar: japanese) == "2026-10-05%")
     }
+
+    @Test
+    func loadsCodexRateLimitsFromKeeperQuotaTables() throws {
+        let tempDir = FileManager.default.temporaryDirectory
+        let dbURL = tempDir.appendingPathComponent("test-keeper-quota-\(UUID().uuidString).db")
+        defer { try? FileManager.default.removeItem(at: dbURL) }
+
+        var handle: OpaquePointer?
+        guard sqlite3_open(dbURL.path, &handle) == SQLITE_OK, let db = handle else {
+            fatalError("Failed to open test db")
+        }
+        defer { sqlite3_close(db) }
+
+        let schema = """
+            CREATE TABLE usage_identities (
+                id INTEGER PRIMARY KEY,
+                name TEXT,
+                identity TEXT,
+                plan_type TEXT
+            );
+            CREATE TABLE quota_cycles (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                provider TEXT NOT NULL,
+                auth_index TEXT NOT NULL,
+                quota_key TEXT NOT NULL,
+                window_seconds INTEGER NOT NULL,
+                reset_at TEXT NOT NULL
+            );
+            CREATE TABLE quota_percent_segments (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                cycle_id INTEGER NOT NULL,
+                remaining_percent INTEGER NOT NULL,
+                last_observed_at TEXT NOT NULL
+            );
+            INSERT INTO usage_identities (id, name, identity, plan_type) VALUES
+                (1, 'rongyi1238@163.com', 'idx-plus-1', 'plus');
+            INSERT INTO quota_cycles (id, provider, auth_index, quota_key, window_seconds, reset_at) VALUES
+                (1, 'codex', 'idx-plus-1', 'rate_limit.primary_window', 18000, '2026-10-10T12:02:09.000000000Z'),
+                (2, 'codex', 'idx-plus-1', 'rate_limit.secondary_window', 604800, '2026-10-15T03:49:12.000000000Z');
+            INSERT INTO quota_percent_segments (cycle_id, remaining_percent, last_observed_at) VALUES
+                (1, 55, '2026-10-10T09:54:24.321860000Z'),
+                (2, 34, '2026-10-10T09:54:24.321860000Z');
+            """
+        guard sqlite3_exec(db, schema, nil, nil, nil) == SQLITE_OK else {
+            fatalError("Failed to execute quota schema")
+        }
+
+        let snapshot = try KeeperUsageReader.loadCodexRateLimits(databaseURL: dbURL)
+        #expect(snapshot != nil)
+        guard let s = snapshot else { return }
+        #expect(s.limitID == "codex")
+        #expect(s.planType == "plus")
+        #expect(s.windows.count == 2)
+
+        let primary = s.windows.first { $0.key == "primary" }
+        #expect(primary?.label == "5h")
+        #expect(primary?.leftPercentage == 55.0)
+        #expect(primary?.usedPercentage == 45.0)
+        #expect(primary?.windowMinutes == 300)
+
+        let secondary = s.windows.first { $0.key == "secondary" }
+        #expect(secondary?.label == "7d")
+        #expect(secondary?.leftPercentage == 34.0)
+        #expect(secondary?.usedPercentage == 66.0)
+        #expect(secondary?.windowMinutes == 10080)
+
+        // Also test CodexUsageLoader with keeperDatabaseURL
+        let loaderSnapshot = try CodexUsageLoader.load(fromRootURLs: [], keeperDatabaseURL: dbURL)
+        #expect(loaderSnapshot?.windows.count == 2)
+    }
 }

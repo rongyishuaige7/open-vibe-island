@@ -292,6 +292,161 @@ public enum KeeperUsageReader {
             GROUP BY 1, 2, 3, 4, 5
             """
     }
+
+    /// Reads the latest Codex Plus 5h and 7d rate limit windows recorded by KEEPER
+    /// from CPA's observed response headers.
+    public static func loadCodexRateLimits(
+        databaseURL: URL = defaultDatabaseURL,
+        now: Date = Date()
+    ) throws -> CodexUsageSnapshot? {
+        guard FileManager.default.fileExists(atPath: databaseURL.path) else {
+            throw KeeperUsageError.databaseMissing
+        }
+
+        var handle: OpaquePointer?
+        let flags: Int32 = SQLITE_OPEN_READONLY | SQLITE_OPEN_NOMUTEX
+        guard sqlite3_open_v2(databaseURL.path, &handle, flags, nil) == SQLITE_OK, let db = handle else {
+            let message = handle.map { String(cString: sqlite3_errmsg($0)) } ?? "open failed"
+            sqlite3_close(handle)
+            throw KeeperUsageError.sqlite(message)
+        }
+        defer { sqlite3_close(db) }
+        sqlite3_busy_timeout(db, 200)
+
+        // Verify tables exist
+        let cycleColumns = columns(db: db, table: "quota_cycles")
+        let segmentColumns = columns(db: db, table: "quota_percent_segments")
+        guard !cycleColumns.isEmpty, !segmentColumns.isEmpty else {
+            return nil
+        }
+
+        let identityColumns = columns(db: db, table: "usage_identities")
+        let hasName = identityColumns.contains("name")
+        let hasPlan = identityColumns.contains("plan_type")
+
+        let sql = """
+            SELECT qc.quota_key,
+                   qc.window_seconds,
+                   qc.reset_at,
+                   qps.remaining_percent,
+                   qps.last_observed_at,
+                   \(hasName ? "COALESCE(ui.name, '')" : "''"),
+                   \(hasPlan ? "COALESCE(ui.plan_type, '')" : "''")
+            FROM quota_cycles qc
+            JOIN quota_percent_segments qps ON qps.cycle_id = qc.id
+            LEFT JOIN usage_identities ui ON ui.identity = qc.auth_index
+            WHERE qc.provider = 'codex'
+              AND qc.quota_key IN ('rate_limit.primary_window', 'rate_limit.secondary_window')
+            ORDER BY qps.last_observed_at DESC, qps.id DESC
+            LIMIT 20;
+            """
+
+        var statement: OpaquePointer?
+        guard sqlite3_prepare_v2(db, sql, -1, &statement, nil) == SQLITE_OK else {
+            throw KeeperUsageError.sqlite(String(cString: sqlite3_errmsg(db)))
+        }
+        defer { sqlite3_finalize(statement) }
+
+        var windowsByKey: [String: CodexUsageWindow] = [:]
+        var latestCapturedAt: Date?
+        var planType: String?
+
+        while sqlite3_step(statement) == SQLITE_ROW {
+            func text(_ col: Int32) -> String {
+                sqlite3_column_text(statement, col).map { String(cString: $0) } ?? ""
+            }
+
+            let quotaKey = text(0)
+            let windowSeconds = Int(sqlite3_column_int64(statement, 1))
+            let resetAtString = text(2)
+            let remainingPercent = Int(sqlite3_column_int64(statement, 3))
+            let lastObservedString = text(4)
+            let observedPlan = text(6)
+
+            let windowKey: String
+            if quotaKey == "rate_limit.primary_window" {
+                windowKey = "primary"
+            } else if quotaKey == "rate_limit.secondary_window" {
+                windowKey = "secondary"
+            } else {
+                continue
+            }
+
+            if planType == nil && !observedPlan.isEmpty {
+                planType = observedPlan
+            }
+
+            if let observedDate = parseISO8601Date(lastObservedString) {
+                if latestCapturedAt == nil || observedDate > latestCapturedAt! {
+                    latestCapturedAt = observedDate
+                }
+            }
+
+            // Only keep the most recent observation for each window key
+            if windowsByKey[windowKey] == nil {
+                let windowMinutes = max(1, windowSeconds / 60)
+                let label = formatWindowLabel(minutes: windowMinutes)
+                let leftPercentage = Double(remainingPercent)
+                let usedPercentage = max(0, 100.0 - leftPercentage)
+                let resetsAt = parseISO8601Date(resetAtString)
+
+                windowsByKey[windowKey] = CodexUsageWindow(
+                    key: windowKey,
+                    label: label,
+                    usedPercentage: usedPercentage,
+                    leftPercentage: leftPercentage,
+                    windowMinutes: windowMinutes,
+                    resetsAt: resetsAt
+                )
+            }
+        }
+
+        let windows = ["primary", "secondary"].compactMap { windowsByKey[$0] }
+        guard !windows.isEmpty else {
+            return nil
+        }
+
+        return CodexUsageSnapshot(
+            sourceFilePath: databaseURL.path,
+            capturedAt: latestCapturedAt ?? now,
+            planType: planType ?? "plus",
+            limitID: "codex",
+            windows: windows
+        )
+    }
+
+    private static func formatWindowLabel(minutes: Int) -> String {
+        let days = minutes / 1_440
+        let remainingMinutesAfterDays = minutes % 1_440
+        let hours = remainingMinutesAfterDays / 60
+        let remainingMinutes = remainingMinutesAfterDays % 60
+
+        if days > 0, hours == 0, remainingMinutes == 0 {
+            return "\(days)d"
+        }
+        if days > 0, hours > 0 {
+            return "\(days)d \(hours)h"
+        }
+        if hours > 0, remainingMinutes == 0 {
+            return "\(hours)h"
+        }
+        if hours > 0 {
+            return "\(hours)h \(remainingMinutes)m"
+        }
+        return "\(minutes)m"
+    }
+
+    private static func parseISO8601Date(_ string: String) -> Date? {
+        guard !string.isEmpty else { return nil }
+        let withFractional = ISO8601DateFormatter()
+        withFractional.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        if let date = withFractional.date(from: string) {
+            return date
+        }
+        let basic = ISO8601DateFormatter()
+        basic.formatOptions = [.withInternetDateTime]
+        return basic.date(from: string)
+    }
 }
 
 extension KeeperTodayUsage {

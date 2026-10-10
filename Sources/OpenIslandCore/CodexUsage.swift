@@ -70,6 +70,7 @@ public enum CodexUsageLoader {
     public static func load(
         fromRootURL rootURL: URL? = nil,
         fromRootURLs rootURLs: [URL]? = nil,
+        keeperDatabaseURL: URL? = nil,
         fileManager: FileManager = .default
     ) throws -> CodexUsageSnapshot? {
         let roots: [URL]
@@ -120,16 +121,36 @@ public enum CodexUsageLoader {
             return lhs.modifiedAt > rhs.modifiedAt
         }
 
+        var rolloutSnapshot: CodexUsageSnapshot?
         for candidate in sortedCandidates {
             if let snapshot = loadLatestSnapshot(
                 from: candidate.fileURL,
                 modifiedAt: candidate.modifiedAt
             ) {
-                return snapshot
+                rolloutSnapshot = snapshot
+                break
             }
         }
 
-        return nil
+        let keeperSnapshot: CodexUsageSnapshot?
+        if let keeperDatabaseURL {
+            keeperSnapshot = try? KeeperUsageReader.loadCodexRateLimits(databaseURL: keeperDatabaseURL)
+        } else if rootURL == nil && rootURLs == nil {
+            keeperSnapshot = try? KeeperUsageReader.loadCodexRateLimits()
+        } else {
+            keeperSnapshot = nil
+        }
+
+        if let keeper = keeperSnapshot, !keeper.isEmpty {
+            if let rollout = rolloutSnapshot, !rollout.isEmpty {
+                let rolloutTime = rollout.capturedAt ?? .distantPast
+                let keeperTime = keeper.capturedAt ?? .distantPast
+                return keeperTime >= rolloutTime ? keeper : rollout
+            }
+            return keeper
+        }
+
+        return rolloutSnapshot
     }
 
     private static func loadLatestSnapshot(from fileURL: URL, modifiedAt: Date) -> CodexUsageSnapshot? {
