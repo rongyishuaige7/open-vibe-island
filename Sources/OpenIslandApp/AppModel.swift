@@ -791,6 +791,12 @@ final class AppModel {
         monitoring.onCodexAppMaintenanceTick = { [weak self] in
             self?.discovery.maintainCodexAppSessionsIfNeeded()
         }
+        todayTokenUsageMonitor.onDatabaseChanged = { [weak self] in
+            guard let self else { return }
+            if self.showCodexUsage {
+                self.hooks.refreshCodexUsageState()
+            }
+        }
         refreshOverlayDisplayConfiguration()
         hasFinishedInit = true
     }

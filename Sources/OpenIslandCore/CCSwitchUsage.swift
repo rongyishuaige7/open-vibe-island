@@ -46,6 +46,7 @@ public struct TodayTokenUsage: Equatable, Sendable {
     public var claudeAccounts: [String]
     public var claudeProAccounts: [String]
     public var otherAccounts: [String]
+    public var agyAccountBreakdown: [AccountTokenUsage]
     public var claudeProCostUSD: Double?
     public var claudeProRateLimit5h: Int?
     public var claudeProRateLimit7d: Int?
@@ -64,6 +65,7 @@ public struct TodayTokenUsage: Equatable, Sendable {
         claudeAccounts: [String] = [],
         claudeProAccounts: [String] = [],
         otherAccounts: [String] = [],
+        agyAccountBreakdown: [AccountTokenUsage] = [],
         claudeProCostUSD: Double? = nil,
         claudeProRateLimit5h: Int? = nil,
         claudeProRateLimit7d: Int? = nil
@@ -81,6 +83,7 @@ public struct TodayTokenUsage: Equatable, Sendable {
         self.claudeAccounts = claudeAccounts
         self.claudeProAccounts = claudeProAccounts
         self.otherAccounts = otherAccounts
+        self.agyAccountBreakdown = agyAccountBreakdown
         self.claudeProCostUSD = claudeProCostUSD
         self.claudeProRateLimit5h = claudeProRateLimit5h
         self.claudeProRateLimit7d = claudeProRateLimit7d

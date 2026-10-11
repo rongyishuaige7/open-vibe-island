@@ -18,6 +18,14 @@ final class TodayTokenUsageMonitor {
     private let interval: Duration
     @ObservationIgnored private var task: Task<Void, Never>?
 
+    public var onDatabaseChanged: (@MainActor () -> Void)?
+
+    @ObservationIgnored private var watcherSource: DispatchSourceFileSystemObject?
+    @ObservationIgnored private var watchedFD: Int32 = -1
+    @ObservationIgnored private var walWatcherSource: DispatchSourceFileSystemObject?
+    @ObservationIgnored private var walWatchedFD: Int32 = -1
+    @ObservationIgnored private var debounceTask: Task<Void, Never>?
+
     init(
         databaseURL: URL = CCSwitchUsageReader.defaultDatabaseURL,
         keeperDatabaseURL: URL = KeeperUsageReader.defaultDatabaseURL,
@@ -34,6 +42,7 @@ final class TodayTokenUsageMonitor {
 
     func start() {
         guard task == nil else { return }
+        startWatcher()
         let interval = self.interval
         task = Task { [weak self] in
             while !Task.isCancelled {
@@ -45,10 +54,93 @@ final class TodayTokenUsageMonitor {
     }
 
     func stop() {
+        stopWatcher()
         task?.cancel()
         task = nil
         usage = nil
         lastErrorMessage = nil
+    }
+
+    private func startWatcher() {
+        stopWatcher()
+
+        // 1. Watch Keeper database directory (/opt/homebrew/var/cpa-usage-keeper)
+        let dirURL = keeperDatabaseURL.deletingLastPathComponent()
+        let dirPath = dirURL.path
+        if FileManager.default.fileExists(atPath: dirPath) {
+            let fd = open(dirPath, O_EVTONLY)
+            if fd >= 0 {
+                watchedFD = fd
+                let source = DispatchSource.makeFileSystemObjectSource(
+                    fileDescriptor: fd,
+                    eventMask: [.write, .extend, .attrib, .link],
+                    queue: DispatchQueue.global(qos: .utility)
+                )
+                source.setEventHandler { [weak self] in
+                    self?.handleDatabaseChangedEvent()
+                }
+                source.setCancelHandler {
+                    close(fd)
+                }
+                source.resume()
+                watcherSource = source
+            }
+        }
+
+        // 2. Also watch app.db-wal directly if present
+        let walPath = keeperDatabaseURL.path + "-wal"
+        if FileManager.default.fileExists(atPath: walPath) {
+            let fd = open(walPath, O_EVTONLY)
+            if fd >= 0 {
+                walWatchedFD = fd
+                let source = DispatchSource.makeFileSystemObjectSource(
+                    fileDescriptor: fd,
+                    eventMask: [.write, .extend, .attrib],
+                    queue: DispatchQueue.global(qos: .utility)
+                )
+                source.setEventHandler { [weak self] in
+                    self?.handleDatabaseChangedEvent()
+                }
+                source.setCancelHandler {
+                    close(fd)
+                }
+                source.resume()
+                walWatcherSource = source
+            }
+        }
+    }
+
+    private func handleDatabaseChangedEvent() {
+        Task { @MainActor [weak self] in
+            guard let self else { return }
+            self.scheduleDebouncedRefresh()
+        }
+    }
+
+    private func scheduleDebouncedRefresh() {
+        debounceTask?.cancel()
+        debounceTask = Task { [weak self] in
+            try? await Task.sleep(for: .milliseconds(150))
+            guard !Task.isCancelled, let self else { return }
+            await self.refresh()
+            self.onDatabaseChanged?()
+        }
+    }
+
+    private func stopWatcher() {
+        debounceTask?.cancel()
+        debounceTask = nil
+
+        if let source = watcherSource {
+            source.cancel()
+            watcherSource = nil
+            watchedFD = -1
+        }
+        if let source = walWatcherSource {
+            source.cancel()
+            walWatcherSource = nil
+            walWatchedFD = -1
+        }
     }
 
     func refresh() async {
@@ -92,6 +184,7 @@ final class TodayTokenUsageMonitor {
                 usage.codexAccounts = keeperUsage.codexAccounts
                 usage.claudeAccounts = keeperUsage.claudeAccounts
                 usage.otherAccounts = keeperUsage.otherAccounts
+                usage.agyAccountBreakdown = keeperUsage.agyAccountBreakdown
                 hasAnyDatabase = true
             } catch {
                 usage.codex = ccCodex
