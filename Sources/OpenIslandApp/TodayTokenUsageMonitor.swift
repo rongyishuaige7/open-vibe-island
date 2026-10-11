@@ -74,10 +74,10 @@ final class TodayTokenUsageMonitor {
                 let source = DispatchSource.makeFileSystemObjectSource(
                     fileDescriptor: fd,
                     eventMask: [.write, .extend, .attrib, .link],
-                    queue: DispatchQueue.global(qos: .utility)
+                    queue: DispatchQueue.main
                 )
                 source.setEventHandler { [weak self] in
-                    self?.handleDatabaseChangedEvent()
+                    self?.scheduleDebouncedRefresh()
                 }
                 source.setCancelHandler {
                     close(fd)
@@ -96,10 +96,10 @@ final class TodayTokenUsageMonitor {
                 let source = DispatchSource.makeFileSystemObjectSource(
                     fileDescriptor: fd,
                     eventMask: [.write, .extend, .attrib],
-                    queue: DispatchQueue.global(qos: .utility)
+                    queue: DispatchQueue.main
                 )
                 source.setEventHandler { [weak self] in
-                    self?.handleDatabaseChangedEvent()
+                    self?.scheduleDebouncedRefresh()
                 }
                 source.setCancelHandler {
                     close(fd)
@@ -107,13 +107,6 @@ final class TodayTokenUsageMonitor {
                 source.resume()
                 walWatcherSource = source
             }
-        }
-    }
-
-    private func handleDatabaseChangedEvent() {
-        Task { @MainActor [weak self] in
-            guard let self else { return }
-            self.scheduleDebouncedRefresh()
         }
     }
 
