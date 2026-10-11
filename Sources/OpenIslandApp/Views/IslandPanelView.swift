@@ -1384,6 +1384,25 @@ struct IslandPanelView: View {
                     languageCode: languageCode
                 )
 
+                if let usage, usage.agyAccountBreakdown.count > 1 {
+                    ForEach(usage.agyAccountBreakdown) { sub in
+                        HStack(alignment: .center, spacing: 6) {
+                            Text("↳ \(sub.account)")
+                                .font(.system(size: 9.5, design: .monospaced))
+                                .foregroundStyle(.white.opacity(0.52))
+                                .lineLimit(1)
+                            Spacer(minLength: 4)
+                            Text("\(sub.totals.requestCount) 次")
+                                .font(.system(size: 8.5, design: .monospaced))
+                                .foregroundStyle(.white.opacity(0.35))
+                            Text(TokenCountFormatter.compact(sub.totals.totalTokens, languageCode: languageCode))
+                                .font(.system(size: 10, weight: .semibold, design: .monospaced))
+                                .foregroundStyle(.white.opacity(0.75))
+                        }
+                        .padding(.leading, 15)
+                    }
+                }
+
                 tokenDetailAgentRow(
                     label: lang.t("usage.todayTokens.agyPro"),
                     dotColor: IslandDesignPalette.Status.runningAgy,

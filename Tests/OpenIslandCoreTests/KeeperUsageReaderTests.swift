@@ -71,6 +71,11 @@ struct KeeperUsageReaderTests {
         #expect(usage.agyPro == AgentTokenTotals(requestCount: 5, totalTokens: 500, cacheReadTokens: 50))
         #expect(usage.codex == .zero)
         #expect(usage.claude == .zero)
+        #expect(usage.agyAccountBreakdown.count == 2)
+        let sk = usage.agyAccountBreakdown.first { $0.account == "sk44989" }
+        #expect(sk?.totals == AgentTokenTotals(requestCount: 10, totalTokens: 1000, cacheReadTokens: 200))
+        let victor = usage.agyAccountBreakdown.first { $0.account == "victorcranston465" }
+        #expect(victor?.totals == AgentTokenTotals(requestCount: 20, totalTokens: 2000, cacheReadTokens: 300))
     }
 
     @Test

@@ -1,6 +1,18 @@
 import Foundation
 import SQLite3
 
+/// Per-account token consumption detail.
+public struct AccountTokenUsage: Equatable, Sendable, Identifiable {
+    public var id: String { account }
+    public var account: String
+    public var totals: AgentTokenTotals
+
+    public init(account: String, totals: AgentTokenTotals) {
+        self.account = account
+        self.totals = totals
+    }
+}
+
 /// Antigravity, Codex, and Claude token totals loaded from KEEPER.
 public struct KeeperTodayUsage: Equatable, Sendable {
     public var agy: AgentTokenTotals
@@ -14,6 +26,7 @@ public struct KeeperTodayUsage: Equatable, Sendable {
     public var codexAccounts: [String]
     public var claudeAccounts: [String]
     public var otherAccounts: [String]
+    public var agyAccountBreakdown: [AccountTokenUsage]
 
     public init(
         agy: AgentTokenTotals = .zero,
@@ -25,7 +38,8 @@ public struct KeeperTodayUsage: Equatable, Sendable {
         agyProAccounts: [String] = [],
         codexAccounts: [String] = [],
         claudeAccounts: [String] = [],
-        otherAccounts: [String] = []
+        otherAccounts: [String] = [],
+        agyAccountBreakdown: [AccountTokenUsage] = []
     ) {
         self.agy = agy
         self.agyPro = agyPro
@@ -37,6 +51,7 @@ public struct KeeperTodayUsage: Equatable, Sendable {
         self.codexAccounts = codexAccounts
         self.claudeAccounts = claudeAccounts
         self.otherAccounts = otherAccounts
+        self.agyAccountBreakdown = agyAccountBreakdown
     }
 
     public static let zero = KeeperTodayUsage()
@@ -467,10 +482,19 @@ extension KeeperTodayUsage {
                 accounts.append(account)
             }
         }
+        func appendBreakdown(_ list: inout [AccountTokenUsage]) {
+            guard !account.isEmpty else { return }
+            if let idx = list.firstIndex(where: { $0.account.caseInsensitiveCompare(account) == .orderedSame }) {
+                list[idx].totals += totals
+            } else {
+                list.append(AccountTokenUsage(account: account, totals: totals))
+            }
+        }
         switch channel {
         case .agy:
             agy += totals
             append(&agyAccounts)
+            appendBreakdown(&agyAccountBreakdown)
         case .agyPro:
             agyPro += totals
             append(&agyProAccounts)
