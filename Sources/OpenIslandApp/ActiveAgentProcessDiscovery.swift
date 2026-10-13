@@ -2,8 +2,8 @@ import Foundation
 import OpenIslandCore
 
 struct ActiveAgentProcessDiscovery {
-    private static let processCommandTimeout: TimeInterval = 0.5
-    private static let lsofCommandTimeout: TimeInterval = 0.2
+    private static let processCommandTimeout: TimeInterval = 5.0
+    private static let lsofCommandTimeout: TimeInterval = 2.0
 
     private final class OutputBox: @unchecked Sendable {
         var data = Data()
@@ -63,6 +63,22 @@ struct ActiveAgentProcessDiscovery {
 
         let processesByPID = Dictionary(uniqueKeysWithValues: processes.map { ($0.pid, $0) })
 
+        // Pre-collect candidate agent PIDs to fetch all lsof details in a single batch.
+        var candidatePIDs: [String] = []
+        for rawProcess in processes {
+            var process = rawProcess
+            if process.terminalTTY == nil {
+                process.terminalTTY = effectiveTerminalTTY(for: process, processesByPID: processesByPID)
+            }
+            if process.terminalTTY == nil && !isOpenCodeProcess(command: process.command) {
+                continue
+            }
+            if isCandidateAgentProcess(command: process.command) {
+                candidatePIDs.append(process.pid)
+            }
+        }
+        let preloadedLsofs = candidatePIDs.isEmpty ? [:] : batchLsofOutputs(pids: candidatePIDs)
+
         var snapshots: [ProcessSnapshot] = []
         var claimedKeys: Set<String> = []
 
@@ -81,7 +97,7 @@ struct ActiveAgentProcessDiscovery {
             }
 
             if isCodexProcess(command: process.command) {
-                guard let snapshot = codexSnapshot(for: process, processesByPID: processesByPID) else {
+                guard let snapshot = codexSnapshot(for: process, processesByPID: processesByPID, preloadedLsofs: preloadedLsofs) else {
                     continue
                 }
 
@@ -95,7 +111,7 @@ struct ActiveAgentProcessDiscovery {
             }
 
             if isClaudeProcess(command: process.command) {
-                guard let snapshot = claudeSnapshot(for: process, processesByPID: processesByPID) else {
+                guard let snapshot = claudeSnapshot(for: process, processesByPID: processesByPID, preloadedLsofs: preloadedLsofs) else {
                     continue
                 }
 
@@ -109,7 +125,7 @@ struct ActiveAgentProcessDiscovery {
             }
 
             if isCursorAgentProcess(command: process.command) {
-                guard let snapshot = cursorSnapshot(for: process, processesByPID: processesByPID) else {
+                guard let snapshot = cursorSnapshot(for: process, processesByPID: processesByPID, preloadedLsofs: preloadedLsofs) else {
                     continue
                 }
 
@@ -135,7 +151,7 @@ struct ActiveAgentProcessDiscovery {
             }
 
             if isOpenCodeProcess(command: process.command) {
-                let lsofOutput = lsofOutput(pid: process.pid)
+                let lsofOutput = lsofOutput(pid: process.pid, preloaded: preloadedLsofs)
                 let cwd = lsofOutput.flatMap(workingDirectory(from:))
 
                 // Deduplicate by TTY and working directory instead of PID.
@@ -188,7 +204,7 @@ struct ActiveAgentProcessDiscovery {
             }
 
             if isGeminiProcess(command: process.command) {
-                let lsofOutput = lsofOutput(pid: process.pid)
+                let lsofOutput = lsofOutput(pid: process.pid, preloaded: preloadedLsofs)
                 let sessionID = agySessionID(in: lsofOutput, command: process.command)
                 let claimKey = "gemini:\(sessionID ?? process.pid)"
                 guard claimedKeys.insert(claimKey).inserted else {
@@ -228,7 +244,7 @@ struct ActiveAgentProcessDiscovery {
                     continue
                 }
 
-                let lsofOutput = lsofOutput(pid: process.pid)
+                let lsofOutput = lsofOutput(pid: process.pid, preloaded: preloadedLsofs)
                 snapshots.append(ProcessSnapshot(
                     tool: .kimiCLI,
                     sessionID: nil,
@@ -245,7 +261,7 @@ struct ActiveAgentProcessDiscovery {
                     continue
                 }
 
-                let lsofOutput = lsofOutput(pid: process.pid)
+                let lsofOutput = lsofOutput(pid: process.pid, preloaded: preloadedLsofs)
                 snapshots.append(ProcessSnapshot(
                     tool: .grokBuild,
                     sessionID: nil,
@@ -262,7 +278,7 @@ struct ActiveAgentProcessDiscovery {
                     continue
                 }
 
-                let lsofOutput = lsofOutput(pid: process.pid)
+                let lsofOutput = lsofOutput(pid: process.pid, preloaded: preloadedLsofs)
                 snapshots.append(ProcessSnapshot(
                     tool: piAgent.tool,
                     sessionID: nil,
@@ -309,9 +325,10 @@ struct ActiveAgentProcessDiscovery {
 
     private func codexSnapshot(
         for process: RunningProcess,
-        processesByPID: [String: RunningProcess]
+        processesByPID: [String: RunningProcess],
+        preloadedLsofs: [String: String]? = nil
     ) -> ProcessSnapshot? {
-        let lsofOutput = lsofOutput(pid: process.pid)
+        let lsofOutput = lsofOutput(pid: process.pid, preloaded: preloadedLsofs)
         var transcriptPath = lsofOutput.flatMap(bestCodexTranscriptPath(in:))
         var sessionID = transcriptPath.flatMap(firstUUID(in:))
             ?? firstUUID(in: process.command)
@@ -353,9 +370,10 @@ struct ActiveAgentProcessDiscovery {
 
     private func cursorSnapshot(
         for process: RunningProcess,
-        processesByPID: [String: RunningProcess]
+        processesByPID: [String: RunningProcess],
+        preloadedLsofs: [String: String]? = nil
     ) -> ProcessSnapshot? {
-        let lsofOutput = lsofOutput(pid: process.pid)
+        let lsofOutput = lsofOutput(pid: process.pid, preloaded: preloadedLsofs)
         let workingDirectory = lsofOutput.flatMap(workingDirectory(from:))
         let sessionID = lsofOutput.flatMap(cursorConversationID(in:))
 
@@ -431,9 +449,10 @@ struct ActiveAgentProcessDiscovery {
 
     private func claudeSnapshot(
         for process: RunningProcess,
-        processesByPID: [String: RunningProcess]
+        processesByPID: [String: RunningProcess],
+        preloadedLsofs: [String: String]? = nil
     ) -> ProcessSnapshot? {
-        let lsofOutput = lsofOutput(pid: process.pid)
+        let lsofOutput = lsofOutput(pid: process.pid, preloaded: preloadedLsofs)
         let workingDirectory = lsofOutput.flatMap(workingDirectory(from:))
 
         // Subagent processes run in .claude/worktrees/agent-*/ directories.
@@ -746,8 +765,50 @@ struct ActiveAgentProcessDiscovery {
         return nil
     }
 
-    private func lsofOutput(pid: String) -> String? {
-        commandRunner("/usr/sbin/lsof", ["-a", "-p", pid, "-Fn"])
+    private func lsofOutput(pid: String, preloaded: [String: String]? = nil) -> String? {
+        if let cached = preloaded?[pid] {
+            return cached
+        }
+        return commandRunner("/usr/sbin/lsof", ["-a", "-p", pid, "-Fn"])
+    }
+
+    private func batchLsofOutputs(pids: [String]) -> [String: String] {
+        guard !pids.isEmpty else { return [:] }
+        let pidArg = pids.joined(separator: ",")
+        guard let output = commandRunner("/usr/sbin/lsof", ["-a", "-p", pidArg, "-Fn"]) else {
+            return [:]
+        }
+        var results: [String: String] = [:]
+        var currentPID: String?
+        var currentLines: [String] = []
+
+        for line in output.split(whereSeparator: \.isNewline) {
+            let s = String(line)
+            if s.hasPrefix("p") {
+                if let pid = currentPID, !currentLines.isEmpty {
+                    results[pid] = currentLines.joined(separator: "\n")
+                }
+                currentPID = String(s.dropFirst())
+                currentLines = [s]
+            } else if currentPID != nil {
+                currentLines.append(s)
+            }
+        }
+        if let pid = currentPID, !currentLines.isEmpty {
+            results[pid] = currentLines.joined(separator: "\n")
+        }
+        return results
+    }
+
+    private func isCandidateAgentProcess(command: String) -> Bool {
+        isCodexProcess(command: command)
+            || isClaudeProcess(command: command)
+            || isCursorAgentProcess(command: command)
+            || isOpenCodeProcess(command: command)
+            || isGeminiProcess(command: command)
+            || isKimiProcess(command: command)
+            || isGrokProcess(command: command)
+            || piAgentVariant(command: command) != nil
     }
 
     private func workingDirectory(from lsofOutput: String) -> String? {
@@ -1164,7 +1225,7 @@ struct ActiveAgentProcessDiscovery {
             return nil
         }
 
-        _ = outputGroup.wait(timeout: .now() + 0.1)
+        _ = outputGroup.wait(timeout: .now() + 0.5)
         guard let output = String(data: outputBox.data, encoding: .utf8)?
             .trimmingCharacters(in: .whitespacesAndNewlines),
               !output.isEmpty else {
