@@ -495,7 +495,7 @@ extension KeeperTodayUsage {
                 accounts.append(account)
             }
         }
-        func appendBreakdown(_ list: inout [AccountTokenUsage]) {
+        func appendBreakdown(_ list: inout [AccountTokenUsage], totals: AgentTokenTotals) {
             guard !account.isEmpty else { return }
             if let idx = list.firstIndex(where: { $0.account.caseInsensitiveCompare(account) == .orderedSame }) {
                 list[idx].totals += totals
@@ -505,11 +505,19 @@ extension KeeperTodayUsage {
         }
         switch channel {
         case .agy:
-            agy += totals
+            var adjustedTotals = totals
+            if adjustedTotals.totalTokens < adjustedTotals.cacheReadTokens {
+                adjustedTotals.totalTokens += adjustedTotals.cacheReadTokens
+            }
+            agy += adjustedTotals
             append(&agyAccounts)
-            appendBreakdown(&agyAccountBreakdown)
+            appendBreakdown(&agyAccountBreakdown, totals: adjustedTotals)
         case .agyPro:
-            agyPro += totals
+            var adjustedTotals = totals
+            if adjustedTotals.totalTokens < adjustedTotals.cacheReadTokens {
+                adjustedTotals.totalTokens += adjustedTotals.cacheReadTokens
+            }
+            agyPro += adjustedTotals
             append(&agyProAccounts)
         case .codex:
             codex += totals

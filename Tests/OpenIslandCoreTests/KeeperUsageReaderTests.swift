@@ -79,6 +79,47 @@ struct KeeperUsageReaderTests {
     }
 
     @Test
+    func compensatesAntigravityTokensWhenTotalTokensExcludesCache() throws {
+        let tempDir = FileManager.default.temporaryDirectory
+        let dbURL = tempDir.appendingPathComponent("test-keeper-cache-\(UUID().uuidString).db")
+        defer { try? FileManager.default.removeItem(at: dbURL) }
+
+        var handle: OpaquePointer?
+        guard sqlite3_open(dbURL.path, &handle) == SQLITE_OK, let db = handle else {
+            fatalError("Failed to open test db")
+        }
+        defer { sqlite3_close(db) }
+
+        let schema = """
+            CREATE TABLE usage_identities (
+                id INTEGER PRIMARY KEY,
+                name TEXT,
+                identity TEXT
+            );
+            CREATE TABLE usage_overview_daily_stats (
+                id INTEGER PRIMARY KEY,
+                bucket_start TEXT,
+                auth_index TEXT,
+                request_count INTEGER,
+                total_tokens INTEGER,
+                cache_read_tokens INTEGER
+            );
+            INSERT INTO usage_identities (id, name, identity) VALUES
+                (1, 'wisnumandala302@gmail.com', 'idx-pro');
+            -- Simulate unmigrated row where total_tokens (10) < cache_read_tokens (100)
+            INSERT INTO usage_overview_daily_stats (bucket_start, auth_index, request_count, total_tokens, cache_read_tokens) VALUES
+                ('2026-10-05T00:00:00+08:00', 'idx-pro', 2, 10, 100);
+        """
+        guard sqlite3_exec(db, schema, nil, nil, nil) == SQLITE_OK else {
+            fatalError("Failed to execute schema")
+        }
+
+        let usage = try KeeperUsageReader.loadToday(databaseURL: dbURL, now: Self.now, calendar: Self.calendar)
+
+        #expect(usage.agyPro == AgentTokenTotals(requestCount: 2, totalTokens: 110, cacheReadTokens: 100))
+    }
+
+    @Test
     func readsWalModeDatabaseWhileKeeperRunsAndAfterItStops() throws {
         let tempDir = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         try FileManager.default.createDirectory(at: tempDir, withIntermediateDirectories: true)
