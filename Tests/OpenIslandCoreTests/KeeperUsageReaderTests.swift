@@ -384,4 +384,63 @@ struct KeeperUsageReaderTests {
         let loaderSnapshot = try CodexUsageLoader.load(fromRootURLs: [], keeperDatabaseURL: dbURL)
         #expect(loaderSnapshot?.windows.count == 2)
     }
+
+    @Test
+    func codexRateLimitsKeepTheWeeklyWindowBehindManyFiveHourObservations() throws {
+        let tempDir = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: tempDir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: tempDir) }
+        let dbURL = tempDir.appendingPathComponent("app.db")
+
+        var handle: OpaquePointer?
+        guard sqlite3_open(dbURL.path, &handle) == SQLITE_OK, let writer = handle else {
+            fatalError("Failed to open test db")
+        }
+        // The 5h window is observed far more often than the 7d one; twelve
+        // newer 5h observations sit in front of the only 7d one.
+        let primaryObservations = (0..<12).map { minute in
+            "(1, \(60 - minute), '2026-10-10T09:\(String(format: "%02d", 30 + minute)):00Z')"
+        }.joined(separator: ",\n")
+        let schema = """
+            PRAGMA journal_mode=WAL;
+            CREATE TABLE usage_identities (id INTEGER PRIMARY KEY, name TEXT, identity TEXT, plan_type TEXT);
+            CREATE TABLE quota_cycles (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                provider TEXT NOT NULL,
+                auth_index TEXT NOT NULL,
+                quota_key TEXT NOT NULL,
+                window_seconds INTEGER NOT NULL,
+                reset_at TEXT NOT NULL
+            );
+            CREATE TABLE quota_percent_segments (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                cycle_id INTEGER NOT NULL,
+                remaining_percent INTEGER NOT NULL,
+                last_observed_at TEXT NOT NULL
+            );
+            INSERT INTO usage_identities (id, name, identity, plan_type) VALUES (1, 'plus', 'idx-plus', 'plus');
+            INSERT INTO quota_cycles (id, provider, auth_index, quota_key, window_seconds, reset_at) VALUES
+                (1, 'codex', 'idx-plus', 'rate_limit.primary_window', 18000, '2026-10-10T12:00:00Z'),
+                (2, 'codex', 'idx-plus', 'rate_limit.secondary_window', 604800, '2026-10-15T03:00:00Z');
+            INSERT INTO quota_percent_segments (cycle_id, remaining_percent, last_observed_at) VALUES
+                (2, 34, '2026-10-10T09:00:00Z'),
+                \(primaryObservations);
+            """
+        let setupResult = sqlite3_exec(writer, schema, nil, nil, nil)
+        sqlite3_close(writer)
+        guard setupResult == SQLITE_OK else {
+            fatalError("Failed to execute quota schema")
+        }
+        // KEEPER stopped and its SQLite removed the WAL files.
+        try? FileManager.default.removeItem(atPath: dbURL.path + "-wal")
+        try? FileManager.default.removeItem(atPath: dbURL.path + "-shm")
+
+        /// 2026-10-10 10:00:00 UTC, before either window resets.
+        let now = Date(timeIntervalSince1970: 1_791_626_400)
+        let snapshot = try #require(try KeeperUsageReader.loadCodexRateLimits(databaseURL: dbURL, now: now))
+
+        #expect(snapshot.windows.map(\.key) == ["primary", "secondary"])
+        #expect(snapshot.windows.first { $0.key == "primary" }?.leftPercentage == 49)
+        #expect(snapshot.windows.first { $0.key == "secondary" }?.leftPercentage == 34)
+    }
 }

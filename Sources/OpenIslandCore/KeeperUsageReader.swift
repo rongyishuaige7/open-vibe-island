@@ -103,15 +103,7 @@ public enum KeeperUsageReader {
             throw KeeperUsageError.databaseMissing
         }
 
-        // KEEPER writes in WAL mode; see SQLiteReadOnly for why the read
-        // survives KEEPER stopping and removing its -wal file.
-        let db: OpaquePointer
-        switch SQLiteReadOnly.open(path: databaseURL.path, busyTimeoutMilliseconds: 200) {
-        case let .success(handle):
-            db = handle
-        case let .failure(error):
-            throw KeeperUsageError.sqlite(error.message)
-        }
+        let db = try openDatabase(databaseURL)
         defer { sqlite3_close(db) }
 
         // KEEPER buckets carry its own business time zone (e.g. +08:00), not
@@ -245,6 +237,17 @@ public enum KeeperUsageReader {
         return formatter
     }
 
+    /// KEEPER writes in WAL mode; see SQLiteReadOnly for why the read
+    /// survives KEEPER stopping and removing its -wal file.
+    private static func openDatabase(_ databaseURL: URL) throws -> OpaquePointer {
+        switch SQLiteReadOnly.open(path: databaseURL.path, busyTimeoutMilliseconds: 200) {
+        case let .success(db):
+            return db
+        case let .failure(error):
+            throw KeeperUsageError.sqlite(error.message)
+        }
+    }
+
     private static func columns(db: OpaquePointer, table: String) -> Set<String> {
         var statement: OpaquePointer?
         guard sqlite3_prepare_v2(db, "PRAGMA table_info(\(table));", -1, &statement, nil) == SQLITE_OK else {
@@ -318,15 +321,8 @@ public enum KeeperUsageReader {
             throw KeeperUsageError.databaseMissing
         }
 
-        var handle: OpaquePointer?
-        let flags: Int32 = SQLITE_OPEN_READONLY | SQLITE_OPEN_NOMUTEX
-        guard sqlite3_open_v2(databaseURL.path, &handle, flags, nil) == SQLITE_OK, let db = handle else {
-            let message = handle.map { String(cString: sqlite3_errmsg($0)) } ?? "open failed"
-            sqlite3_close(handle)
-            throw KeeperUsageError.sqlite(message)
-        }
+        let db = try openDatabase(databaseURL)
         defer { sqlite3_close(db) }
-        sqlite3_busy_timeout(db, 200)
 
         // Verify tables exist
         let cycleColumns = columns(db: db, table: "quota_cycles")
@@ -347,22 +343,39 @@ public enum KeeperUsageReader {
                 WHERE qc.provider = 'codex'
                 ORDER BY qps.last_observed_at DESC, qps.id DESC
                 LIMIT 1
+            ),
+            -- Newest observation per window. The 5h window is observed far
+            -- more often than the 7d one, so a plain LIMIT over both could
+            -- crowd the 7d row out.
+            observations AS (
+                SELECT qc.quota_key,
+                       qc.window_seconds,
+                       qc.reset_at,
+                       qps.remaining_percent,
+                       qps.last_observed_at,
+                       qps.id AS segment_id,
+                       qc.auth_index,
+                       ROW_NUMBER() OVER (
+                           PARTITION BY qc.quota_key
+                           ORDER BY qps.last_observed_at DESC, qps.id DESC
+                       ) AS recency
+                FROM quota_cycles qc
+                JOIN quota_percent_segments qps ON qps.cycle_id = qc.id
+                JOIN latest_account la ON qc.auth_index = la.auth_index
+                WHERE qc.provider = 'codex'
+                  AND qc.quota_key IN ('rate_limit.primary_window', 'rate_limit.secondary_window')
             )
-            SELECT qc.quota_key,
-                   qc.window_seconds,
-                   qc.reset_at,
-                   qps.remaining_percent,
-                   qps.last_observed_at,
+            SELECT o.quota_key,
+                   o.window_seconds,
+                   o.reset_at,
+                   o.remaining_percent,
+                   o.last_observed_at,
                    \(hasName ? "COALESCE(ui.name, '')" : "''"),
                    \(hasPlan ? "COALESCE(ui.plan_type, '')" : "''")
-            FROM quota_cycles qc
-            JOIN quota_percent_segments qps ON qps.cycle_id = qc.id
-            JOIN latest_account la ON qc.auth_index = la.auth_index
-            LEFT JOIN usage_identities ui ON ui.identity = qc.auth_index
-            WHERE qc.provider = 'codex'
-              AND qc.quota_key IN ('rate_limit.primary_window', 'rate_limit.secondary_window')
-            ORDER BY qps.last_observed_at DESC, qps.id DESC
-            LIMIT 10;
+            FROM observations o
+            LEFT JOIN usage_identities ui ON ui.identity = o.auth_index
+            WHERE o.recency = 1
+            ORDER BY o.last_observed_at DESC, o.segment_id DESC;
             """
 
         var statement: OpaquePointer?
