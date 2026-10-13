@@ -18,6 +18,14 @@ final class TodayTokenUsageMonitor {
     private let interval: Duration
     @ObservationIgnored private var task: Task<Void, Never>?
 
+    public var onDatabaseChanged: (@MainActor () -> Void)?
+
+    @ObservationIgnored private var watcherSource: DispatchSourceFileSystemObject?
+    @ObservationIgnored private var walWatcherSource: DispatchSourceFileSystemObject?
+    /// File number of the -wal file `walWatcherSource` holds open.
+    @ObservationIgnored private var walWatchedFileNumber: Int?
+    @ObservationIgnored private var debounceTask: Task<Void, Never>?
+
     init(
         databaseURL: URL = CCSwitchUsageReader.defaultDatabaseURL,
         keeperDatabaseURL: URL = KeeperUsageReader.defaultDatabaseURL,
@@ -34,6 +42,7 @@ final class TodayTokenUsageMonitor {
 
     func start() {
         guard task == nil else { return }
+        startWatcher()
         let interval = self.interval
         task = Task { [weak self] in
             while !Task.isCancelled {
@@ -45,10 +54,90 @@ final class TodayTokenUsageMonitor {
     }
 
     func stop() {
+        stopWatcher()
         task?.cancel()
         task = nil
         usage = nil
         lastErrorMessage = nil
+    }
+
+    private func startWatcher() {
+        stopWatcher()
+
+        // The directory sees app.db-wal appear, vanish, or be replaced; writes
+        // land in the -wal file itself. KEEPER may start after Open Island
+        // (both launch at login) and recreates the file when it restarts, so
+        // each directory event re-checks which -wal file is watched.
+        let dirPath = keeperDatabaseURL.deletingLastPathComponent().path
+        watcherSource = makeWatcher(path: dirPath, eventMask: [.write, .extend, .attrib, .link]) { [weak self] in
+            self?.watchWALFileIfNeeded()
+            self?.scheduleDebouncedRefresh()
+        }
+        watchWALFileIfNeeded()
+    }
+
+    private func watchWALFileIfNeeded() {
+        let walPath = keeperDatabaseURL.path + "-wal"
+        let fileNumber = (try? FileManager.default.attributesOfItem(atPath: walPath))
+            .flatMap { ($0[.systemFileNumber] as? NSNumber)?.intValue }
+        guard fileNumber != walWatchedFileNumber || (fileNumber != nil && walWatcherSource == nil) else {
+            return
+        }
+
+        walWatcherSource?.cancel()
+        walWatcherSource = nil
+        walWatchedFileNumber = nil
+        guard let fileNumber else { return }
+
+        walWatcherSource = makeWatcher(path: walPath, eventMask: [.write, .extend, .attrib]) { [weak self] in
+            self?.scheduleDebouncedRefresh()
+        }
+        if walWatcherSource != nil {
+            walWatchedFileNumber = fileNumber
+        }
+    }
+
+    /// Delivers events on the main queue, which the handlers' main-actor
+    /// isolation requires.
+    private func makeWatcher(
+        path: String,
+        eventMask: DispatchSource.FileSystemEvent,
+        handler: @escaping () -> Void
+    ) -> DispatchSourceFileSystemObject? {
+        let fd = open(path, O_EVTONLY)
+        guard fd >= 0 else { return nil }
+        let source = DispatchSource.makeFileSystemObjectSource(
+            fileDescriptor: fd,
+            eventMask: eventMask,
+            queue: DispatchQueue.main
+        )
+        source.setEventHandler(handler: handler)
+        source.setCancelHandler {
+            close(fd)
+        }
+        source.resume()
+        return source
+    }
+
+    private func scheduleDebouncedRefresh() {
+        debounceTask?.cancel()
+        debounceTask = Task { [weak self] in
+            try? await Task.sleep(for: .milliseconds(150))
+            guard !Task.isCancelled, let self else { return }
+            await self.refresh()
+            self.onDatabaseChanged?()
+        }
+    }
+
+    private func stopWatcher() {
+        debounceTask?.cancel()
+        debounceTask = nil
+
+        watcherSource?.cancel()
+        watcherSource = nil
+        walWatcherSource?.cancel()
+        walWatcherSource = nil
+        walWatchedFileNumber = nil
     }
 
     func refresh() async {
@@ -92,6 +181,7 @@ final class TodayTokenUsageMonitor {
                 usage.codexAccounts = keeperUsage.codexAccounts
                 usage.claudeAccounts = keeperUsage.claudeAccounts
                 usage.otherAccounts = keeperUsage.otherAccounts
+                usage.agyAccountBreakdown = keeperUsage.agyAccountBreakdown
                 hasAnyDatabase = true
             } catch {
                 usage.codex = ccCodex

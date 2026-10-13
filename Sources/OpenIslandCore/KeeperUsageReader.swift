@@ -1,6 +1,18 @@
 import Foundation
 import SQLite3
 
+/// Per-account token consumption detail.
+public struct AccountTokenUsage: Equatable, Sendable, Identifiable {
+    public var id: String { account }
+    public var account: String
+    public var totals: AgentTokenTotals
+
+    public init(account: String, totals: AgentTokenTotals) {
+        self.account = account
+        self.totals = totals
+    }
+}
+
 /// Antigravity, Codex, and Claude token totals loaded from KEEPER.
 public struct KeeperTodayUsage: Equatable, Sendable {
     public var agy: AgentTokenTotals
@@ -14,6 +26,7 @@ public struct KeeperTodayUsage: Equatable, Sendable {
     public var codexAccounts: [String]
     public var claudeAccounts: [String]
     public var otherAccounts: [String]
+    public var agyAccountBreakdown: [AccountTokenUsage]
 
     public init(
         agy: AgentTokenTotals = .zero,
@@ -25,7 +38,8 @@ public struct KeeperTodayUsage: Equatable, Sendable {
         agyProAccounts: [String] = [],
         codexAccounts: [String] = [],
         claudeAccounts: [String] = [],
-        otherAccounts: [String] = []
+        otherAccounts: [String] = [],
+        agyAccountBreakdown: [AccountTokenUsage] = []
     ) {
         self.agy = agy
         self.agyPro = agyPro
@@ -37,6 +51,7 @@ public struct KeeperTodayUsage: Equatable, Sendable {
         self.codexAccounts = codexAccounts
         self.claudeAccounts = claudeAccounts
         self.otherAccounts = otherAccounts
+        self.agyAccountBreakdown = agyAccountBreakdown
     }
 
     public static let zero = KeeperTodayUsage()
@@ -88,15 +103,7 @@ public enum KeeperUsageReader {
             throw KeeperUsageError.databaseMissing
         }
 
-        // KEEPER writes in WAL mode; see SQLiteReadOnly for why the read
-        // survives KEEPER stopping and removing its -wal file.
-        let db: OpaquePointer
-        switch SQLiteReadOnly.open(path: databaseURL.path, busyTimeoutMilliseconds: 200) {
-        case let .success(handle):
-            db = handle
-        case let .failure(error):
-            throw KeeperUsageError.sqlite(error.message)
-        }
+        let db = try openDatabase(databaseURL)
         defer { sqlite3_close(db) }
 
         // KEEPER buckets carry its own business time zone (e.g. +08:00), not
@@ -230,6 +237,17 @@ public enum KeeperUsageReader {
         return formatter
     }
 
+    /// KEEPER writes in WAL mode; see SQLiteReadOnly for why the read
+    /// survives KEEPER stopping and removing its -wal file.
+    private static func openDatabase(_ databaseURL: URL) throws -> OpaquePointer {
+        switch SQLiteReadOnly.open(path: databaseURL.path, busyTimeoutMilliseconds: 200) {
+        case let .success(db):
+            return db
+        case let .failure(error):
+            throw KeeperUsageError.sqlite(error.message)
+        }
+    }
+
     private static func columns(db: OpaquePointer, table: String) -> Set<String> {
         var statement: OpaquePointer?
         guard sqlite3_prepare_v2(db, "PRAGMA table_info(\(table));", -1, &statement, nil) == SQLITE_OK else {
@@ -292,6 +310,182 @@ public enum KeeperUsageReader {
             GROUP BY 1, 2, 3, 4, 5
             """
     }
+
+    /// Reads the latest Codex Plus 5h and 7d rate limit windows recorded by KEEPER
+    /// from CPA's observed response headers.
+    public static func loadCodexRateLimits(
+        databaseURL: URL = defaultDatabaseURL,
+        now: Date = Date()
+    ) throws -> CodexUsageSnapshot? {
+        guard FileManager.default.fileExists(atPath: databaseURL.path) else {
+            throw KeeperUsageError.databaseMissing
+        }
+
+        let db = try openDatabase(databaseURL)
+        defer { sqlite3_close(db) }
+
+        // Verify tables exist
+        let cycleColumns = columns(db: db, table: "quota_cycles")
+        let segmentColumns = columns(db: db, table: "quota_percent_segments")
+        guard !cycleColumns.isEmpty, !segmentColumns.isEmpty else {
+            return nil
+        }
+
+        let identityColumns = columns(db: db, table: "usage_identities")
+        let hasName = identityColumns.contains("name")
+        let hasPlan = identityColumns.contains("plan_type")
+
+        let sql = """
+            WITH latest_account AS (
+                SELECT qc.auth_index
+                FROM quota_cycles qc
+                JOIN quota_percent_segments qps ON qps.cycle_id = qc.id
+                WHERE qc.provider = 'codex'
+                ORDER BY qps.last_observed_at DESC, qps.id DESC
+                LIMIT 1
+            ),
+            -- Newest observation per window. The 5h window is observed far
+            -- more often than the 7d one, so a plain LIMIT over both could
+            -- crowd the 7d row out.
+            observations AS (
+                SELECT qc.quota_key,
+                       qc.window_seconds,
+                       qc.reset_at,
+                       qps.remaining_percent,
+                       qps.last_observed_at,
+                       qps.id AS segment_id,
+                       qc.auth_index,
+                       ROW_NUMBER() OVER (
+                           PARTITION BY qc.quota_key
+                           ORDER BY qps.last_observed_at DESC, qps.id DESC
+                       ) AS recency
+                FROM quota_cycles qc
+                JOIN quota_percent_segments qps ON qps.cycle_id = qc.id
+                JOIN latest_account la ON qc.auth_index = la.auth_index
+                WHERE qc.provider = 'codex'
+                  AND qc.quota_key IN ('rate_limit.primary_window', 'rate_limit.secondary_window')
+            )
+            SELECT o.quota_key,
+                   o.window_seconds,
+                   o.reset_at,
+                   o.remaining_percent,
+                   o.last_observed_at,
+                   \(hasName ? "COALESCE(ui.name, '')" : "''"),
+                   \(hasPlan ? "COALESCE(ui.plan_type, '')" : "''")
+            FROM observations o
+            LEFT JOIN usage_identities ui ON ui.identity = o.auth_index
+            WHERE o.recency = 1
+            ORDER BY o.last_observed_at DESC, o.segment_id DESC;
+            """
+
+        var statement: OpaquePointer?
+        guard sqlite3_prepare_v2(db, sql, -1, &statement, nil) == SQLITE_OK else {
+            throw KeeperUsageError.sqlite(String(cString: sqlite3_errmsg(db)))
+        }
+        defer { sqlite3_finalize(statement) }
+
+        var windowsByKey: [String: CodexUsageWindow] = [:]
+        var latestCapturedAt: Date?
+        var planType: String?
+
+        while sqlite3_step(statement) == SQLITE_ROW {
+            func text(_ col: Int32) -> String {
+                sqlite3_column_text(statement, col).map { String(cString: $0) } ?? ""
+            }
+
+            let quotaKey = text(0)
+            let windowSeconds = Int(sqlite3_column_int64(statement, 1))
+            let resetAtString = text(2)
+            let remainingPercent = Int(sqlite3_column_int64(statement, 3))
+            let lastObservedString = text(4)
+            let observedPlan = text(6)
+
+            let windowKey: String
+            if quotaKey == "rate_limit.primary_window" {
+                windowKey = "primary"
+            } else if quotaKey == "rate_limit.secondary_window" {
+                windowKey = "secondary"
+            } else {
+                continue
+            }
+
+            if planType == nil && !observedPlan.isEmpty {
+                planType = observedPlan
+            }
+
+            if let observedDate = parseISO8601Date(lastObservedString) {
+                if latestCapturedAt == nil || observedDate > latestCapturedAt! {
+                    latestCapturedAt = observedDate
+                }
+            }
+
+            // Only keep the most recent observation for each window key
+            if windowsByKey[windowKey] == nil {
+                let windowMinutes = max(1, windowSeconds / 60)
+                let label = formatWindowLabel(minutes: windowMinutes)
+                let resetsAt = parseISO8601Date(resetAtString)
+                let isWindowExpired = resetsAt.map { $0 <= now } ?? false
+
+                let leftPercentage = isWindowExpired ? 100.0 : Double(remainingPercent)
+                let usedPercentage = isWindowExpired ? 0.0 : max(0, 100.0 - Double(remainingPercent))
+
+                windowsByKey[windowKey] = CodexUsageWindow(
+                    key: windowKey,
+                    label: label,
+                    usedPercentage: usedPercentage,
+                    leftPercentage: leftPercentage,
+                    windowMinutes: windowMinutes,
+                    resetsAt: resetsAt
+                )
+            }
+        }
+
+        let windows = ["primary", "secondary"].compactMap { windowsByKey[$0] }
+        guard !windows.isEmpty else {
+            return nil
+        }
+
+        return CodexUsageSnapshot(
+            sourceFilePath: databaseURL.path,
+            capturedAt: latestCapturedAt ?? now,
+            planType: planType ?? "plus",
+            limitID: "codex",
+            windows: windows
+        )
+    }
+
+    private static func formatWindowLabel(minutes: Int) -> String {
+        let days = minutes / 1_440
+        let remainingMinutesAfterDays = minutes % 1_440
+        let hours = remainingMinutesAfterDays / 60
+        let remainingMinutes = remainingMinutesAfterDays % 60
+
+        if days > 0, hours == 0, remainingMinutes == 0 {
+            return "\(days)d"
+        }
+        if days > 0, hours > 0 {
+            return "\(days)d \(hours)h"
+        }
+        if hours > 0, remainingMinutes == 0 {
+            return "\(hours)h"
+        }
+        if hours > 0 {
+            return "\(hours)h \(remainingMinutes)m"
+        }
+        return "\(minutes)m"
+    }
+
+    private static func parseISO8601Date(_ string: String) -> Date? {
+        guard !string.isEmpty else { return nil }
+        let withFractional = ISO8601DateFormatter()
+        withFractional.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        if let date = withFractional.date(from: string) {
+            return date
+        }
+        let basic = ISO8601DateFormatter()
+        basic.formatOptions = [.withInternetDateTime]
+        return basic.date(from: string)
+    }
 }
 
 extension KeeperTodayUsage {
@@ -301,10 +495,19 @@ extension KeeperTodayUsage {
                 accounts.append(account)
             }
         }
+        func appendBreakdown(_ list: inout [AccountTokenUsage]) {
+            guard !account.isEmpty else { return }
+            if let idx = list.firstIndex(where: { $0.account.caseInsensitiveCompare(account) == .orderedSame }) {
+                list[idx].totals += totals
+            } else {
+                list.append(AccountTokenUsage(account: account, totals: totals))
+            }
+        }
         switch channel {
         case .agy:
             agy += totals
             append(&agyAccounts)
+            appendBreakdown(&agyAccountBreakdown)
         case .agyPro:
             agyPro += totals
             append(&agyProAccounts)

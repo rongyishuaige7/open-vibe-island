@@ -913,6 +913,26 @@ final class HookInstallationCoordinator {
         }
     }
 
+    /// KEEPER's database changed. Re-reads only KEEPER's Codex rate limits:
+    /// the rollout scan in `refreshCodexUsageState` stays on its 120 s
+    /// cadence. Keeps whichever snapshot is newer, as `CodexUsageLoader.load`
+    /// does.
+    func refreshCodexRateLimitsFromKeeper() {
+        Task { [weak self] in
+            let keeper = try? await Task.detached(priority: .utility) {
+                try KeeperUsageReader.loadCodexRateLimits()
+            }.value
+            guard let self, let keeper, !keeper.isEmpty else { return }
+            if let current = self.codexUsageSnapshot, !current.isEmpty,
+               (current.capturedAt ?? .distantPast) > (keeper.capturedAt ?? .distantPast) {
+                return
+            }
+            if self.codexUsageSnapshot != keeper {
+                self.codexUsageSnapshot = keeper
+            }
+        }
+    }
+
     // MARK: - Intent-aware helpers
 
     /// Reports whether the startup flow should auto-install hooks for the
