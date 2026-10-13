@@ -1,4 +1,5 @@
 import Foundation
+import os
 
 /// Token totals, estimated cost, and rate limits loaded from Claude Pro's
 /// hardened sandbox session state and transcript records.
@@ -99,6 +100,7 @@ public enum ClaudeProUsageReader {
         let fallbackISOFormatter = ISO8601DateFormatter()
         fallbackISOFormatter.formatOptions = [.withInternetDateTime]
 
+        var readTranscriptPaths = Set<String>()
         for fileName in sessionFileNames where fileName.hasSuffix(".json") {
             let sessionFileURL = sessionsDirectoryURL.appendingPathComponent(fileName)
             guard let data = try? Data(contentsOf: sessionFileURL),
@@ -142,18 +144,19 @@ public enum ClaudeProUsageReader {
                 let candidateTranscriptURL = projectSubdir.appendingPathComponent("\(sessionID).jsonl")
                 if fileManager.fileExists(atPath: candidateTranscriptURL.path) {
                     foundTranscript = true
-                    parseTranscript(
+                    readTranscriptPaths.insert(candidateTranscriptURL.path)
+                    let tally = transcriptTally(
                         at: candidateTranscriptURL,
                         startTS: startTS,
                         endTS: endTS,
                         isoFormatter: isoFormatter,
-                        fallbackFormatter: fallbackISOFormatter,
-                        totalRequests: &totalRequests,
-                        totalInputTokens: &totalInputTokens,
-                        totalOutputTokens: &totalOutputTokens,
-                        totalCacheReadTokens: &totalCacheReadTokens,
-                        totalCacheCreationTokens: &totalCacheCreationTokens
+                        fallbackFormatter: fallbackISOFormatter
                     )
+                    totalRequests += tally.requests
+                    totalInputTokens += tally.inputTokens
+                    totalOutputTokens += tally.outputTokens
+                    totalCacheReadTokens += tally.cacheReadTokens
+                    totalCacheCreationTokens += tally.cacheCreationTokens
                     break
                 }
             }
@@ -171,6 +174,15 @@ public enum ClaudeProUsageReader {
                 if let lastCtxIn = todaySamples.last.flatMap({ intValue(from: $0["in"]) }) {
                     totalInputTokens += lastCtxIn
                 }
+            }
+        }
+
+        // Forget transcripts under this directory that no session counts today.
+        let projectsPrefix = projectsDirectoryURL.path + "/"
+        let countedPaths = readTranscriptPaths
+        transcriptProgress.withLock { progress in
+            progress = progress.filter { path, _ in
+                !path.hasPrefix(projectsPrefix) || countedPaths.contains(path)
             }
         }
 
@@ -194,45 +206,141 @@ public enum ClaudeProUsageReader {
         )
     }
 
-    private static func parseTranscript(
+    /// Today's usage counted from one transcript.
+    struct TranscriptTally: Equatable, Sendable {
+        var requests = 0
+        var inputTokens = 0
+        var outputTokens = 0
+        var cacheReadTokens = 0
+        var cacheCreationTokens = 0
+    }
+
+    /// How far a transcript has been counted. Transcripts are append-only
+    /// JSONL and a long session's runs to tens of megabytes, so each read
+    /// resumes at `offset` instead of re-parsing the whole file.
+    private struct TranscriptProgress: Sendable {
+        var fileNumber: Int
+        var offset: Int
+        var dayStart: TimeInterval
+        var tally: TranscriptTally
+    }
+
+    private static let transcriptProgress = OSAllocatedUnfairLock(initialState: [String: TranscriptProgress]())
+
+    /// Counts the lines appended since the last read and returns the day's
+    /// running total. Starts over when the file is replaced or shrinks, or
+    /// when the day changes.
+    static func transcriptTally(
         at url: URL,
         startTS: TimeInterval,
         endTS: TimeInterval,
         isoFormatter: ISO8601DateFormatter,
-        fallbackFormatter: ISO8601DateFormatter,
-        totalRequests: inout Int,
-        totalInputTokens: inout Int,
-        totalOutputTokens: inout Int,
-        totalCacheReadTokens: inout Int,
-        totalCacheCreationTokens: inout Int
-    ) {
-        guard let content = try? String(contentsOf: url, encoding: .utf8) else { return }
-        for line in content.split(separator: "\n") {
-            guard line.contains("\"usage\""),
-                  let data = line.data(using: .utf8),
-                  let obj = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any],
-                  let message = obj["message"] as? [String: Any],
-                  let usage = message["usage"] as? [String: Any] else {
-                continue
-            }
+        fallbackFormatter: ISO8601DateFormatter
+    ) -> TranscriptTally {
+        let path = url.path
+        guard let attributes = try? FileManager.default.attributesOfItem(atPath: path),
+              let size = (attributes[.size] as? NSNumber)?.intValue,
+              let fileNumber = (attributes[.systemFileNumber] as? NSNumber)?.intValue else {
+            return TranscriptTally()
+        }
 
-            // Check timestamp if present
-            if let tsString = obj["timestamp"] as? String {
-                let date = isoFormatter.date(from: tsString) ?? fallbackFormatter.date(from: tsString)
-                if let date {
-                    let ts = date.timeIntervalSince1970
-                    if ts < startTS || ts >= endTS {
-                        continue
+        let fresh = TranscriptProgress(fileNumber: fileNumber, offset: 0, dayStart: startTS, tally: TranscriptTally())
+        var progress = transcriptProgress.withLock { $0[path] } ?? fresh
+        if progress.fileNumber != fileNumber || progress.dayStart != startTS || progress.offset > size {
+            progress = fresh
+        }
+
+        if progress.offset < size, let handle = try? FileHandle(forReadingFrom: url) {
+            defer { try? handle.close() }
+            if (try? handle.seek(toOffset: UInt64(progress.offset))) != nil,
+               let data = try? handle.readToEnd() {
+                progress.offset += countLines(
+                    in: data,
+                    startTS: startTS,
+                    endTS: endTS,
+                    isoFormatter: isoFormatter,
+                    fallbackFormatter: fallbackFormatter,
+                    into: &progress.tally
+                )
+            }
+        }
+
+        let stored = progress
+        transcriptProgress.withLock { $0[path] = stored }
+        return progress.tally
+    }
+
+    /// Counts the lines in `data` and returns how many bytes it consumed. A
+    /// last line without a newline is consumed only if it parses; otherwise
+    /// the writer is still appending it and the next read picks it up.
+    private static func countLines(
+        in data: Data,
+        startTS: TimeInterval,
+        endTS: TimeInterval,
+        isoFormatter: ISO8601DateFormatter,
+        fallbackFormatter: ISO8601DateFormatter,
+        into tally: inout TranscriptTally
+    ) -> Int {
+        let marker = Array("\"usage\"".utf8)
+        return data.withUnsafeBytes { (buffer: UnsafeRawBufferPointer) -> Int in
+            guard let base = buffer.baseAddress else { return 0 }
+            var consumed = 0
+            while consumed < buffer.count {
+                let remaining = buffer.count - consumed
+                let newline = memchr(base + consumed, Int32(UInt8(ascii: "\n")), remaining)
+                let lineLength = newline.map { base.distance(to: UnsafeRawPointer($0)) - consumed } ?? remaining
+                let line = UnsafeRawBufferPointer(rebasing: buffer[consumed..<(consumed + lineLength)])
+                let hasUsage = memmem(line.baseAddress, line.count, marker, marker.count) != nil
+
+                if newline == nil {
+                    guard let object = try? JSONSerialization.jsonObject(with: Data(line)) else { break }
+                    if hasUsage {
+                        count(object, startTS: startTS, endTS: endTS, isoFormatter: isoFormatter,
+                              fallbackFormatter: fallbackFormatter, into: &tally)
                     }
+                    consumed = buffer.count
+                } else {
+                    if hasUsage, let object = try? JSONSerialization.jsonObject(with: Data(line)) {
+                        count(object, startTS: startTS, endTS: endTS, isoFormatter: isoFormatter,
+                              fallbackFormatter: fallbackFormatter, into: &tally)
+                    }
+                    consumed += lineLength + 1
                 }
             }
-
-            totalRequests += 1
-            totalInputTokens += intValue(from: usage["input_tokens"]) ?? 0
-            totalOutputTokens += intValue(from: usage["output_tokens"]) ?? 0
-            totalCacheReadTokens += intValue(from: usage["cache_read_input_tokens"]) ?? 0
-            totalCacheCreationTokens += intValue(from: usage["cache_creation_input_tokens"]) ?? 0
+            return consumed
         }
+    }
+
+    private static func count(
+        _ object: Any,
+        startTS: TimeInterval,
+        endTS: TimeInterval,
+        isoFormatter: ISO8601DateFormatter,
+        fallbackFormatter: ISO8601DateFormatter,
+        into tally: inout TranscriptTally
+    ) {
+        guard let obj = object as? [String: Any],
+              let message = obj["message"] as? [String: Any],
+              let usage = message["usage"] as? [String: Any] else {
+            return
+        }
+
+        // Check timestamp if present
+        if let tsString = obj["timestamp"] as? String {
+            let date = isoFormatter.date(from: tsString) ?? fallbackFormatter.date(from: tsString)
+            if let date {
+                let ts = date.timeIntervalSince1970
+                if ts < startTS || ts >= endTS {
+                    return
+                }
+            }
+        }
+
+        tally.requests += 1
+        tally.inputTokens += intValue(from: usage["input_tokens"]) ?? 0
+        tally.outputTokens += intValue(from: usage["output_tokens"]) ?? 0
+        tally.cacheReadTokens += intValue(from: usage["cache_read_input_tokens"]) ?? 0
+        tally.cacheCreationTokens += intValue(from: usage["cache_creation_input_tokens"]) ?? 0
     }
 
     private static func number(from value: Any?) -> Double? {

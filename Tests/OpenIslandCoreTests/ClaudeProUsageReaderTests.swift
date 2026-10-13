@@ -116,4 +116,67 @@ struct ClaudeProUsageReaderTests {
         #expect(snapshot.inputTokens == 5500)
         #expect(snapshot.totals.totalTokens == 5700)
     }
+
+    @Test
+    func countsAppendedTranscriptLinesWithoutRereadingAndStartsOverOnReplace() throws {
+        let tempDir = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        let sessionsDir = tempDir.appendingPathComponent("sessions")
+        let projSubdir = tempDir.appendingPathComponent("projects").appendingPathComponent("my-project")
+        try FileManager.default.createDirectory(at: sessionsDir, withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: projSubdir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: tempDir) }
+
+        let calendar = Calendar.current
+        let now = Date()
+        let todayTS = calendar.startOfDay(for: now).timeIntervalSince1970 + 60
+        let yesterdayTS = todayTS - 86_400
+        let sessionID = "abcdef01-1234-1234-1234-123456789abc"
+        try """
+        {"session_id": "\(sessionID)", "samples": [{"t": \(todayTS), "cost": 1.0}]}
+        """.write(to: sessionsDir.appendingPathComponent("\(sessionID).json"), atomically: true, encoding: .utf8)
+
+        func line(_ ts: TimeInterval, output: Int) -> String {
+            let iso = ISO8601DateFormatter().string(from: Date(timeIntervalSince1970: ts))
+            return #"{"timestamp":"\#(iso)","message":{"usage":{"input_tokens":1,"output_tokens":\#(output)}}}"#
+        }
+        let transcriptURL = projSubdir.appendingPathComponent("\(sessionID).jsonl")
+        func append(_ text: String) throws {
+            let handle = try FileHandle(forWritingTo: transcriptURL)
+            defer { try? handle.close() }
+            try handle.seekToEnd()
+            try handle.write(contentsOf: Data(text.utf8))
+        }
+        func load() throws -> ClaudeProUsageSnapshot {
+            try ClaudeProUsageReader.loadToday(
+                sessionsDirectoryURL: sessionsDir,
+                projectsDirectoryURL: tempDir.appendingPathComponent("projects"),
+                now: now,
+                calendar: calendar
+            )
+        }
+
+        try (line(yesterdayTS, output: 1000) + "\n" + line(todayTS, output: 10) + "\n")
+            .write(to: transcriptURL, atomically: true, encoding: .utf8)
+        #expect(try load().outputTokens == 10)
+
+        // A complete last line without a newline counts.
+        try append(line(todayTS, output: 20))
+        #expect(try load().outputTokens == 30)
+
+        // A line the writer is still appending waits until it is complete.
+        let pending = "\n" + line(todayTS, output: 40)
+        let splitIndex = pending.index(pending.startIndex, offsetBy: 30)
+        try append(String(pending[..<splitIndex]))
+        #expect(try load().outputTokens == 30)
+        try append(String(pending[splitIndex...]) + "\n")
+        let grown = try load()
+        #expect(grown.outputTokens == 70)
+        #expect(grown.totals.requestCount == 3)
+
+        // A rewritten transcript is a new file and is counted from scratch.
+        try (line(todayTS, output: 5) + "\n").write(to: transcriptURL, atomically: true, encoding: .utf8)
+        let replaced = try load()
+        #expect(replaced.outputTokens == 5)
+        #expect(replaced.totals.requestCount == 1)
+    }
 }
