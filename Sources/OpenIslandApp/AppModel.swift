@@ -794,7 +794,7 @@ final class AppModel {
         todayTokenUsageMonitor.onDatabaseChanged = { [weak self] in
             guard let self else { return }
             if self.showCodexUsage {
-                self.hooks.refreshCodexUsageState()
+                self.hooks.refreshCodexRateLimitsFromKeeper()
             }
         }
         refreshOverlayDisplayConfiguration()

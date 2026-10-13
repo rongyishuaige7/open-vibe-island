@@ -21,9 +21,9 @@ final class TodayTokenUsageMonitor {
     public var onDatabaseChanged: (@MainActor () -> Void)?
 
     @ObservationIgnored private var watcherSource: DispatchSourceFileSystemObject?
-    @ObservationIgnored private var watchedFD: Int32 = -1
     @ObservationIgnored private var walWatcherSource: DispatchSourceFileSystemObject?
-    @ObservationIgnored private var walWatchedFD: Int32 = -1
+    /// File number of the -wal file `walWatcherSource` holds open.
+    @ObservationIgnored private var walWatchedFileNumber: Int?
     @ObservationIgnored private var debounceTask: Task<Void, Never>?
 
     init(
@@ -64,50 +64,59 @@ final class TodayTokenUsageMonitor {
     private func startWatcher() {
         stopWatcher()
 
-        // 1. Watch Keeper database directory (/opt/homebrew/var/cpa-usage-keeper)
-        let dirURL = keeperDatabaseURL.deletingLastPathComponent()
-        let dirPath = dirURL.path
-        if FileManager.default.fileExists(atPath: dirPath) {
-            let fd = open(dirPath, O_EVTONLY)
-            if fd >= 0 {
-                watchedFD = fd
-                let source = DispatchSource.makeFileSystemObjectSource(
-                    fileDescriptor: fd,
-                    eventMask: [.write, .extend, .attrib, .link],
-                    queue: DispatchQueue.main
-                )
-                source.setEventHandler { [weak self] in
-                    self?.scheduleDebouncedRefresh()
-                }
-                source.setCancelHandler {
-                    close(fd)
-                }
-                source.resume()
-                watcherSource = source
-            }
+        // The directory sees app.db-wal appear, vanish, or be replaced; writes
+        // land in the -wal file itself. KEEPER may start after Open Island
+        // (both launch at login) and recreates the file when it restarts, so
+        // each directory event re-checks which -wal file is watched.
+        let dirPath = keeperDatabaseURL.deletingLastPathComponent().path
+        watcherSource = makeWatcher(path: dirPath, eventMask: [.write, .extend, .attrib, .link]) { [weak self] in
+            self?.watchWALFileIfNeeded()
+            self?.scheduleDebouncedRefresh()
+        }
+        watchWALFileIfNeeded()
+    }
+
+    private func watchWALFileIfNeeded() {
+        let walPath = keeperDatabaseURL.path + "-wal"
+        let fileNumber = (try? FileManager.default.attributesOfItem(atPath: walPath))
+            .flatMap { ($0[.systemFileNumber] as? NSNumber)?.intValue }
+        guard fileNumber != walWatchedFileNumber || (fileNumber != nil && walWatcherSource == nil) else {
+            return
         }
 
-        // 2. Also watch app.db-wal directly if present
-        let walPath = keeperDatabaseURL.path + "-wal"
-        if FileManager.default.fileExists(atPath: walPath) {
-            let fd = open(walPath, O_EVTONLY)
-            if fd >= 0 {
-                walWatchedFD = fd
-                let source = DispatchSource.makeFileSystemObjectSource(
-                    fileDescriptor: fd,
-                    eventMask: [.write, .extend, .attrib],
-                    queue: DispatchQueue.main
-                )
-                source.setEventHandler { [weak self] in
-                    self?.scheduleDebouncedRefresh()
-                }
-                source.setCancelHandler {
-                    close(fd)
-                }
-                source.resume()
-                walWatcherSource = source
-            }
+        walWatcherSource?.cancel()
+        walWatcherSource = nil
+        walWatchedFileNumber = nil
+        guard let fileNumber else { return }
+
+        walWatcherSource = makeWatcher(path: walPath, eventMask: [.write, .extend, .attrib]) { [weak self] in
+            self?.scheduleDebouncedRefresh()
         }
+        if walWatcherSource != nil {
+            walWatchedFileNumber = fileNumber
+        }
+    }
+
+    /// Delivers events on the main queue, which the handlers' main-actor
+    /// isolation requires.
+    private func makeWatcher(
+        path: String,
+        eventMask: DispatchSource.FileSystemEvent,
+        handler: @escaping () -> Void
+    ) -> DispatchSourceFileSystemObject? {
+        let fd = open(path, O_EVTONLY)
+        guard fd >= 0 else { return nil }
+        let source = DispatchSource.makeFileSystemObjectSource(
+            fileDescriptor: fd,
+            eventMask: eventMask,
+            queue: DispatchQueue.main
+        )
+        source.setEventHandler(handler: handler)
+        source.setCancelHandler {
+            close(fd)
+        }
+        source.resume()
+        return source
     }
 
     private func scheduleDebouncedRefresh() {
@@ -124,16 +133,11 @@ final class TodayTokenUsageMonitor {
         debounceTask?.cancel()
         debounceTask = nil
 
-        if let source = watcherSource {
-            source.cancel()
-            watcherSource = nil
-            watchedFD = -1
-        }
-        if let source = walWatcherSource {
-            source.cancel()
-            walWatcherSource = nil
-            walWatchedFD = -1
-        }
+        watcherSource?.cancel()
+        watcherSource = nil
+        walWatcherSource?.cancel()
+        walWatcherSource = nil
+        walWatchedFileNumber = nil
     }
 
     func refresh() async {
