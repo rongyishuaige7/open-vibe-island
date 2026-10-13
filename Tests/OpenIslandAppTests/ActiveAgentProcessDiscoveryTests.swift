@@ -489,4 +489,46 @@ struct ActiveAgentProcessDiscoveryTests {
 
         #expect(aliveIDs.contains(sessionUUID))
     }
+
+    @Test
+    func batchLsofOutputsParsesMultiplePIDsCorrectly() {
+        let discovery = ActiveAgentProcessDiscovery { executablePath, arguments in
+            if executablePath == "/bin/ps" {
+                return """
+                  101 1 ttys001 agy --gemini_dir=/tmp/cpa
+                  102 1 ttys002 claude
+                """
+            }
+            if executablePath == "/usr/sbin/lsof" {
+                let pids = arguments.dropFirst(2).first ?? ""
+                if pids.contains(",") {
+                    return """
+                    p101
+                    fcwd
+                    n/Users/test/workspace-agy
+                    p102
+                    fcwd
+                    n/Users/test/workspace-claude
+                    """
+                } else if pids == "101" {
+                    return """
+                    fcwd
+                    n/Users/test/workspace-agy
+                    """
+                } else if pids == "102" {
+                    return """
+                    fcwd
+                    n/Users/test/workspace-claude
+                    """
+                }
+            }
+            return nil
+        }
+
+        let snapshots = discovery.discover()
+        #expect(snapshots.count == 2)
+        #expect(snapshots.contains { $0.tool == .geminiCLI && $0.workingDirectory == "/Users/test/workspace-agy" })
+        #expect(snapshots.contains { $0.tool == .claudeCode && $0.workingDirectory == "/Users/test/workspace-claude" })
+    }
 }
+
