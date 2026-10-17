@@ -44,6 +44,7 @@
 "usage.todayTokens.agyPro" = "AGY Pro 個人池";
 "usage.todayTokens.other" = "其他";
 "usage.todayTokens.subtext" = "%@ 次請求 · 快取 %@";
+"usage.todayTokens.subtextSessions" = "%@ 個工作階段 · 快取 %@";
 "settings.general.completionReply" = "在完成卡片中回覆";
 "settings.general.cliHooks" = "CLI Hooks";
 "settings.general.activated" = "已啟用";

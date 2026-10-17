@@ -1400,7 +1400,8 @@ struct IslandPanelView: View {
                         dotColor: Color(red: 77.0 / 255.0, green: 107.0 / 255.0, blue: 254.0 / 255.0),
                         totals: dsh,
                         accountHint: "",
-                        languageCode: languageCode
+                        languageCode: languageCode,
+                        subtextKey: "usage.todayTokens.subtextSessions"
                     )
                 }
 
@@ -1517,6 +1518,7 @@ struct IslandPanelView: View {
         accountHint: String,
         secondarySubtext: String? = nil,
         languageCode: String,
+        subtextKey: String = "usage.todayTokens.subtext",
         showsDisclosure: Bool = false,
         isDisclosureExpanded: Bool = false,
         onDisclosureTap: (() -> Void)? = nil
@@ -1553,7 +1555,7 @@ struct IslandPanelView: View {
 
                 if reqCount > 0 || cacheRead > 0 {
                     Text(lang.t(
-                        "usage.todayTokens.subtext",
+                        subtextKey,
                         reqCount.formatted(),
                         TokenCountFormatter.compact(cacheRead, languageCode: languageCode)
                     ))

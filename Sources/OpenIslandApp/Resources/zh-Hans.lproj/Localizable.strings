@@ -44,6 +44,7 @@
 "usage.todayTokens.agyPro" = "AGY Pro 个人池";
 "usage.todayTokens.other" = "其他";
 "usage.todayTokens.subtext" = "%@ 次请求 · 缓存 %@";
+"usage.todayTokens.subtextSessions" = "%@ 个会话 · 缓存 %@";
 "settings.general.completionReply" = "在完成卡片中回复";
 "settings.general.cliHooks" = "CLI Hooks";
 "settings.general.activated" = "已激活";

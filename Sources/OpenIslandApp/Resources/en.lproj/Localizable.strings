@@ -44,6 +44,7 @@
 "usage.todayTokens.agyPro" = "AGY Pro";
 "usage.todayTokens.other" = "Other";
 "usage.todayTokens.subtext" = "%@ requests · cache %@";
+"usage.todayTokens.subtextSessions" = "%@ sessions · cache %@";
 "settings.general.completionReply" = "Reply from completion card";
 "settings.general.cliHooks" = "CLI Hooks";
 "settings.general.activated" = "Activated";
