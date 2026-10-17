@@ -13,7 +13,7 @@ public struct DSHSessionSnapshot: Equatable, Codable, Sendable {
     public var createdAt: Date?
     public var updatedAt: Date?
     public var parentSessionID: String?
-    public var isSubagent: Bool
+    public var isSubagent: Bool?
 
     public init(
         sessionID: String,
@@ -25,7 +25,7 @@ public struct DSHSessionSnapshot: Equatable, Codable, Sendable {
         createdAt: Date? = nil,
         updatedAt: Date? = nil,
         parentSessionID: String? = nil,
-        isSubagent: Bool = false
+        isSubagent: Bool? = false
     ) {
         self.sessionID = sessionID
         self.title = title
