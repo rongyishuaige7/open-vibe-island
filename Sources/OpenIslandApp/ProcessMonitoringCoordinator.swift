@@ -134,29 +134,33 @@ final class ProcessMonitoringCoordinator {
                     let probe = self.terminalSessionAttachmentProbe
                     let resolver = self.terminalJumpTargetResolver
                     let shouldResolveTerminals = hasTrackedLiveSessions
-                    let (snapshots, ghosttyAvail, terminalAvail, jumpTargets) = await Task.detached(priority: .utility) {
+                    let (snapshots, ghosttyAvail, terminalAvail, itermAvail, jumpTargets) = await Task.detached(priority: .utility) {
                         let s = discovery.discover()
                         let g: TerminalSessionAttachmentProbe.SnapshotAvailability<TerminalSessionAttachmentProbe.GhosttyTerminalSnapshot>
                         let t: TerminalSessionAttachmentProbe.SnapshotAvailability<TerminalSessionAttachmentProbe.TerminalTabSnapshot>
+                        let i: TerminalSessionAttachmentProbe.SnapshotAvailability<TerminalSessionAttachmentProbe.ITermSessionSnapshot>
                         let j: [String: JumpTarget]
 
                         if shouldResolveTerminals {
                             g = probe.ghosttySnapshotAvailability()
                             t = probe.terminalSnapshotAvailability()
+                            i = probe.itermSnapshotAvailability()
                             j = resolver.resolveJumpTargets(for: liveSessions, activeProcesses: s)
                         } else {
                             g = .available([], appIsRunning: false)
                             t = .available([], appIsRunning: false)
+                            i = .available([], appIsRunning: false)
                             j = [:]
                         }
 
-                        return (s, g, t, j)
+                        return (s, g, t, i, j)
                     }.value
                     let isCodexAppRunning = Self.isCodexDesktopAppRunning()
                     self.reconcileSessionAttachments(
                         activeProcesses: snapshots,
                         ghosttyAvailability: ghosttyAvail,
                         terminalAvailability: terminalAvail,
+                        itermAvailability: itermAvail,
                         preResolvedJumpTargets: jumpTargets,
                         observedCodexAppRunning: isCodexAppRunning
                     )
@@ -205,6 +209,7 @@ final class ProcessMonitoringCoordinator {
         activeProcesses: [ActiveProcessSnapshot]? = nil,
         ghosttyAvailability: TerminalSessionAttachmentProbe.SnapshotAvailability<TerminalSessionAttachmentProbe.GhosttyTerminalSnapshot>? = nil,
         terminalAvailability: TerminalSessionAttachmentProbe.SnapshotAvailability<TerminalSessionAttachmentProbe.TerminalTabSnapshot>? = nil,
+        itermAvailability: TerminalSessionAttachmentProbe.SnapshotAvailability<TerminalSessionAttachmentProbe.ITermSessionSnapshot>? = nil,
         preResolvedJumpTargets: [String: JumpTarget]? = nil,
         observedCodexAppRunning: Bool? = nil
     ) {
@@ -257,6 +262,7 @@ final class ProcessMonitoringCoordinator {
                 for: sessions,
                 ghosttyAvailability: ghosttyAvailability,
                 terminalAvailability: terminalAvailability,
+                itermAvailability: itermAvailability ?? .available([], appIsRunning: false),
                 activeProcesses: activeProcesses,
                 allowRecentAttachmentGrace: !isResolvingInitialLiveSessions
             )
