@@ -66,6 +66,44 @@ public struct ConversationTitleRequest: Equatable, Hashable, Sendable {
         }
         return (NSHomeDirectory() as NSString).appendingPathComponent(".codex")
     }
+
+    /// All candidate Codex homes (e.g. ~/.codex, ~/.codex-yi, ~/.codex-plus).
+    public static func candidateCodexHomes(
+        fileManager: FileManager = .default,
+        environment: [String: String] = ProcessInfo.processInfo.environment
+    ) -> [String] {
+        var homes: [String] = []
+        var seen: Set<String> = []
+
+        func addHome(_ path: String) {
+            let standardized = (path as NSString).standardizingPath
+            if seen.insert(standardized).inserted && fileManager.fileExists(atPath: standardized) {
+                homes.append(standardized)
+            }
+        }
+
+        if let envHome = environment["CODEX_HOME"]?.trimmingCharacters(in: .whitespacesAndNewlines), !envHome.isEmpty {
+            addHome(envHome)
+        }
+
+        let defaultHome = (NSHomeDirectory() as NSString).appendingPathComponent(".codex")
+        addHome(defaultHome)
+
+        let homeURL = fileManager.homeDirectoryForCurrentUser
+        if let contents = try? fileManager.contentsOfDirectory(
+            at: homeURL,
+            includingPropertiesForKeys: [.isDirectoryKey],
+            options: [.skipsPackageDescendants]
+        ) {
+            for item in contents {
+                let name = item.lastPathComponent
+                guard name.hasPrefix(".codex"), name != ".codex" else { continue }
+                addHome(item.path)
+            }
+        }
+
+        return homes
+    }
 }
 
 /// Reads the conversation titles agents record for their sessions: Codex's
@@ -126,7 +164,19 @@ public final class ConversationTitleResolver: @unchecked Sendable {
                 if codexByHome[codexHome] == nil {
                     codexByHome[codexHome] = codexIndexTitles(codexHome: codexHome)
                 }
-                title = codexByHome[codexHome]?[request.sessionID]
+                var foundTitle = codexByHome[codexHome]?[request.sessionID]
+                if foundTitle == nil {
+                    for candidateHome in ConversationTitleRequest.candidateCodexHomes() where candidateHome != codexHome {
+                        if codexByHome[candidateHome] == nil {
+                            codexByHome[candidateHome] = codexIndexTitles(codexHome: candidateHome)
+                        }
+                        if let match = codexByHome[candidateHome]?[request.sessionID] {
+                            foundTitle = match
+                            break
+                        }
+                    }
+                }
+                title = foundTitle
             case let .claudeTranscript(path):
                 title = claudeTitle(transcriptPath: path)
             case let .agyDatabase(databasePath):

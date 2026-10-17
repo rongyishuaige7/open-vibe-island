@@ -1303,7 +1303,8 @@ final class ProcessMonitoringCoordinator {
             let isRunning = record?.isRunning ?? false
             let phase: SessionPhase = isRunning ? .running : .completed
             let rawTitle = record?.title
-            let title = (rawTitle != nil && !rawTitle!.isEmpty) ? rawTitle! : "Gemini · \(workspaceName)"
+            let effectiveTitle = (rawTitle != nil && !rawTitle!.isEmpty) ? rawTitle! : "新会话"
+            let title = "\(effectiveTitle) · \(workspaceName)"
             let preview = (record?.preview != nil && !record!.preview.isEmpty) ? record!.preview : "Antigravity session in \(workspaceName)"
 
             let jumpTarget = JumpTarget(
@@ -1338,9 +1339,7 @@ final class ProcessMonitoringCoordinator {
                 } else {
                     existing.jumpTarget = jumpTarget
                 }
-                if let rawTitle, !rawTitle.isEmpty {
-                    existing.conversationTitle = rawTitle
-                }
+                existing.conversationTitle = effectiveTitle
                 existing.phase = phase
                 if existing.geminiMetadata == nil {
                     existing.geminiMetadata = GeminiSessionMetadata(
@@ -1378,9 +1377,7 @@ final class ProcessMonitoringCoordinator {
                 )
                 newSession.isProcessAlive = true
                 newSession.processNotSeenCount = 0
-                if let rawTitle, !rawTitle.isEmpty {
-                    newSession.conversationTitle = rawTitle
-                }
+                newSession.conversationTitle = effectiveTitle
                 sessionsByID[sessionID] = newSession
             }
         }

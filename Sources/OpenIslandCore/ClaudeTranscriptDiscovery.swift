@@ -116,6 +116,7 @@ public final class ClaudeTranscriptDiscovery: @unchecked Sendable {
         var initialUserPrompt: String?
         var lastUserPrompt: String?
         var lastAssistantMessage: String?
+        var conversationTitle: String?
         var model: String?
         var currentTool: String?
         var currentToolInputPreview: String?
@@ -236,6 +237,14 @@ public final class ClaudeTranscriptDiscovery: @unchecked Sendable {
                       let summary = object["summary"] as? String,
                       !summary.isEmpty {
                 lastAssistantMessage = summary
+            } else if topLevelType == "custom-title",
+                      let title = object["customTitle"] as? String,
+                      !title.isEmpty {
+                conversationTitle = title
+            } else if topLevelType == "ai-title",
+                      let title = object["aiTitle"] as? String,
+                      !title.isEmpty {
+                conversationTitle = title
             }
         }
 
@@ -298,7 +307,7 @@ public final class ClaudeTranscriptDiscovery: @unchecked Sendable {
 
         let phase: SessionPhase = isTurnInProgress ? .running : .completed
 
-        return AgentSession(
+        var session = AgentSession(
             id: sessionID,
             title: "Claude · \(workspaceName)",
             tool: .claudeCode,
@@ -315,6 +324,10 @@ public final class ClaudeTranscriptDiscovery: @unchecked Sendable {
             ),
             claudeMetadata: metadata.isEmpty ? nil : metadata
         )
+        if let conversationTitle {
+            session.conversationTitle = conversationTitle
+        }
+        return session
     }
 
     private static let streamingChunkSize = 64 * 1_024

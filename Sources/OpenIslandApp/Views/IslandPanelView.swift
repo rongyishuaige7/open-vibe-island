@@ -1973,14 +1973,16 @@ private struct IslandSessionRow: View {
 
     private var notificationWorkspaceHeadlineText: String {
         let workspace = session.spotlightWorkspaceName.trimmedForNotificationCard
-        var headline = workspace.isEmpty ? session.tool.displayName : workspace
+        var location = workspace.isEmpty ? session.tool.displayName : workspace
         if let branch = session.spotlightWorktreeBranch?.trimmedForNotificationCard, !branch.isEmpty {
-            headline += " (\(branch))"
+            location += " (\(branch))"
         }
-        if let title = session.conversationTitle?.trimmedForNotificationCard, !title.isEmpty {
-            headline += " · \(title)"
+        let title = (session.conversationTitle?.trimmedForNotificationCard).flatMap { $0.isEmpty ? nil : $0 }
+            ?? session.spotlightHeadlinePromptText
+        if let title, !title.isEmpty {
+            return "\(title) · \(location)"
         }
-        return headline
+        return location
     }
 
     private var notificationCompletedPromptLineText: String? {

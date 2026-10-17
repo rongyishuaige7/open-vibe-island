@@ -188,21 +188,22 @@ extension AgentSession {
 
     var spotlightHeadlineText: String {
         let workspaceName = spotlightWorkspaceName
-        var headline = workspaceName
+        var location = workspaceName
 
         if let branch = spotlightWorktreeBranch {
-            headline += " (\(branch))"
+            location += " (\(branch))"
         }
 
         guard let prompt = spotlightHeadlinePromptText else {
-            return headline
+            return location
         }
 
         guard workspaceName != "/" else {
             return prompt
         }
 
-        return "\(headline) · \(prompt)"
+        // Show conversation title / topic first, project path second for all agents
+        return "\(prompt) · \(location)"
     }
 
     var spotlightHeadlinePromptText: String? {
@@ -211,7 +212,10 @@ extension AgentSession {
         if let title = conversationTitle?.trimmedForSurface, !title.isEmpty {
             return title
         }
-        return initialPromptText ?? latestPromptText
+        if let prompt = (initialPromptText ?? latestPromptText)?.trimmedForSurface, !prompt.isEmpty {
+            return prompt
+        }
+        return "新会话"
     }
 
     var spotlightPromptText: String? {

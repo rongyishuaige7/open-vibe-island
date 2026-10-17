@@ -420,7 +420,8 @@ public extension AgySessionRecord {
             return uri
         }
         let workspaceName = firstWorkspace.map { WorkspaceNameResolver.workspaceName(for: $0) } ?? "Workspace"
-        let displayTitle = !title.isEmpty ? title : "Gemini · \(workspaceName)"
+        let effectiveTitle = !title.isEmpty ? title : "新会话"
+        let displayTitle = "\(effectiveTitle) · \(workspaceName)"
         let displayPreview = !preview.isEmpty ? preview : "Antigravity session in \(workspaceName)"
         let transcriptPath = (appDataDir as NSString).appendingPathComponent("brain/\(sessionID)/.system_generated/logs/transcript.jsonl")
 
@@ -448,9 +449,7 @@ public extension AgySessionRecord {
                 model: model
             )
         )
-        if !title.isEmpty {
-            session.conversationTitle = title
-        }
+        session.conversationTitle = effectiveTitle
         return session
     }
 }
