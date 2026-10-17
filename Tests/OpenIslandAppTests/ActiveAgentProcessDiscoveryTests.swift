@@ -440,7 +440,7 @@ struct ActiveAgentProcessDiscoveryTests {
 
             if executablePath.hasSuffix("/tmux") {
                 if arguments.first == "list-panes" {
-                    return "/dev/ttys016\tagentdeck:1.0"
+                    return "/dev/ttys016\tagentdeck:1.0\t✓ WorkBuddy反代开源项目 · Developer · 就绪 1:18"
                 }
                 if arguments.first == "list-clients" {
                     return "/dev/ttys099"
@@ -469,6 +469,7 @@ struct ActiveAgentProcessDiscoveryTests {
         #expect(snapshots.first?.terminalApp == "Ghostty")
         #expect(snapshots.first?.terminalTTY == "/dev/ttys016")
         #expect(snapshots.first?.tmuxTarget == "agentdeck:1.0")
+        #expect(snapshots.first?.paneTitle == "✓ WorkBuddy反代开源项目 · Developer · 就绪 1:18")
     }
 
     @Test

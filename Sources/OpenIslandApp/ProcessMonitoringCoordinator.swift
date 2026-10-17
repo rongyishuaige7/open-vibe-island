@@ -1312,7 +1312,7 @@ final class ProcessMonitoringCoordinator {
             let jumpTarget = JumpTarget(
                 terminalApp: terminalApp,
                 workspaceName: workspaceName,
-                paneTitle: "agy \(sessionID.prefix(8))",
+                paneTitle: process.paneTitle ?? "agy \(sessionID.prefix(8))",
                 workingDirectory: workingDirectory,
                 terminalTTY: process.terminalTTY,
                 tmuxTarget: process.tmuxTarget,
@@ -1333,6 +1333,9 @@ final class ProcessMonitoringCoordinator {
                     }
                     if let tmuxSocketPath = process.tmuxSocketPath {
                         target.tmuxSocketPath = tmuxSocketPath
+                    }
+                    if let paneTitle = process.paneTitle, !paneTitle.isEmpty {
+                        target.paneTitle = paneTitle
                     }
                     if target.workingDirectory == nil {
                         target.workingDirectory = workingDirectory

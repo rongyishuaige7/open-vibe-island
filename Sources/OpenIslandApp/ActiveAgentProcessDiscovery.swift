@@ -18,6 +18,7 @@ struct ActiveAgentProcessDiscovery {
         var transcriptPath: String?
         var tmuxTarget: String?
         var tmuxSocketPath: String?
+        var paneTitle: String?
 
         init(
             tool: AgentTool,
@@ -27,7 +28,8 @@ struct ActiveAgentProcessDiscovery {
             terminalApp: String? = nil,
             transcriptPath: String? = nil,
             tmuxTarget: String? = nil,
-            tmuxSocketPath: String? = nil
+            tmuxSocketPath: String? = nil,
+            paneTitle: String? = nil
         ) {
             self.tool = tool
             self.sessionID = sessionID
@@ -37,6 +39,7 @@ struct ActiveAgentProcessDiscovery {
             self.transcriptPath = transcriptPath
             self.tmuxTarget = tmuxTarget
             self.tmuxSocketPath = tmuxSocketPath
+            self.paneTitle = paneTitle
         }
     }
 
@@ -236,6 +239,7 @@ struct ActiveAgentProcessDiscovery {
                         snapshot.tmuxTarget = resolution.target
                         snapshot.tmuxSocketPath = resolution.socketPath
                         snapshot.terminalTTY = resolution.paneTTY
+                        snapshot.paneTitle = resolution.paneTitle
                     }
                 }
 
@@ -1264,6 +1268,7 @@ struct ActiveAgentProcessDiscovery {
     private struct TmuxResolution {
         let target: String
         let paneTTY: String
+        let paneTitle: String?
         let hostTerminalApp: String?
         let socketPath: String?
     }
@@ -1295,15 +1300,17 @@ struct ActiveAgentProcessDiscovery {
             return nil
         }
 
-        // Find tmux-server process to extract socket path if custom
-        var socketPath: String? = nil
+        // Find tmux-server process to extract a custom socket path, if any.
+        // The default server must be tried first: a custom server elsewhere in
+        // the process table must not hijack a pane that lives on the default
+        // server.
+        var customSocketPath: String? = nil
         for process in processes {
             if isTmuxServerProcess(command: process.command) {
-                // Extract socket path from tmux-server command line
                 let parts = process.command.split(separator: " ").map(String.init)
                 for (index, part) in parts.enumerated() {
                     if (part == "-S" || part == "-L"), parts.indices.contains(index + 1) {
-                        socketPath = String(parts[index + 1])
+                        customSocketPath = String(parts[index + 1])
                         break
                     }
                 }
@@ -1311,22 +1318,37 @@ struct ActiveAgentProcessDiscovery {
             }
         }
 
-        // Query tmux list-panes once and match any candidate TTY.
-        guard let match = queryTmuxTarget(agentTTYs: Set(agentTTYs), tmuxPath: tmuxPath, socketPath: socketPath) else {
-            return nil
+        let socketCandidates: [String?] = customSocketPath.map { [nil, $0] } ?? [nil]
+        let candidates = Set(agentTTYs)
+
+        for socketPath in socketCandidates {
+            guard let match = queryTmuxTarget(
+                agentTTYs: candidates,
+                tmuxPath: tmuxPath,
+                socketPath: socketPath
+            ) else {
+                continue
+            }
+
+            // Find the terminal app hosting the tmux client for this pane.
+            guard let hostTerminalApp = findTmuxClientTerminal(
+                tmuxPath: tmuxPath,
+                socketPath: socketPath,
+                processesByPID: processesByPID
+            ) else {
+                continue
+            }
+
+            return TmuxResolution(
+                target: match.target,
+                paneTTY: match.tty,
+                paneTitle: match.title,
+                hostTerminalApp: hostTerminalApp,
+                socketPath: socketPath
+            )
         }
 
-        // Find the terminal app hosting the tmux client connected to this pane
-        guard let hostTerminalApp = findTmuxClientTerminal(tmuxPath: tmuxPath, socketPath: socketPath, processesByPID: processesByPID) else {
-            return nil
-        }
-
-        return TmuxResolution(
-            target: match.target,
-            paneTTY: match.tty,
-            hostTerminalApp: hostTerminalApp,
-            socketPath: socketPath
-        )
+        return nil
     }
 
     /// TTYs to try when mapping a process to a tmux pane. Wrappers such as
@@ -1360,8 +1382,8 @@ struct ActiveAgentProcessDiscovery {
         agentTTYs: Set<String>,
         tmuxPath: String,
         socketPath: String?
-    ) -> (target: String, tty: String)? {
-        var args: [String] = ["list-panes", "-a", "-F", "#{pane_tty}\t#{session_name}:#{window_index}.#{pane_index}"]
+    ) -> (target: String, tty: String, title: String?)? {
+        var args: [String] = ["list-panes", "-a", "-F", "#{pane_tty}\t#{session_name}:#{window_index}.#{pane_index}\t#{pane_title}"]
 
         if let socketPath = socketPath {
             args = ["-S", socketPath] + args
@@ -1372,16 +1394,19 @@ struct ActiveAgentProcessDiscovery {
         }
 
         for line in output.split(separator: "\n") {
-            let parts = line.split(separator: "\t", maxSplits: 1).map(String.init)
-            guard parts.count == 2 else {
+            let parts = line.split(separator: "\t", maxSplits: 2, omittingEmptySubsequences: false).map(String.init)
+            guard parts.count >= 2 else {
                 continue
             }
 
             let paneTTY = parts[0].trimmingCharacters(in: .whitespacesAndNewlines)
             let target = parts[1].trimmingCharacters(in: .whitespacesAndNewlines)
+            let title = parts.count > 2
+                ? parts[2].trimmingCharacters(in: .whitespacesAndNewlines)
+                : ""
 
             if agentTTYs.contains(paneTTY) {
-                return (target, paneTTY)
+                return (target, paneTTY, title.isEmpty ? nil : title)
             }
         }
 

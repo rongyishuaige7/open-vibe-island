@@ -201,14 +201,16 @@ struct TerminalJumpTargetResolver {
             }
         }
 
-        // Pass 3: tool hint matches session.tool AND working directory matches.
+        // Pass 3: the tmux pane title is authoritative. AGY wrapper sessions
+        // have a tmux target, and several AGY tabs can share one cwd; matching
+        // by cwd first would focus another conversation's Ghostty terminal.
         for snapshot in snapshots where !claimedSnapshotIDs.contains(snapshot.sessionID) {
-            let snapshotCWD = normalizedPathForMatching(snapshot.workingDirectory)
-            guard let hint = ghosttyTitleHint(for: snapshot.title), snapshotCWD != nil else { continue }
             if let session = sessions.first(where: {
                 !claimedSessionIDs.contains($0.id)
-                    && $0.tool == hint
-                    && normalizedPathForMatching($0.jumpTarget?.workingDirectory) == snapshotCWD
+                    && isGhosttySnapshotCompatible(snapshot, with: $0)
+                    && nonEmptyValue($0.jumpTarget?.paneTitle).map {
+                        snapshot.title.localizedCaseInsensitiveContains($0)
+                    } == true
             }) {
                 assignments[session.id] = snapshot
                 claimedSessionIDs.insert(session.id)
@@ -216,12 +218,18 @@ struct TerminalJumpTargetResolver {
             }
         }
 
-        // Pass 4: pane title match (if compatible).
+        // Pass 4: tool hint matches session.tool AND working directory matches.
+        // Do not use this for an AGY session that already has a tmux target:
+        // the pane title above is the only safe discriminator when multiple
+        // AGY conversations share the same cwd.
         for snapshot in snapshots where !claimedSnapshotIDs.contains(snapshot.sessionID) {
+            let snapshotCWD = normalizedPathForMatching(snapshot.workingDirectory)
+            guard let hint = ghosttyTitleHint(for: snapshot.title), snapshotCWD != nil else { continue }
             if let session = sessions.first(where: {
                 !claimedSessionIDs.contains($0.id)
-                    && isGhosttySnapshotCompatible(snapshot, with: $0)
-                    && nonEmptyValue($0.jumpTarget?.paneTitle).map { snapshot.title.localizedCaseInsensitiveContains($0) } == true
+                    && $0.tool == hint
+                    && !hasAuthoritativeAgyTmuxPane($0)
+                    && normalizedPathForMatching($0.jumpTarget?.workingDirectory) == snapshotCWD
             }) {
                 assignments[session.id] = snapshot
                 claimedSessionIDs.insert(session.id)
@@ -236,6 +244,7 @@ struct TerminalJumpTargetResolver {
             if let session = sessions.first(where: {
                 !claimedSessionIDs.contains($0.id)
                     && isGhosttySnapshotCompatible(snapshot, with: $0)
+                    && !hasAuthoritativeAgyTmuxPane($0)
                     && normalizedPathForMatching($0.jumpTarget?.workingDirectory) == snapshotCWD
             }) {
                 assignments[session.id] = snapshot
@@ -245,6 +254,13 @@ struct TerminalJumpTargetResolver {
         }
 
         return assignments
+    }
+
+    /// AGY sessions launched through agent-deck carry a tmux target. Their
+    /// Ghostty tab must match by tmux pane title, not by cwd alone.
+    private func hasAuthoritativeAgyTmuxPane(_ session: AgentSession) -> Bool {
+        session.tool == .geminiCLI
+            && nonEmptyValue(session.jumpTarget?.tmuxTarget) != nil
     }
 
     private func correctedGhosttyJumpTarget(
