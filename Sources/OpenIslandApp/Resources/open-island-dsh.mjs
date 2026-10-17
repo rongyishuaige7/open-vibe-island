@@ -91,7 +91,10 @@ function usageFromContext(ctx, session) {
   try {
     const projections = (typeof ctx?.get === "function" ? ctx.get("sessionProjections") : undefined)
       ?? ctx?.sessionProjections;
-    const usage = projections?.stateOf?.(session, "tokenUsage");
+    const rawUsage = projections?.stateOf?.(session, "tokenUsage");
+    // Host projection state nests the buckets under `totals`; the wire view
+    // is flat. Accept both so the plugin keeps working across DSH versions.
+    const usage = rawUsage?.totals ?? rawUsage;
     if (!usage) return null;
     return {
       total: number(usage.uncachedInputTokens) + number(usage.outputTokens)
@@ -288,6 +291,56 @@ function emitSnapshot(ctx, sessions) {
   });
 }
 
+
+function hydrateSessionState(session) {
+  const id = sessionID(session);
+  if (!id) return;
+  const state = { phase: "completed", summary: "Ready", lastAssistant: "" };
+  let events = [];
+  try {
+    if (typeof session.snapshotEvents === "function") events = session.snapshotEvents();
+    else if (Array.isArray(session.events)) events = session.events;
+  } catch {}
+
+  for (const event of events) {
+    const type = event?.type;
+    const data = event?.data || {};
+    if (type === "session/title" && typeof data.title === "string" && data.title.trim()) {
+      titles.set(id, data.title.trim());
+    } else if (type === "user/message" && data.source?.kind === "user") {
+      const text = clip(textOfContent(data.content));
+      if (text && !titles.has(id)) titles.set(id, text);
+    } else if (type === "turn/start") {
+      state.phase = "running";
+      state.summary = "Thinking…";
+      state.lastAssistant = "";
+    } else if (type === "tool/call") {
+      state.phase = "running";
+      state.summary = data.name ? `Running ${data.name}` : "Running a tool";
+    } else if (type === "tool/result") {
+      state.phase = "running";
+      state.summary = data.error ? "Tool failed" : "Tool finished";
+    } else if (type === "assistant/message") {
+      const text = clip(textOfContent(data.message?.content));
+      if (text) state.lastAssistant = text;
+      state.phase = "running";
+      state.summary = text || "Replied";
+    } else if (type === "turn/end") {
+      const kind = data.reason?.kind || "completed";
+      state.phase = "completed";
+      state.summary = kind === "completed"
+        ? (state.lastAssistant || "Turn completed")
+        : kind === "aborted" ? "Stopped"
+        : kind === "blocked" ? "Blocked"
+        : kind === "max-tokens" ? "Reached the output token limit"
+        : kind === "error" ? (data.reason?.error?.message ? clip(data.reason.error.message, 120) : "Turn failed")
+        : "Turn finished";
+    }
+  }
+
+  sessionState.set(id, state);
+}
+
 function handleEvent(ctx, session, event) {
   if (isSubagent(session)) return;
   const id = sessionID(session);
@@ -370,7 +423,7 @@ export function apply(ctx) {
   try {
     for (const session of ctx.sessions.list()) {
       if (isSubagent(session)) continue;
-      sessionState.set(sessionID(session), { phase: "running", summary: "Working…" });
+      hydrateSessionState(session);
       recordUsage(ctx, session);
     }
   } catch {}

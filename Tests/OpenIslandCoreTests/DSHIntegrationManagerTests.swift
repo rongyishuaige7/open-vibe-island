@@ -84,6 +84,9 @@ struct DSHIntegrationManagerTests {
             try manager.install(pluginSourceData: Data("export function apply() {}".utf8))
         }
         #expect(try String(contentsOf: patchURL, encoding: .utf8) == original)
+        #expect(!FileManager.default.fileExists(
+            atPath: profile.appendingPathComponent("open-island-dsh.mjs").path
+        ))
     }
 
     @Test

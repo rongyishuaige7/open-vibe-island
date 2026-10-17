@@ -298,8 +298,8 @@ final class AppModel {
             UserDefaults.standard.set(showCodexUsage, forKey: Self.showCodexUsageDefaultsKey)
         }
     }
-    /// Shows today's Claude and Codex token totals from CC Switch's local
-    /// request log in the island header.
+    /// Shows today's Claude/Codex totals from CC Switch and DSH totals from
+    /// the host plugin's local-day ledger in the island header.
     var showTodayTokenUsage: Bool = false {
         didSet {
             guard hasFinishedInit, showTodayTokenUsage != oldValue else { return }
