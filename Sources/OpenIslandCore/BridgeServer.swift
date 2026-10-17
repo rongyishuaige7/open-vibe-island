@@ -482,6 +482,8 @@ public final class BridgeServer: @unchecked Sendable {
             handleGrokHook(payload, from: clientID)
         case let .processPiHook(payload):
             handlePiHook(payload, from: clientID)
+        case let .processDSHHook(payload):
+            handleDSHHook(payload, from: clientID)
         }
     }
 
@@ -1189,6 +1191,132 @@ public final class BridgeServer: @unchecked Sendable {
             )
             send(.response(.acknowledged), to: clientID)
         }
+    }
+
+    private static let dshSessionPrefix = "dsh:"
+
+    private func dshSessionID(_ rawSessionID: String) -> String {
+        Self.dshSessionPrefix + rawSessionID
+    }
+
+    private func handleDSHHook(_ payload: DSHHookPayload, from clientID: UUID) {
+        if let todayTokens = payload.todayTokens {
+            emit(
+                .dshTodayTokensUpdated(
+                    DSHTodayTokensUpdated(usage: todayTokens, timestamp: payload.timestamp)
+                )
+            )
+        }
+
+        switch payload.event {
+        case .snapshot:
+            for snapshot in payload.sessions ?? [] {
+                applyDSHSnapshot(snapshot, timestamp: payload.timestamp)
+            }
+
+        case .sessionStart, .activity:
+            if let snapshot = payload.session {
+                applyDSHSnapshot(snapshot, timestamp: payload.timestamp)
+            }
+
+        case .sessionEnd:
+            guard let snapshot = payload.session else {
+                send(.response(.acknowledged), to: clientID)
+                return
+            }
+
+            let sessionID = dshSessionID(snapshot.sessionID)
+            if localState.session(id: sessionID) != nil {
+                emit(
+                    .sessionCompleted(
+                        SessionCompleted(
+                            sessionID: sessionID,
+                            summary: snapshot.summary ?? "DeepSeek Harness session ended.",
+                            timestamp: payload.timestamp,
+                            isSessionEnd: true
+                        )
+                    )
+                )
+            }
+        }
+
+        send(.response(.acknowledged), to: clientID)
+    }
+
+    private func applyDSHSnapshot(_ snapshot: DSHSessionSnapshot, timestamp: Date) {
+        let sessionID = dshSessionID(snapshot.sessionID)
+        let title = dshTitle(for: snapshot)
+        let summary = snapshot.summary?.trimmingCharacters(in: .whitespacesAndNewlines)
+        let resolvedSummary = (summary?.isEmpty == false ? summary : nil)
+            ?? (snapshot.phase == .completed ? "DeepSeek Harness finished the turn." : "DeepSeek Harness is working.")
+        let jumpTarget = dshJumpTarget(for: snapshot, title: title)
+
+        let existing = localState.session(id: sessionID)
+        if existing == nil || existing?.title != title {
+            emit(
+                .sessionStarted(
+                    SessionStarted(
+                        sessionID: sessionID,
+                        title: title,
+                        tool: .deepSeekHarness,
+                        origin: .live,
+                        initialPhase: snapshot.phase,
+                        summary: resolvedSummary,
+                        timestamp: timestamp,
+                        jumpTarget: jumpTarget
+                    )
+                )
+            )
+        } else {
+            emit(
+                .activityUpdated(
+                    SessionActivityUpdated(
+                        sessionID: sessionID,
+                        summary: resolvedSummary,
+                        phase: snapshot.phase,
+                        timestamp: timestamp
+                    )
+                )
+            )
+        }
+
+        // The snapshot cadence owns liveness. `completed` is a turn state,
+        // not a session end, so it must keep heartbeating until DSH disposes
+        // the session (or the plugin stops reporting it).
+        emit(
+            .sessionHeartbeat(
+                SessionHeartbeat(sessionID: sessionID, timestamp: timestamp)
+            )
+        )
+    }
+
+    private func dshTitle(for snapshot: DSHSessionSnapshot) -> String {
+        if let title = snapshot.title?.trimmingCharacters(in: .whitespacesAndNewlines), !title.isEmpty {
+            return title
+        }
+        if let workspace = snapshot.workspaceName?.trimmingCharacters(in: .whitespacesAndNewlines), !workspace.isEmpty {
+            return "DeepSeek Harness · \(workspace)"
+        }
+        if let cwd = snapshot.cwd, !cwd.isEmpty {
+            let name = URL(fileURLWithPath: cwd).lastPathComponent
+            if !name.isEmpty {
+                return "DeepSeek Harness · \(name)"
+            }
+        }
+        return "DeepSeek Harness"
+    }
+
+    private func dshJumpTarget(for snapshot: DSHSessionSnapshot, title: String) -> JumpTarget {
+        let workingDirectory = snapshot.cwd
+        let workspaceName = snapshot.workspaceName
+            ?? workingDirectory.map { URL(fileURLWithPath: $0).lastPathComponent }
+            ?? "DSH"
+        return JumpTarget(
+            terminalApp: "DeepSeek Harness",
+            workspaceName: workspaceName,
+            paneTitle: title,
+            workingDirectory: workingDirectory
+        )
     }
 
     private func handlePiHook(_ payload: PiHookPayload, from clientID: UUID) {

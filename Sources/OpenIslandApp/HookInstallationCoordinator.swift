@@ -25,6 +25,7 @@ final class HookInstallationCoordinator {
     var factoryHookStatus: ClaudeHookInstallationStatus?
     var codebuddyHookStatus: ClaudeHookInstallationStatus?
     var openCodePluginStatus: OpenCodePluginInstallationStatus?
+    var dshIntegrationStatus: DSHIntegrationStatus?
     var cursorHookStatus: CursorHookInstallationStatus?
     var geminiHookStatus: GeminiHookInstallationStatus?
     var kimiHookStatus: KimiHookInstallationStatus?
@@ -42,6 +43,7 @@ final class HookInstallationCoordinator {
     var isFactoryHookSetupBusy = false
     var isCodebuddyHookSetupBusy = false
     var isOpenCodeSetupBusy = false
+    var isDSHSetupBusy = false
     var isCursorHookSetupBusy = false
     var isGeminiHookSetupBusy = false
     var isKimiHookSetupBusy = false
@@ -87,6 +89,9 @@ final class HookInstallationCoordinator {
 
     @ObservationIgnored
     private let openCodePluginInstallationManager = OpenCodePluginInstallationManager()
+
+    @ObservationIgnored
+    private let dshIntegrationManager = DSHIntegrationManager()
 
     @ObservationIgnored
     private let cursorHookInstallationManager = CursorHookInstallationManager()
@@ -150,6 +155,10 @@ final class HookInstallationCoordinator {
 
     var openCodePluginInstalled: Bool {
         openCodePluginStatus?.isInstalled == true
+    }
+
+    var dshIntegrationInstalled: Bool {
+        dshIntegrationStatus?.isInstalled == true
     }
 
     var cursorHooksInstalled: Bool {
@@ -760,6 +769,11 @@ final class HookInstallationCoordinator {
                 } catch {
                     self.onStatusMessage?("Failed to read Grok hook status: \(error.localizedDescription)")
                 }
+            }
+
+            group.addTask { @MainActor [weak self] in
+                guard let self else { return }
+                self.refreshDSHIntegrationStatus()
             }
 
             group.addTask { @MainActor [weak self] in
@@ -1547,6 +1561,65 @@ final class HookInstallationCoordinator {
                 self.onStatusMessage?("Claude usage bridge update failed: \(error.localizedDescription)")
             }
         }
+    }
+
+    func refreshDSHIntegrationStatus() {
+        dshIntegrationStatus = dshIntegrationManager.status()
+    }
+
+    func installDSHIntegration() {
+        guard let pluginData = loadBundledDSHPlugin() else {
+            onStatusMessage?("Could not find the bundled DeepSeek Harness plugin resource.")
+            return
+        }
+
+        isDSHSetupBusy = true
+        onStatusMessage?("Installing DeepSeek Harness bridge.")
+
+        Task { [weak self] in
+            guard let self else { return }
+            defer { self.isDSHSetupBusy = false }
+
+            do {
+                let status = try self.dshIntegrationManager.install(pluginSourceData: pluginData)
+                self.dshIntegrationStatus = status
+                if status.isInstalled {
+                    self.onStatusMessage?("DeepSeek Harness bridge installed. Restart DeepSeek Harness to activate.")
+                } else {
+                    self.onStatusMessage?("DeepSeek Harness bridge installation incomplete.")
+                }
+            } catch {
+                self.onStatusMessage?("DeepSeek Harness bridge install failed: \(error.localizedDescription)")
+            }
+        }
+    }
+
+    func uninstallDSHIntegration() {
+        isDSHSetupBusy = true
+        onStatusMessage?("Removing DeepSeek Harness bridge.")
+
+        Task { [weak self] in
+            guard let self else { return }
+            defer { self.isDSHSetupBusy = false }
+
+            do {
+                let status = try self.dshIntegrationManager.uninstall()
+                self.dshIntegrationStatus = status
+                self.onStatusMessage?("DeepSeek Harness bridge removed. Restart DeepSeek Harness to complete.")
+            } catch {
+                self.onStatusMessage?("DeepSeek Harness bridge removal failed: \(error.localizedDescription)")
+            }
+        }
+    }
+
+    private func loadBundledDSHPlugin() -> Data? {
+        if let url = Bundle.appResources.url(forResource: "open-island-dsh", withExtension: "mjs") {
+            return try? Data(contentsOf: url)
+        }
+        if let url = Bundle.main.url(forResource: "open-island-dsh", withExtension: "mjs") {
+            return try? Data(contentsOf: url)
+        }
+        return nil
     }
 
     private func loadBundledOpenCodePlugin() -> Data? {

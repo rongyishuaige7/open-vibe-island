@@ -29,10 +29,11 @@
 "settings.general.suppressFrontmostNotifications" = "Suppress notifications for focused sessions";
 "settings.general.showCodexUsage" = "Show Codex usage";
 "settings.general.showTodayTokenUsage" = "Show today's tokens";
-"settings.general.showTodayTokenUsage.caption" = "Claude and Codex totals from CC Switch's local request log, cache included. Requests that bypass CC Switch are not counted.";
+"settings.general.showTodayTokenUsage.caption" = "Claude and Codex totals from CC Switch's local request log, plus DeepSeek Harness from its local bridge. Cache included.";
 "usage.todayTokens.title" = "Today";
-"usage.todayTokens.help" = "Tokens CC Switch logged since local midnight, cache included";
+"usage.todayTokens.help" = "Tokens since local midnight, cache included: Claude/Codex from CC Switch, DSH from its local ledger";
 "usage.todayTokens.helpLine" = "%@: %@ tokens, %@ from cache reads, %@ requests";
+"usage.todayTokens.helpLineSessions" = "%@: %@ tokens, %@ from cache reads, %@ sessions";
 "usage.todayTokens.readFailed" = "Last refresh failed: %@";
 "settings.general.completionReply" = "Reply from completion card";
 "settings.general.cliHooks" = "CLI Hooks";
@@ -42,6 +43,7 @@
 "settings.general.uninstallConfirmTitle" = "Uninstall Hooks?";
 "settings.general.uninstallConfirmAction" = "Uninstall";
 "settings.general.uninstallConfirmMessage.claude" = "This will remove Open Island hooks from Claude Code. You can reinstall them at any time.";
+"settings.general.uninstallConfirmMessage.dsh" = "This removes the Open Island bridge from your DeepSeek Harness profiles. Restart DeepSeek Harness afterwards.";
 "settings.general.uninstallConfirmMessage.codex" = "This will remove Open Island hooks from Codex. You can reinstall them at any time.";
 "settings.general.uninstallConfirmMessage.claudeUsage" = "This will remove the Claude usage bridge. You can reinstall it at any time.";
 "settings.general.cancel" = "Cancel";

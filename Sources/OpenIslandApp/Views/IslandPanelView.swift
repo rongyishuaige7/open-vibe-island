@@ -989,7 +989,9 @@ struct IslandPanelView: View {
     /// midnight, cache included.
     private var todayTokenUsagePresentation: UsageProviderPresentation? {
         let monitor = model.todayTokenUsageMonitor
-        guard monitor.usage != nil || monitor.lastErrorMessage != nil else {
+        guard monitor.usage != nil
+                || monitor.dshTotals != nil
+                || monitor.lastErrorMessage != nil else {
             return nil
         }
 
@@ -997,12 +999,21 @@ struct IslandPanelView: View {
         let agents: [(id: String, label: String, shortLabel: String, totals: AgentTokenTotals?)] = [
             ("claude", "Claude", "Cl", monitor.usage?.claude),
             ("codex", "Codex", "Cx", monitor.usage?.codex),
-        ]
+            ("deepSeekHarness", "DSH", "DS", monitor.dshTotals),
+        ].filter { $0.totals != nil }
+
+        guard !agents.isEmpty || monitor.lastErrorMessage != nil else {
+            return nil
+        }
+
         var helpLines = [lang.t("usage.todayTokens.help")]
         for agent in agents {
             guard let totals = agent.totals else { continue }
+            let key = agent.id == "deepSeekHarness"
+                ? "usage.todayTokens.helpLineSessions"
+                : "usage.todayTokens.helpLine"
             helpLines.append(lang.t(
-                "usage.todayTokens.helpLine",
+                key,
                 agent.label,
                 totals.totalTokens.formatted(),
                 totals.cacheReadTokens.formatted(),

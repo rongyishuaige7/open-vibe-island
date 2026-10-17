@@ -55,6 +55,40 @@ struct TodayTokenUsageMonitorTests {
     }
 
     @Test
+    func dshTotalsAreMergedBesideCCSwitchTotals() {
+        let monitor = makeMonitor()
+        monitor.apply(.success(makeUsage(claudeTokens: 42)), now: Self.now, calendar: Self.calendar)
+        monitor.updateDSHTotals(
+            DSHTodayTokens(totalTokens: 1_200, cacheReadTokens: 300, sessionCount: 2),
+            at: Self.now,
+            calendar: Self.calendar
+        )
+
+        #expect(monitor.usage?.claude.totalTokens == 42)
+        #expect(monitor.dshTotals?.totalTokens == 1_200)
+        #expect(monitor.dshTotals?.cacheReadTokens == 300)
+        #expect(monitor.dshTotals?.requestCount == 2)
+    }
+
+    @Test
+    func dshTotalsFromAnEarlierDayAreDropped() {
+        let monitor = makeMonitor()
+        let yesterday = Self.calendar.date(byAdding: .day, value: -1, to: Self.now)!
+        monitor.updateDSHTotals(
+            DSHTodayTokens(totalTokens: 900, sessionCount: 1),
+            at: yesterday,
+            calendar: Self.calendar
+        )
+        monitor.updateDSHTotals(
+            DSHTodayTokens(totalTokens: 10, sessionCount: 1),
+            at: Self.now,
+            calendar: Self.calendar
+        )
+
+        #expect(monitor.dshTotals?.totalTokens == 10)
+    }
+
+    @Test
     func missingDatabaseHidesTheChip() {
         let monitor = makeMonitor()
         monitor.apply(.success(makeUsage(claudeTokens: 42)), now: Self.now, calendar: Self.calendar)

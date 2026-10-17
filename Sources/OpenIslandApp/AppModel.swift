@@ -112,6 +112,9 @@ final class AppModel {
     var isFactoryHookSetupBusy: Bool { hooks.isFactoryHookSetupBusy }
     var isCodebuddyHookSetupBusy: Bool { hooks.isCodebuddyHookSetupBusy }
     var openCodePluginInstalled: Bool { hooks.openCodePluginInstalled }
+    var dshIntegrationInstalled: Bool { hooks.dshIntegrationInstalled }
+    var dshIntegrationStatus: DSHIntegrationStatus? { hooks.dshIntegrationStatus }
+    var isDSHSetupBusy: Bool { hooks.isDSHSetupBusy }
     var claudeUsageInstalled: Bool { hooks.claudeUsageInstalled }
     var claudeHookStatusTitle: String { hooks.claudeHookStatusTitle }
     var claudeHookStatusSummary: String { hooks.claudeHookStatusSummary }
@@ -176,6 +179,7 @@ final class AppModel {
             || hooks.factoryHooksInstalled
             || hooks.codebuddyHooksInstalled
             || hooks.openCodePluginInstalled
+            || hooks.dshIntegrationInstalled
             || hooks.geminiHooksInstalled
             || hooks.kimiHooksInstalled
             || hooks.grokHooksInstalled
@@ -219,6 +223,11 @@ final class AppModel {
     func uninstallPiExtension() { hooks.uninstallPiExtension() }
     func installOhMyPiExtension() { hooks.installOhMyPiExtension() }
     func uninstallOhMyPiExtension() { hooks.uninstallOhMyPiExtension() }
+    func installDSHIntegration() {
+        showTodayTokenUsage = true
+        hooks.installDSHIntegration()
+    }
+    func uninstallDSHIntegration() { hooks.uninstallDSHIntegration() }
     func installClaudeUsageBridge() { hooks.installClaudeUsageBridge() }
     func uninstallClaudeUsageBridge() { hooks.uninstallClaudeUsageBridge() }
     func updateClaudeConfigDirectory(to newDirectory: URL?) { hooks.updateClaudeConfigDirectory(to: newDirectory) }
@@ -665,7 +674,7 @@ final class AppModel {
         } else {
             showTodayTokenUsage = FileManager.default.fileExists(
                 atPath: CCSwitchUsageReader.defaultDatabaseURL.path
-            )
+            ) || DSHIntegrationManager().status().isInstalled
         }
         completionReplyEnabled = UserDefaults.standard.bool(forKey: Self.completionReplyEnabledDefaultsKey)
         launchAtLoginEnabled = LaunchAtLoginService.shared.isEnabled
@@ -1555,6 +1564,11 @@ final class AppModel {
         updateLastActionMessage: Bool = true,
         ingress: TrackedEventIngress = .bridge
     ) {
+        if case let .dshTodayTokensUpdated(payload) = event {
+            todayTokenUsageMonitor.updateDSHTotals(payload.usage, at: payload.timestamp)
+            return
+        }
+
         if case .sessionHeartbeat = event {
             state.apply(event)
             return
@@ -1613,6 +1627,7 @@ final class AppModel {
                 case let .piSessionMetadataUpdated(p): return p.sessionID
                 case let .sessionHeartbeat(p): return p.sessionID
                 case let .actionableStateResolved(p): return p.sessionID
+                case .dshTodayTokensUpdated: return nil
                 }
             }()
             let session = eventSessionID.flatMap { state.session(id: $0) }
@@ -1908,6 +1923,8 @@ final class AppModel {
             return "Heartbeat received for session \(payload.sessionID)."
         case let .actionableStateResolved(payload):
             return "Actionable state resolved for session \(payload.sessionID)."
+        case let .dshTodayTokensUpdated(payload):
+            return "DSH today tokens updated: \(payload.usage.totalTokens)."
         }
     }
 

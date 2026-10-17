@@ -79,6 +79,11 @@ struct TerminalJumpService {
             aliases: ["codex.app"]
         ),
         TerminalAppDescriptor(
+            displayName: "DeepSeek Harness",
+            bundleIdentifier: "com.deepseek.dsh",
+            aliases: ["deepseek harness", "dsh"]
+        ),
+        TerminalAppDescriptor(
             displayName: "Claude.app",
             bundleIdentifier: "com.anthropic.claudefordesktop",
             aliases: ["claude.app"]
@@ -365,6 +370,11 @@ struct TerminalJumpService {
                 // per-session deep link, so just bring the app forward.
                 try openAction(["-b", "com.anthropic.claudefordesktop"])
                 return "Activated Claude."
+            case "com.deepseek.dsh":
+                // DSH hosts all sessions in one Electron window. There is no
+                // stable per-session URL scheme, so activate the app.
+                try openAction(["-b", "com.deepseek.dsh"])
+                return "Activated DeepSeek Harness."
             case "com.conductor.app":
                 // No per-session deep link; bring the app forward, like Claude.app.
                 try openAction(["-b", "com.conductor.app"])

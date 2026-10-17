@@ -8,12 +8,16 @@ import OpenIslandCore
 @Observable
 final class TodayTokenUsageMonitor {
     private(set) var usage: TodayTokenUsage?
+    /// DSH tokens reported by the host plugin's local-day ledger. Nil until
+    /// the integration is installed and has seen a session.
+    private(set) var dshTotals: AgentTokenTotals?
     /// Why the last refresh failed. Today's last good totals stay visible.
     private(set) var lastErrorMessage: String?
 
     private let databaseURL: URL
     private let interval: Duration
     @ObservationIgnored private var task: Task<Void, Never>?
+    @ObservationIgnored private var dshTotalsDay: Date = .distantPast
 
     init(databaseURL: URL = CCSwitchUsageReader.defaultDatabaseURL, interval: Duration = .seconds(30)) {
         self.databaseURL = databaseURL
@@ -37,6 +41,30 @@ final class TodayTokenUsageMonitor {
         task = nil
         usage = nil
         lastErrorMessage = nil
+    }
+
+    /// Merges the DSH plugin's today ledger into the chip. The ledger already
+    /// resets at local midnight in the plugin; this also drops a total left
+    /// over from an earlier day if the plugin has not reported since midnight.
+    func updateDSHTotals(
+        _ usage: DSHTodayTokens?,
+        at date: Date = .now,
+        calendar: Calendar = .current
+    ) {
+        guard let usage, usage.totalTokens > 0 || usage.sessionCount > 0 else {
+            dshTotals = nil
+            return
+        }
+
+        if dshTotals != nil, !calendar.isDate(dshTotalsDay, inSameDayAs: date) {
+            dshTotals = nil
+        }
+        dshTotals = AgentTokenTotals(
+            requestCount: usage.sessionCount,
+            totalTokens: usage.totalTokens,
+            cacheReadTokens: usage.cacheReadTokens
+        )
+        dshTotalsDay = calendar.startOfDay(for: date)
     }
 
     func refresh() async {

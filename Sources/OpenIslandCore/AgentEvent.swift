@@ -288,6 +288,7 @@ public enum AgentEvent: Equatable, Codable, Sendable {
     case piSessionMetadataUpdated(PiSessionMetadataUpdated)
     case sessionHeartbeat(SessionHeartbeat)
     case actionableStateResolved(ActionableStateResolved)
+    case dshTodayTokensUpdated(DSHTodayTokensUpdated)
 
     private enum CodingKeys: String, CodingKey {
         case type
@@ -305,6 +306,7 @@ public enum AgentEvent: Equatable, Codable, Sendable {
         case piSessionMetadataUpdated
         case sessionHeartbeat
         case actionableStateResolved
+        case dshTodayTokensUpdated
     }
 
     private enum EventType: String, Codable {
@@ -322,6 +324,7 @@ public enum AgentEvent: Equatable, Codable, Sendable {
         case piSessionMetadataUpdated
         case sessionHeartbeat
         case actionableStateResolved
+        case dshTodayTokensUpdated
     }
 
     public init(from decoder: any Decoder) throws {
@@ -370,6 +373,10 @@ public enum AgentEvent: Equatable, Codable, Sendable {
         case .actionableStateResolved:
             self = .actionableStateResolved(
                 try container.decode(ActionableStateResolved.self, forKey: .actionableStateResolved)
+            )
+        case .dshTodayTokensUpdated:
+            self = .dshTodayTokensUpdated(
+                try container.decode(DSHTodayTokensUpdated.self, forKey: .dshTodayTokensUpdated)
             )
         }
     }
@@ -420,6 +427,9 @@ public enum AgentEvent: Equatable, Codable, Sendable {
         case let .actionableStateResolved(payload):
             try container.encode(EventType.actionableStateResolved, forKey: .type)
             try container.encode(payload, forKey: .actionableStateResolved)
+        case let .dshTodayTokensUpdated(payload):
+            try container.encode(EventType.dshTodayTokensUpdated, forKey: .type)
+            try container.encode(payload, forKey: .dshTodayTokensUpdated)
         }
     }
 }
