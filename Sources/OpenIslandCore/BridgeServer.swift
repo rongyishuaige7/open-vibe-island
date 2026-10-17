@@ -123,7 +123,16 @@ public final class BridgeServer: @unchecked Sendable {
     private func bindListener(at url: URL) throws -> Listener {
         let parentURL = url.deletingLastPathComponent()
         try FileManager.default.createDirectory(at: parentURL, withIntermediateDirectories: true)
-        try? FileManager.default.removeItem(at: url)
+
+        // Never unlink a socket another instance is actively serving: that
+        // would leave the old process listening on an orphaned inode while
+        // new hooks silently connect to this process.
+        if FileManager.default.fileExists(atPath: url.path) {
+            if Self.isSocketAcceptingConnections(at: url) {
+                throw BridgeTransportError.bridgeAlreadyRunning(url.path)
+            }
+            try? FileManager.default.removeItem(at: url)
+        }
 
         let fd = socket(AF_UNIX, SOCK_STREAM, 0)
         guard fd != -1 else {
@@ -166,6 +175,74 @@ public final class BridgeServer: @unchecked Sendable {
         source.resume()
 
         return Listener(fileDescriptor: fd, acceptSource: source, socketURL: url)
+    }
+
+    /// Best-effort probe used before reclaiming an existing socket path.
+    /// A stale socket refuses the connection immediately; a live listener
+    /// accepts it. Ambiguous in-progress connects are treated as live so we
+    /// never unlink a socket that may still be in use.
+    private static func isSocketAcceptingConnections(at url: URL) -> Bool {
+        let descriptor = socket(AF_UNIX, SOCK_STREAM, 0)
+        guard descriptor >= 0 else {
+            return false
+        }
+        defer { close(descriptor) }
+
+        do {
+            try makeSocketNonBlocking(descriptor)
+        } catch {
+            return false
+        }
+
+        var isAccepting = false
+
+        do {
+            try withUnixSocketAddress(path: url.path) { address, length in
+                if Darwin.connect(descriptor, address, length) == 0 {
+                    isAccepting = true
+                    return
+                }
+
+                guard errno == EINPROGRESS || errno == EAGAIN || errno == EALREADY else {
+                    return
+                }
+
+                var pollDescriptor = pollfd(
+                    fd: descriptor,
+                    events: Int16(POLLOUT),
+                    revents: 0
+                )
+                let pollResult = poll(&pollDescriptor, 1, 250)
+
+                // A timeout is ambiguous. Prefer refusing to unlink over
+                // stealing a socket from a busy or wedged listener.
+                if pollResult == 0 {
+                    isAccepting = true
+                    return
+                }
+                guard pollResult > 0 else {
+                    return
+                }
+
+                var socketError: Int32 = 0
+                var errorLength = socklen_t(MemoryLayout<Int32>.size)
+                guard getsockopt(
+                    descriptor,
+                    SOL_SOCKET,
+                    SO_ERROR,
+                    &socketError,
+                    &errorLength
+                ) == 0, socketError == 0 else {
+                    return
+                }
+
+                isAccepting = true
+            }
+        } catch {
+            return false
+        }
+
+        return isAccepting
     }
 
     public func stop() {

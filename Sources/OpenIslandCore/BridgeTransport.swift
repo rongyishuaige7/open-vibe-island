@@ -42,6 +42,9 @@ public enum BridgeTransportError: Error, LocalizedError {
     case malformedEnvelope
     case responseTimedOut
     case listenerFailed(String)
+    /// Another process is already serving the socket. Binding over it would
+    /// orphan the running instance, so startup must fail instead.
+    case bridgeAlreadyRunning(String)
     case socketPathTooLong
     case systemCallFailed(String, Int32)
 
@@ -57,6 +60,8 @@ public enum BridgeTransportError: Error, LocalizedError {
             "The local bridge timed out while waiting for a response."
         case let .listenerFailed(message):
             "The local bridge listener failed: \(message)"
+        case let .bridgeAlreadyRunning(path):
+            "Another Open Island instance is already listening on \(path)."
         case .socketPathTooLong:
             "The Unix socket path is too long for `sockaddr_un`."
         case let .systemCallFailed(name, code):

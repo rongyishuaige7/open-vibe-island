@@ -1153,7 +1153,11 @@ final class AppModel {
             connectBridgeObserver()
         } catch {
             isBridgeReady = false
-            lastActionMessage = "Failed to start local bridge: \(error.localizedDescription)"
+            if case let .bridgeAlreadyRunning(path)? = error as? BridgeTransportError {
+                lastActionMessage = "Another Open Island instance is already running on \(path). Quit it before launching this build."
+            } else {
+                lastActionMessage = "Failed to start local bridge: \(error.localizedDescription)"
+            }
             harnessRuntimeMonitor?.recordMilestone("bridgeStartFailed", message: lastActionMessage)
         }
     }
