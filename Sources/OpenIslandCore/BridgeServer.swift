@@ -461,6 +461,15 @@ public final class BridgeServer: @unchecked Sendable {
                 )
 
                 send(.response(.cursorHookDirective(directive)), to: interaction.clientID)
+                emit(
+                    .actionableStateResolved(
+                        ActionableStateResolved(
+                            sessionID: sessionID,
+                            summary: summary,
+                            timestamp: .now
+                        )
+                    )
+                )
                 send(.response(.acknowledged), to: clientID)
                 return
             }
@@ -510,6 +519,15 @@ public final class BridgeServer: @unchecked Sendable {
                     )
             )])
             resolvePendingApproval(sessionID: sessionID, resolution: resolution)
+            emit(
+                .actionableStateResolved(
+                    ActionableStateResolved(
+                        sessionID: sessionID,
+                        summary: resolution.isApproved ? approvedSummary : deniedSummary,
+                        timestamp: .now
+                    )
+                )
+            )
             send(.response(.acknowledged), to: clientID)
 
         case let .answerQuestion(sessionID, response):
@@ -2292,6 +2310,15 @@ public final class BridgeServer: @unchecked Sendable {
         )
 
         send(.response(.openCodeHookDirective(directive)), to: pendingInteraction.clientID)
+        emit(
+            .actionableStateResolved(
+                ActionableStateResolved(
+                    sessionID: sessionID,
+                    summary: summary,
+                    timestamp: .now
+                )
+            )
+        )
     }
 
     private func resolvePendingOpenCodeQuestion(
@@ -2321,6 +2348,15 @@ public final class BridgeServer: @unchecked Sendable {
         send(
             .response(.openCodeHookDirective(.answer(text: answerText))),
             to: pendingInteraction.clientID
+        )
+        emit(
+            .actionableStateResolved(
+                ActionableStateResolved(
+                    sessionID: sessionID,
+                    summary: summary,
+                    timestamp: .now
+                )
+            )
         )
     }
 
@@ -3086,6 +3122,15 @@ public final class BridgeServer: @unchecked Sendable {
         )
 
         send(.response(.claudeHookDirective(directive)), to: pendingInteraction.clientID)
+        emit(
+            .actionableStateResolved(
+                ActionableStateResolved(
+                    sessionID: sessionID,
+                    summary: summary,
+                    timestamp: .now
+                )
+            )
+        )
     }
 
     private func resolvePendingClaudeQuestion(
@@ -3127,6 +3172,15 @@ public final class BridgeServer: @unchecked Sendable {
                 )
             ),
             to: pendingInteraction.clientID
+        )
+        emit(
+            .actionableStateResolved(
+                ActionableStateResolved(
+                    sessionID: sessionID,
+                    summary: summary,
+                    timestamp: .now
+                )
+            )
         )
     }
 

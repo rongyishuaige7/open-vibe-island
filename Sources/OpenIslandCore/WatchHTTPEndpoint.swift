@@ -131,6 +131,8 @@ public final class WatchHTTPEndpoint: @unchecked Sendable {
 
     // Callbacks
     public var onResolution: WatchResolutionHandler?
+    /// Fires whenever the number of live SSE clients changes.
+    public var onConnectionCountChanged: (@Sendable (Int) -> Void)?
 
     public init() {
         regeneratePairingCode()
@@ -149,10 +151,13 @@ public final class WatchHTTPEndpoint: @unchecked Sendable {
             guard let self else { return }
             self.listener?.cancel()
             self.listener = nil
-            for (id, connection) in self.sseConnections {
+
+            let connections = Array(self.sseConnections.values)
+            self.sseConnections.removeAll()
+            for connection in connections {
                 connection.cancel()
-                self.sseConnections.removeValue(forKey: id)
             }
+            self.notifyConnectionCountChanged()
         }
     }
 
@@ -186,6 +191,7 @@ public final class WatchHTTPEndpoint: @unchecked Sendable {
             for connection in connections {
                 connection.cancel()
             }
+            notifyConnectionCountChanged()
         }
     }
 
@@ -378,13 +384,16 @@ public final class WatchHTTPEndpoint: @unchecked Sendable {
 
         let connectionID = UUID()
         sseConnections[connectionID] = connection
+        notifyConnectionCountChanged()
 
         let queue = self.queue
         connection.send(content: headerData, completion: .contentProcessed { [weak self] error in
             if let error {
                 Self.logger.warning("Failed to send SSE headers: \(error.localizedDescription)")
                 queue.async { [weak self] in
-                    self?.sseConnections.removeValue(forKey: connectionID)
+                    guard let self else { return }
+                    self.sseConnections.removeValue(forKey: connectionID)
+                    self.notifyConnectionCountChanged()
                 }
                 connection.cancel()
                 return
@@ -399,7 +408,9 @@ public final class WatchHTTPEndpoint: @unchecked Sendable {
         connection.viabilityUpdateHandler = { [weak self] isViable in
             if !isViable {
                 queue.async { [weak self] in
-                    self?.sseConnections.removeValue(forKey: connectionID)
+                    guard let self else { return }
+                    self.sseConnections.removeValue(forKey: connectionID)
+                    self.notifyConnectionCountChanged()
                 }
             }
         }
@@ -413,7 +424,9 @@ public final class WatchHTTPEndpoint: @unchecked Sendable {
         connection.receive(minimumIncompleteLength: 1, maximumLength: 1) { [weak self] _, _, isComplete, error in
             if isComplete || error != nil {
                 queue.async { [weak self] in
-                    self?.sseConnections.removeValue(forKey: connectionID)
+                    guard let self else { return }
+                    self.sseConnections.removeValue(forKey: connectionID)
+                    self.notifyConnectionCountChanged()
                 }
                 connection.cancel()
             } else {
@@ -513,6 +526,10 @@ public final class WatchHTTPEndpoint: @unchecked Sendable {
     // MARK: - Private: Pairing Code Generation
 
     /// Must be called on `queue`.
+    private func notifyConnectionCountChanged() {
+        onConnectionCountChanged?(sseConnections.count)
+    }
+
     private func regeneratePairingCodeUnsafe() {
         let digits = (0..<Self.pairingCodeLength).map { _ in String(Int.random(in: 0...9)) }
         currentPairingCode = digits.joined()

@@ -489,14 +489,18 @@ final class AppModel {
     }
 
     /// Number of currently connected iPhone SSE clients.
-    var watchConnectedDevices: Int {
-        watchRelay?.endpoint.connectedClientCount() ?? 0
-    }
+    private(set) var watchConnectedDevices = 0
 
     private func startWatchRelay() {
         guard watchRelay == nil else { return }
         let relay = WatchNotificationRelay()
         setupWatchRelayCallbacks(relay)
+        relay.endpoint.onConnectionCountChanged = { [weak self] count in
+            Task { @MainActor [weak self] in
+                self?.watchConnectedDevices = count
+            }
+        }
+        watchConnectedDevices = 0
         relay.start()
         relay.endpoint.updateActiveSessionCount(state.sessions.count)
         self.watchRelay = relay
@@ -523,6 +527,7 @@ final class AppModel {
     private func stopWatchRelay() {
         watchRelay?.stop()
         watchRelay = nil
+        watchConnectedDevices = 0
     }
 
     var ignoresPointerExitDuringHarness = false
