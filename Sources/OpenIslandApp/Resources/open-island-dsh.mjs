@@ -292,14 +292,36 @@ function emitSnapshot(ctx, sessions) {
 }
 
 
-function hydrateSessionState(session) {
+function hydrateSessionState(ctx, session) {
   const id = sessionID(session);
   if (!id) return;
   const state = { phase: "completed", summary: "Ready", lastAssistant: "" };
+
+  // A generated title is cheap to read and avoids scanning the whole log.
+  try {
+    const projections = (typeof ctx?.get === "function" ? ctx.get("sessionProjections") : undefined)
+      ?? ctx?.sessionProjections;
+    const projectedTitle = projections?.stateOf?.(session, "title");
+    const title = typeof projectedTitle === "string" ? projectedTitle : projectedTitle?.title;
+    if (typeof title === "string" && title.trim()) titles.set(id, title.trim());
+  } catch {}
+
   let events = [];
   try {
-    if (typeof session.snapshotEvents === "function") events = session.snapshotEvents();
-    else if (Array.isArray(session.events)) events = session.events;
+    const seq = Number(session?.seq);
+    if (Number.isSafeInteger(seq) && seq > 0 && typeof session.eventAt === "function") {
+      // Only the tail decides the current phase and summary. Keep boot cost
+      // bounded for very long sessions.
+      const start = Math.max(0, seq - 500);
+      for (let index = start; index < seq; index += 1) {
+        const event = session.eventAt(index);
+        if (event) events.push(event);
+      }
+    } else if (typeof session.snapshotEvents === "function") {
+      events = session.snapshotEvents();
+    } else if (Array.isArray(session.events)) {
+      events = session.events;
+    }
   } catch {}
 
   for (const event of events) {
@@ -423,7 +445,7 @@ export function apply(ctx) {
   try {
     for (const session of ctx.sessions.list()) {
       if (isSubagent(session)) continue;
-      hydrateSessionState(session);
+      hydrateSessionState(ctx, session);
       recordUsage(ctx, session);
     }
   } catch {}
