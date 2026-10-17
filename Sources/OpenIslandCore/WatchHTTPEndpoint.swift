@@ -97,11 +97,6 @@ public struct WatchStatusResponse: Codable, Sendable {
 /// Callback invoked when the Watch/iPhone submits a resolution via `/resolution`.
 public typealias WatchResolutionHandler = @Sendable (WatchResolutionRequest) -> Void
 
-/// Callback to query current active session count for `/status`.
-public typealias WatchActiveSessionCountProvider = @Sendable () -> Int
-
-// MARK: - WatchHTTPEndpoint
-
 /// A lightweight HTTP server embedded in the macOS app that enables iPhone/Watch communication.
 ///
 /// Uses `NWListener` for TCP + Bonjour advertising of `_openisland._tcp`.
@@ -129,9 +124,13 @@ public final class WatchHTTPEndpoint: @unchecked Sendable {
     // Listener
     private var listener: NWListener?
 
+    /// Snapshot updated by the app on the main actor and read by the HTTP
+    /// queue. A lock avoids `MainActor.assumeIsolated` from a background
+    /// queue, which traps when `/status` is requested.
+    private let activeSessionCount = OSAllocatedUnfairLock(initialState: 0)
+
     // Callbacks
     public var onResolution: WatchResolutionHandler?
-    public var activeSessionCountProvider: WatchActiveSessionCountProvider?
 
     public init() {
         regeneratePairingCode()
@@ -176,11 +175,34 @@ public final class WatchHTTPEndpoint: @unchecked Sendable {
         }
     }
 
-    /// Revoke all paired tokens, forcing re-pairing.
+    /// Revoke all paired tokens and close existing SSE streams, forcing
+    /// every device to pair again.
     public func revokeAllTokens() {
         queue.sync {
             validTokens.removeAll()
+
+            let connections = Array(sseConnections.values)
+            sseConnections.removeAll()
+            for connection in connections {
+                connection.cancel()
+            }
         }
+    }
+
+    /// Updates the session count reported by `GET /status`.
+    ///
+    /// Safe to call from any thread; the HTTP queue reads the same lock.
+    public func updateActiveSessionCount(_ count: Int) {
+        activeSessionCount.withLock { $0 = max(0, count) }
+    }
+
+    /// Number of currently connected, authenticated SSE clients.
+    public func connectedClientCount() -> Int {
+        queue.sync { sseConnections.count }
+    }
+
+    func activeSessionCountForTests() -> Int {
+        activeSessionCount.withLock { $0 }
     }
 
     // MARK: - SSE Push
@@ -424,7 +446,7 @@ public final class WatchHTTPEndpoint: @unchecked Sendable {
 
         let response = WatchStatusResponse(
             connected: !sseConnections.isEmpty,
-            activeSessionCount: activeSessionCountProvider?() ?? 0
+            activeSessionCount: activeSessionCount.withLock { $0 }
         )
 
         if let responseData = try? JSONEncoder().encode(response),

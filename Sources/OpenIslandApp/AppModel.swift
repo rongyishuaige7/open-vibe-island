@@ -52,6 +52,7 @@ final class AppModel {
             _cachedSessionBuckets = nil
             pruneAgentsGridObservationTicketsIfNeeded()
             bridgeServer.updateStateSnapshot(state)
+            watchRelay?.endpoint.updateActiveSessionCount(state.sessions.count)
         }
     }
     @ObservationIgnored private var _cachedSessionBuckets: (primary: [AgentSession], overflow: [AgentSession])?
@@ -489,8 +490,7 @@ final class AppModel {
 
     /// Number of currently connected iPhone SSE clients.
     var watchConnectedDevices: Int {
-        // Placeholder — endpoint doesn't expose count yet
-        0
+        watchRelay?.endpoint.connectedClientCount() ?? 0
     }
 
     private func startWatchRelay() {
@@ -498,6 +498,7 @@ final class AppModel {
         let relay = WatchNotificationRelay()
         setupWatchRelayCallbacks(relay)
         relay.start()
+        relay.endpoint.updateActiveSessionCount(state.sessions.count)
         self.watchRelay = relay
     }
 
@@ -515,14 +516,6 @@ final class AppModel {
                     for: sessionID,
                     answer: QuestionPromptResponse(answer: answer)
                 )
-            }
-        }
-
-        relay.endpoint.activeSessionCountProvider = { [weak self] in
-            // Safe to call from any queue — reads a snapshot count.
-            guard let self else { return 0 }
-            return MainActor.assumeIsolated {
-                self.state.sessions.count
             }
         }
     }
