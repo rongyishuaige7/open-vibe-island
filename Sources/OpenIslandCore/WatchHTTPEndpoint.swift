@@ -110,12 +110,16 @@ public final class WatchHTTPEndpoint: @unchecked Sendable {
     private static let serviceType = "_openisland._tcp"
     private static let pairingCodeLength = 4
     private static let pairingCodeExpiry: TimeInterval = 120 // 2 minutes
+    private static let maximumPairingAttempts = 5
+    private static let pairingLockoutDuration: TimeInterval = 60
 
     private let queue = DispatchQueue(label: "app.openisland.watch.http", qos: .userInitiated)
 
     // Pairing state
     private var currentPairingCode: String = ""
     private var pairingCodeGeneratedAt: Date = .distantPast
+    private var failedPairingAttempts = 0
+    private var pairingLockoutUntil: Date?
     private var validTokens: Set<String> = []
 
     // SSE connections
@@ -337,17 +341,46 @@ public final class WatchHTTPEndpoint: @unchecked Sendable {
             return
         }
 
+        let now = Date()
+        if let pairingLockoutUntil, now < pairingLockoutUntil {
+            let remaining = Int(ceil(pairingLockoutUntil.timeIntervalSince(now)))
+            sendHTTPResponse(
+                connection: connection,
+                status: "429 Too Many Requests",
+                body: #"{"error":"too many pairing attempts","retryAfterSeconds":\#(remaining)}"#
+            )
+            return
+        }
+        if pairingLockoutUntil != nil {
+            pairingLockoutUntil = nil
+            failedPairingAttempts = 0
+        }
+
         // Check if pairing code expired
-        if Date().timeIntervalSince(pairingCodeGeneratedAt) > Self.pairingCodeExpiry {
+        if now.timeIntervalSince(pairingCodeGeneratedAt) > Self.pairingCodeExpiry {
             regeneratePairingCodeUnsafe()
             sendHTTPResponse(connection: connection, status: "410 Gone", body: #"{"error":"pairing code expired"}"#)
             return
         }
 
         guard request.code == currentPairingCode else {
-            sendHTTPResponse(connection: connection, status: "403 Forbidden", body: #"{"error":"invalid pairing code"}"#)
+            failedPairingAttempts += 1
+            if failedPairingAttempts >= Self.maximumPairingAttempts {
+                failedPairingAttempts = 0
+                pairingLockoutUntil = now.addingTimeInterval(Self.pairingLockoutDuration)
+                sendHTTPResponse(
+                    connection: connection,
+                    status: "429 Too Many Requests",
+                    body: #"{"error":"too many pairing attempts","retryAfterSeconds":\#(Int(Self.pairingLockoutDuration))}"#
+                )
+            } else {
+                sendHTTPResponse(connection: connection, status: "403 Forbidden", body: #"{"error":"invalid pairing code"}"#)
+            }
             return
         }
+
+        failedPairingAttempts = 0
+        pairingLockoutUntil = nil
 
         // Generate token
         let token = UUID().uuidString
