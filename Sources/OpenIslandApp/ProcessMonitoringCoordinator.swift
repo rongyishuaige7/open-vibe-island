@@ -63,7 +63,7 @@ final class ProcessMonitoringCoordinator {
     private static let codexAppStalenessTimeout: TimeInterval = 600  // 10 minutes
     private static let claudeDesktopStalenessTimeout: TimeInterval = 600  // 10 minutes
     private static let conductorStalenessTimeout: TimeInterval = 600  // 10 minutes
-    private static let piHeartbeatTimeout: TimeInterval = 45
+    private static let heartbeatTimeout: TimeInterval = 45
 
     static func monitoringPollInterval(
         isResolvingInitialLiveSessions: Bool,
@@ -212,7 +212,7 @@ final class ProcessMonitoringCoordinator {
                     hadTrackedLiveSessions = hasTrackedLiveSessions
                 }
 
-                self.expireStalePiHeartbeatSessions()
+                self.expireStaleHeartbeatSessions()
 
                 let wakeInterval = Self.monitoringWakeInterval(
                     isResolvingInitialLiveSessions: self.isResolvingInitialLiveSessions,
@@ -463,10 +463,10 @@ final class ProcessMonitoringCoordinator {
         onPersistenceNeeded?()
     }
 
-    private func expireStalePiHeartbeatSessions(now: Date = .now) {
+    private func expireStaleHeartbeatSessions(now: Date = .now) {
         var local = state
-        let expired = local.expireStalePiHeartbeats(
-            before: now.addingTimeInterval(-Self.piHeartbeatTimeout)
+        let expired = local.expireStaleHeartbeatSessions(
+            before: now.addingTimeInterval(-Self.heartbeatTimeout)
         )
         guard !expired.isEmpty else { return }
 
@@ -524,6 +524,8 @@ final class ProcessMonitoringCoordinator {
             payload.sessionID
         case let .actionableStateResolved(payload):
             payload.sessionID
+        case .dshTodayTokensUpdated:
+            nil
         }
     }
 
@@ -2110,6 +2112,8 @@ final class ProcessMonitoringCoordinator {
             return "Pi \(session.id.prefix(8))"
         case .ohMyPi:
             return "Oh My Pi \(session.id.prefix(8))"
+        case .deepSeekHarness:
+            return "DSH \(session.id.prefix(8))"
         }
     }
 }

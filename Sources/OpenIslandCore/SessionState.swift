@@ -83,7 +83,9 @@ public struct SessionState: Equatable, Sendable {
             Self.refreshCodexAppClassification(for: &session)
             session.isSessionEnded = false
             session.isProcessAlive = true
-            if payload.tool == .pi || payload.tool == .ohMyPi {
+            if payload.tool == .pi
+                || payload.tool == .ohMyPi
+                || payload.tool == .deepSeekHarness {
                 session.lastHeartbeatAt = payload.timestamp
                 session.heartbeatReconnectStartedAt = nil
             }
@@ -235,7 +237,7 @@ public struct SessionState: Equatable, Sendable {
 
         case let .sessionHeartbeat(payload):
             guard var session = sessionsByID[payload.sessionID],
-                  (session.tool == .pi || session.tool == .ohMyPi),
+                  (session.tool == .pi || session.tool == .ohMyPi || session.tool == .deepSeekHarness),
                   !session.isSessionEnded else {
                 return
             }
@@ -246,6 +248,9 @@ public struct SessionState: Equatable, Sendable {
             session.lastHeartbeatAt = payload.timestamp
             session.heartbeatReconnectStartedAt = nil
             upsert(session)
+
+        case .dshTodayTokensUpdated:
+            return
 
         case let .actionableStateResolved(payload):
             guard var session = sessionsByID[payload.sessionID] else {
@@ -394,7 +399,10 @@ public struct SessionState: Equatable, Sendable {
     ) {
         guard var session = sessionsByID[sessionID] else { return }
 
-        if session.tool == .pi || session.tool == .ohMyPi {
+        let isHeartbeatManaged = session.tool == .pi
+            || session.tool == .ohMyPi
+            || session.tool == .deepSeekHarness
+        if isHeartbeatManaged {
             guard !session.isSessionEnded else { return }
             session.isHookManaged = true
             session.lastHeartbeatAt = timestamp
@@ -403,8 +411,7 @@ public struct SessionState: Equatable, Sendable {
 
         guard !session.isProcessAlive
             || session.processNotSeenCount != 0
-            || session.tool == .pi
-            || session.tool == .ohMyPi else {
+            || isHeartbeatManaged else {
             return
         }
         session.isProcessAlive = true
@@ -453,9 +460,11 @@ public struct SessionState: Equatable, Sendable {
                     continue
                 }
 
-                // Pi and Oh My Pi have no reliable process-to-session mapping.
-                // Their extension heartbeat owns liveness and expiry.
-                if session.tool == .pi || session.tool == .ohMyPi {
+                // Pi, Oh My Pi and DSH have no reliable process-to-session
+                // mapping. Their host heartbeat owns liveness and expiry.
+                if session.tool == .pi
+                    || session.tool == .ohMyPi
+                    || session.tool == .deepSeekHarness {
                     continue
                 }
 
@@ -500,14 +509,16 @@ public struct SessionState: Equatable, Sendable {
         return changed
     }
 
-    /// Ends heartbeat-managed Pi sessions whose extension stopped reporting.
+    /// Ends heartbeat-managed Pi/OMP/DSH sessions whose host stopped reporting.
     /// Returns the IDs that transitioned to ended.
     @discardableResult
-    public mutating func expireStalePiHeartbeats(before deadline: Date) -> Set<String> {
+    public mutating func expireStaleHeartbeatSessions(before deadline: Date) -> Set<String> {
         var expired: Set<String> = []
 
         for (id, var session) in sessionsByID {
-            guard session.tool == .pi || session.tool == .ohMyPi,
+            guard session.tool == .pi
+                    || session.tool == .ohMyPi
+                    || session.tool == .deepSeekHarness,
                   session.isHookManaged,
                   !session.isSessionEnded else {
                 continue

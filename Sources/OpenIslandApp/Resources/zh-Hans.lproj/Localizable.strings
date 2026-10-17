@@ -29,15 +29,16 @@
 "settings.general.suppressFrontmostNotifications" = "前台会话不弹出通知";
 "settings.general.showCodexUsage" = "显示 Codex 用量";
 "settings.general.showTodayTokenUsage" = "显示今日 Token";
-"settings.general.showTodayTokenUsage.caption" = "读取 CC Switch 和 KEEPER 本地请求日志中各 Agent 的今日总量，含缓存。";
+"settings.general.showTodayTokenUsage.caption" = "读取 CC Switch、KEEPER 和 Claude Pro 本地日志中各 Agent 的今日总量，以及 DeepSeek Harness 本地桥接记录的今日总量，均含缓存。";
 "usage.todayTokens.title" = "今日";
-"usage.todayTokens.help" = "本地请求日志记录的今日 Token（从本地零点起），含缓存";
+"usage.todayTokens.help" = "从本地零点起的 Token，含缓存：Claude/Codex/AGY/Claude Pro 来自本地用量库，DSH 来自本地账本";
 "usage.todayTokens.helpLine" = "%@：%@ Token，其中缓存读取 %@，%@ 次请求";
+"usage.todayTokens.helpLineSessions" = "%@：%@ Token，其中缓存读取 %@，%@ 个会话";
 "usage.todayTokens.readFailed" = "最近一次读取失败：%@";
 "usage.todayTokens.detailTitle" = "今日 Token 消耗统计";
 "usage.todayTokens.totalLabel" = "今日总消耗";
 "usage.todayTokens.totalLine" = "今日总消耗：%@";
-"usage.todayTokens.dataSource" = "数据源：CC Switch、KEEPER & Claude Pro 本地日志";
+"usage.todayTokens.dataSource" = "数据源：CC Switch、KEEPER、Claude Pro 本地日志与 DSH 桥接账本";
 "usage.todayTokens.claudePro" = "Claude Pro";
 "usage.todayTokens.agyPool" = "AGY 普通池";
 "usage.todayTokens.agyPro" = "AGY Pro 个人池";
@@ -51,6 +52,7 @@
 "settings.general.uninstallConfirmTitle" = "确认卸载 Hooks？";
 "settings.general.uninstallConfirmAction" = "卸载";
 "settings.general.uninstallConfirmMessage.claude" = "这将从 Claude Code 中移除 Open Island 的 hooks。你可以随时重新安装。";
+"settings.general.uninstallConfirmMessage.dsh" = "这会从 DeepSeek Harness profile 中移除 Open Island 桥接插件。之后需要重启 DeepSeek Harness。";
 "settings.general.uninstallConfirmMessage.codex" = "这将从 Codex 中移除 Open Island 的 hooks。你可以随时重新安装。";
 "settings.general.uninstallConfirmMessage.claudeUsage" = "这将移除 Claude 用量桥接。你可以随时重新安装。";
 "settings.general.cancel" = "取消";

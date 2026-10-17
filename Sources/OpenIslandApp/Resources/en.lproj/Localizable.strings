@@ -29,15 +29,16 @@
 "settings.general.suppressFrontmostNotifications" = "Suppress notifications for focused sessions";
 "settings.general.showCodexUsage" = "Show Codex usage";
 "settings.general.showTodayTokenUsage" = "Show today's tokens";
-"settings.general.showTodayTokenUsage.caption" = "Agent totals from CC Switch and KEEPER local request logs, cache included.";
+"settings.general.showTodayTokenUsage.caption" = "Agent totals from CC Switch, KEEPER and Claude Pro local logs, plus DeepSeek Harness from its local bridge. Cache included.";
 "usage.todayTokens.title" = "Today";
-"usage.todayTokens.help" = "Tokens logged since local midnight, cache included";
+"usage.todayTokens.help" = "Tokens since local midnight, cache included: Claude/Codex/AGY/Claude Pro from local usage stores, DSH from its local ledger";
 "usage.todayTokens.helpLine" = "%@: %@ tokens, %@ from cache reads, %@ requests";
+"usage.todayTokens.helpLineSessions" = "%@: %@ tokens, %@ from cache reads, %@ sessions";
 "usage.todayTokens.readFailed" = "Last refresh failed: %@";
 "usage.todayTokens.detailTitle" = "Today's Token Usage";
 "usage.todayTokens.totalLabel" = "Total Tokens Today";
 "usage.todayTokens.totalLine" = "Total Tokens Today: %@";
-"usage.todayTokens.dataSource" = "Sources: CC Switch, KEEPER & Claude Pro logs";
+"usage.todayTokens.dataSource" = "Sources: CC Switch, KEEPER, Claude Pro & DSH bridge";
 "usage.todayTokens.claudePro" = "Claude Pro";
 "usage.todayTokens.agyPool" = "AGY Pool";
 "usage.todayTokens.agyPro" = "AGY Pro";
@@ -51,6 +52,7 @@
 "settings.general.uninstallConfirmTitle" = "Uninstall Hooks?";
 "settings.general.uninstallConfirmAction" = "Uninstall";
 "settings.general.uninstallConfirmMessage.claude" = "This will remove Open Island hooks from Claude Code. You can reinstall them at any time.";
+"settings.general.uninstallConfirmMessage.dsh" = "This removes the Open Island bridge from your DeepSeek Harness profiles. Restart DeepSeek Harness afterwards.";
 "settings.general.uninstallConfirmMessage.codex" = "This will remove Open Island hooks from Codex. You can reinstall them at any time.";
 "settings.general.uninstallConfirmMessage.claudeUsage" = "This will remove the Claude usage bridge. You can reinstall it at any time.";
 "settings.general.cancel" = "Cancel";

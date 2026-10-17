@@ -418,6 +418,7 @@ struct SetupSettingsPane: View {
     @State private var confirmingUninstallClaude = false
     @State private var confirmingUninstallCodex = false
     @State private var confirmingUninstallOpenCode = false
+    @State private var confirmingUninstallDSH = false
     @State private var confirmingUninstallQoder = false
     @State private var confirmingUninstallQwenCode = false
     @State private var confirmingUninstallFactory = false
@@ -491,6 +492,26 @@ struct SetupSettingsPane: View {
                     Button(lang.t("settings.general.cancel"), role: .cancel) {}
                 } message: {
                     Text("This will remove the Open Island plugin from ~/.config/opencode/plugins/.")
+                }
+
+                if model.dshIntegrationStatus?.dshHomeExists == true {
+                    hookRow(
+                        name: "DeepSeek Harness",
+                        installed: model.dshIntegrationInstalled,
+                        busy: model.isDSHSetupBusy,
+                        requiresBinary: false,
+                        configLocationURL: model.dshIntegrationStatus?.profiles.first?.patchFileURL,
+                        installAction: { model.installDSHIntegration() },
+                        uninstallAction: { confirmingUninstallDSH = true }
+                    )
+                    .alert(lang.t("settings.general.uninstallConfirmTitle"), isPresented: $confirmingUninstallDSH) {
+                        Button(lang.t("settings.general.uninstallConfirmAction"), role: .destructive) {
+                            model.uninstallDSHIntegration()
+                        }
+                        Button(lang.t("settings.general.cancel"), role: .cancel) {}
+                    } message: {
+                        Text(lang.t("settings.general.uninstallConfirmMessage.dsh"))
+                    }
                 }
 
                 hookRow(

@@ -91,6 +91,7 @@ public enum BridgeCommand: Equatable, Codable, Sendable {
     case processGeminiHook(GeminiHookPayload)
     case processGrokHook(GrokHookPayload)
     case processPiHook(PiHookPayload)
+    case processDSHHook(DSHHookPayload)
 
     private enum CodingKeys: String, CodingKey {
         case type
@@ -106,6 +107,7 @@ public enum BridgeCommand: Equatable, Codable, Sendable {
         case geminiHook
         case grokHook
         case piHook
+        case dshHook
     }
 
     private enum CommandType: String, Codable {
@@ -120,6 +122,7 @@ public enum BridgeCommand: Equatable, Codable, Sendable {
         case processGeminiHook
         case processGrokHook
         case processPiHook
+        case processDSHHook
     }
 
     public init(from decoder: any Decoder) throws {
@@ -158,6 +161,8 @@ public enum BridgeCommand: Equatable, Codable, Sendable {
             self = .processGrokHook(try container.decode(GrokHookPayload.self, forKey: .grokHook))
         case .processPiHook:
             self = .processPiHook(try container.decode(PiHookPayload.self, forKey: .piHook))
+        case .processDSHHook:
+            self = .processDSHHook(try container.decode(DSHHookPayload.self, forKey: .dshHook))
         }
     }
 
@@ -201,6 +206,9 @@ public enum BridgeCommand: Equatable, Codable, Sendable {
         case let .processPiHook(payload):
             try container.encode(CommandType.processPiHook, forKey: .type)
             try container.encode(payload, forKey: .piHook)
+        case let .processDSHHook(payload):
+            try container.encode(CommandType.processDSHHook, forKey: .type)
+            try container.encode(payload, forKey: .dshHook)
         }
     }
 }

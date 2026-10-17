@@ -1022,7 +1022,9 @@ struct IslandPanelView: View {
     /// midnight, cache included, plus any other KEEPER upstream that logged usage today.
     private var todayTokenUsagePresentation: UsageProviderPresentation? {
         let monitor = model.todayTokenUsageMonitor
-        guard monitor.usage != nil || monitor.lastErrorMessage != nil else {
+        guard monitor.usage != nil
+                || monitor.dshTotals != nil
+                || monitor.lastErrorMessage != nil else {
             return nil
         }
 
@@ -1036,11 +1038,14 @@ struct IslandPanelView: View {
         candidateAgents.append((id: "codex", label: "Codex", shortLabel: "Cx", totals: monitor.usage?.codex))
         candidateAgents.append((id: "agy", label: lang.t("usage.todayTokens.agyPool"), shortLabel: "AGY", totals: monitor.usage?.agy))
         candidateAgents.append((id: "agy-pro", label: lang.t("usage.todayTokens.agyPro"), shortLabel: "Pro", totals: monitor.usage?.agyPro))
+        if let dsh = monitor.dshTotals {
+            candidateAgents.append((id: "deepSeekHarness", label: "DSH", shortLabel: "DS", totals: dsh))
+        }
         if let other = monitor.usage?.other, other.totalTokens > 0 {
             candidateAgents.append((id: "other", label: lang.t("usage.todayTokens.other"), shortLabel: "Oth", totals: other))
         }
 
-        let grandTotal = monitor.usage?.totalTokens ?? 0
+        let grandTotal = (monitor.usage?.totalTokens ?? 0) + (monitor.dshTotals?.totalTokens ?? 0)
         let totalFormatted = TokenCountFormatter.compact(grandTotal, languageCode: languageCode)
 
         var helpLines = [
@@ -1049,8 +1054,11 @@ struct IslandPanelView: View {
         ]
         for agent in candidateAgents {
             guard let totals = agent.totals else { continue }
+            let key = agent.id == "deepSeekHarness"
+                ? "usage.todayTokens.helpLineSessions"
+                : "usage.todayTokens.helpLine"
             helpLines.append(lang.t(
-                "usage.todayTokens.helpLine",
+                key,
                 agent.label,
                 totals.totalTokens.formatted(),
                 totals.cacheReadTokens.formatted(),
@@ -1376,6 +1384,16 @@ struct IslandPanelView: View {
                     languageCode: languageCode
                 )
 
+                if let dsh = monitor.dshTotals {
+                    tokenDetailAgentRow(
+                        label: "DSH",
+                        dotColor: Color(red: 77.0 / 255.0, green: 107.0 / 255.0, blue: 254.0 / 255.0),
+                        totals: dsh,
+                        accountHint: "",
+                        languageCode: languageCode
+                    )
+                }
+
                 tokenDetailAgentRow(
                     label: lang.t("usage.todayTokens.agyPool"),
                     dotColor: IslandDesignPalette.Status.runningAgy,
@@ -1433,9 +1451,12 @@ struct IslandPanelView: View {
 
                 Spacer()
 
-                Text(TokenCountFormatter.compact(usage?.totalTokens ?? 0, languageCode: languageCode))
-                    .font(.system(size: 12, weight: .bold, design: .monospaced))
-                    .foregroundStyle(.white)
+                Text(TokenCountFormatter.compact(
+                    (usage?.totalTokens ?? 0) + (monitor.dshTotals?.totalTokens ?? 0),
+                    languageCode: languageCode
+                ))
+                .font(.system(size: 12, weight: .bold, design: .monospaced))
+                .foregroundStyle(.white)
             }
 
             if let error = monitor.lastErrorMessage {

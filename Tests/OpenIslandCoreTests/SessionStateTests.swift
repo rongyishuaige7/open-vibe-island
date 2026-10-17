@@ -218,8 +218,8 @@ struct SessionStateTests {
         #expect(liveSession?.updatedAt == startedAt)
         #expect(liveSession?.lastHeartbeatAt == heartbeatAt)
 
-        #expect(state.expireStalePiHeartbeats(before: heartbeatAt).isEmpty)
-        #expect(state.expireStalePiHeartbeats(
+        #expect(state.expireStaleHeartbeatSessions(before: heartbeatAt).isEmpty)
+        #expect(state.expireStaleHeartbeatSessions(
             before: heartbeatAt.addingTimeInterval(1)
         ) == ["pi-heartbeat"])
         #expect(state.session(id: "pi-heartbeat")?.isVisibleInIsland == false)
@@ -320,7 +320,7 @@ struct SessionStateTests {
         // Within the reconnect window, stale updatedAt must not expire the session.
         // Production passes `now - 45s` as the deadline; at restoredAt + 45s that is
         // still equal to the reconnect anchor and therefore not expired.
-        #expect(state.expireStalePiHeartbeats(before: restoredAt).isEmpty)
+        #expect(state.expireStaleHeartbeatSessions(before: restoredAt).isEmpty)
         #expect(state.session(id: restored.id)?.isVisibleInIsland == true)
         #expect(state.session(id: restored.id)?.phase == .running)
         #expect(state.session(id: restored.id)?.summary == "Still working")
@@ -344,8 +344,8 @@ struct SessionStateTests {
         #expect(live?.summary == "Still working")
         #expect(live?.updatedAt == updatedAt)
 
-        #expect(state.expireStalePiHeartbeats(before: heartbeatAt).isEmpty)
-        #expect(state.expireStalePiHeartbeats(
+        #expect(state.expireStaleHeartbeatSessions(before: heartbeatAt).isEmpty)
+        #expect(state.expireStaleHeartbeatSessions(
             before: heartbeatAt.addingTimeInterval(1)
         ) == [restored.id])
     }
@@ -366,9 +366,9 @@ struct SessionStateTests {
         ).restorableSession(at: restoredAt)
 
         var state = SessionState(sessions: [restored])
-        #expect(state.expireStalePiHeartbeats(before: restoredAt).isEmpty)
+        #expect(state.expireStaleHeartbeatSessions(before: restoredAt).isEmpty)
 
-        #expect(state.expireStalePiHeartbeats(
+        #expect(state.expireStaleHeartbeatSessions(
             before: restoredAt.addingTimeInterval(1)
         ) == ["pi-stale-restore"])
 
@@ -1926,5 +1926,50 @@ private func sendOnGCDThread(
                 continuation.resume(throwing: error)
             }
         }
+    }
+}
+
+struct DSHLivenessTests {
+    @Test
+    func dshHeartbeatKeepsCompletedTurnVisible() {
+        let now = Date(timeIntervalSince1970: 1_000)
+        let session = AgentSession(
+            id: "dsh:session-1",
+            title: "DeepSeek Harness · repo",
+            tool: .deepSeekHarness,
+            phase: .completed,
+            summary: "Turn completed",
+            updatedAt: now
+        )
+        var state = SessionState(sessions: [session])
+
+        state.apply(.sessionHeartbeat(SessionHeartbeat(sessionID: "dsh:session-1", timestamp: now.addingTimeInterval(10))))
+
+        #expect(state.session(id: "dsh:session-1")?.isSessionEnded == false)
+        #expect(state.session(id: "dsh:session-1")?.lastHeartbeatAt == now.addingTimeInterval(10))
+        #expect(state.session(id: "dsh:session-1")?.isVisibleInIsland == true)
+
+        // Generic process polling must not end a DSH session.
+        _ = state.markProcessLiveness(aliveSessionIDs: [])
+        #expect(state.session(id: "dsh:session-1")?.isSessionEnded == false)
+    }
+
+    @Test
+    func dshSessionExpiresWithoutSnapshots() {
+        let now = Date(timeIntervalSince1970: 1_000)
+        let session = AgentSession(
+            id: "dsh:session-1",
+            title: "DeepSeek Harness · repo",
+            tool: .deepSeekHarness,
+            phase: .running,
+            summary: "Working",
+            updatedAt: now
+        )
+        var state = SessionState(sessions: [session])
+        state.apply(.sessionHeartbeat(SessionHeartbeat(sessionID: "dsh:session-1", timestamp: now)))
+
+        #expect(state.expireStaleHeartbeatSessions(before: now.addingTimeInterval(-44)).isEmpty)
+        #expect(state.expireStaleHeartbeatSessions(before: now.addingTimeInterval(1)) == ["dsh:session-1"])
+        #expect(state.session(id: "dsh:session-1")?.isSessionEnded == true)
     }
 }
