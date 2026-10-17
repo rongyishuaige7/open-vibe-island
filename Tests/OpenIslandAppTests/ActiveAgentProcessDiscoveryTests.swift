@@ -417,6 +417,60 @@ struct ActiveAgentProcessDiscoveryTests {
         #expect(!aliveIDs.contains("omp-b"))
     }
 
+
+    @Test
+    func discoverWrappedAgyUsesAncestorTmuxPaneTTY() {
+        let sessionUUID = "12345678-abcd-ef01-2345-6789abcdef01"
+        let discovery = ActiveAgentProcessDiscovery { executablePath, arguments in
+            if executablePath == "/bin/ps" {
+                return """
+                  501 500 ttys041 agy --gemini_dir=/tmp/cpa --conversation=\(sessionUUID)
+                  500 400 ttys016 python3 /Users/test/.local/bin/agy-suggest command agy
+                  400 300 ttys016 zsh -ic agy-danger
+                  300 200 ttys016 bash -c agy-danger
+                  200 1 ?? tmux -u new-session -d -s agentdeck
+                  999 998 ttys099 -zsh
+                  998 1 ?? /Applications/Ghostty.app/Contents/MacOS/ghostty
+                """
+            }
+
+            if executablePath == "/usr/bin/which", arguments == ["tmux"] {
+                return "/opt/homebrew/bin/tmux"
+            }
+
+            if executablePath.hasSuffix("/tmux") {
+                if arguments.first == "list-panes" {
+                    return "/dev/ttys016\tagentdeck:1.0"
+                }
+                if arguments.first == "list-clients" {
+                    return "/dev/ttys099"
+                }
+                return nil
+            }
+
+            guard executablePath == "/usr/sbin/lsof",
+                  let pid = arguments.dropFirst(2).first else {
+                return nil
+            }
+            guard pid == "501" else { return nil }
+
+            return """
+            fcwd
+            n/tmp/my-workspace
+            n/tmp/.gemini/cpa/presence/\(sessionUUID).lock
+            n/tmp/.gemini/cpa/brain/\(sessionUUID)/.system_generated/logs/transcript.jsonl
+            """
+        }
+
+        let snapshots = discovery.discover()
+        #expect(snapshots.count == 1)
+        #expect(snapshots.first?.tool == .geminiCLI)
+        #expect(snapshots.first?.sessionID == sessionUUID)
+        #expect(snapshots.first?.terminalApp == "Ghostty")
+        #expect(snapshots.first?.terminalTTY == "/dev/ttys016")
+        #expect(snapshots.first?.tmuxTarget == "agentdeck:1.0")
+    }
+
     @Test
     func discoverRecognizesAgyProcessWithSessionID() {
         let sessionUUID = "12345678-abcd-ef01-2345-6789abcdef01"

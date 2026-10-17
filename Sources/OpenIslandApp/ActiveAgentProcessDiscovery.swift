@@ -222,15 +222,20 @@ struct ActiveAgentProcessDiscovery {
                     transcriptPath: transcriptPath
                 )
 
-                if snapshot.terminalApp == nil, let agentTTY = process.terminalTTY {
-                    if let (tmuxTarget, hostTerminalApp, socketPath) = resolveTmuxInfo(
-                        agentTTY: agentTTY,
+                if snapshot.terminalApp == nil, process.terminalTTY != nil {
+                    // `agy-danger` / `agy-suggest` wrappers hand `agy` its own
+                    // PTY, so the agent's TTY is not the tmux pane TTY. Walk
+                    // ancestors as fallback candidates instead of giving up and
+                    // defaulting the jump target to Antigravity.app.
+                    if let resolution = resolveTmuxInfo(
+                        agentTTYs: tmuxCandidateTTYs(for: process, processesByPID: processesByPID),
                         processes: processesByPID.values.map { $0 },
                         processesByPID: processesByPID
                     ) {
-                        snapshot.terminalApp = hostTerminalApp
-                        snapshot.tmuxTarget = tmuxTarget
-                        snapshot.tmuxSocketPath = socketPath
+                        snapshot.terminalApp = resolution.hostTerminalApp
+                        snapshot.tmuxTarget = resolution.target
+                        snapshot.tmuxSocketPath = resolution.socketPath
+                        snapshot.terminalTTY = resolution.paneTTY
                     }
                 }
 
@@ -1034,7 +1039,6 @@ struct ActiveAgentProcessDiscovery {
             || firstToken == "agy"
             || firstToken.hasSuffix("/agy")
             || lowered.contains("/bin/gemini")
-            || lowered.contains("/.local/bin/agy")
             || lowered.contains("/google/gemini-cli")
             || lowered.contains("/@google/gemini-cli")
     }
@@ -1257,12 +1261,37 @@ struct ActiveAgentProcessDiscovery {
         return path.isEmpty ? nil : path
     }
 
+    private struct TmuxResolution {
+        let target: String
+        let paneTTY: String
+        let hostTerminalApp: String?
+        let socketPath: String?
+    }
+
     private func resolveTmuxInfo(
         agentTTY: String,
         processes: [RunningProcess],
         processesByPID: [String: RunningProcess]
     ) -> (target: String, hostTerminalApp: String?, socketPath: String?)? {
+        guard let resolution = resolveTmuxInfo(
+            agentTTYs: [agentTTY],
+            processes: processes,
+            processesByPID: processesByPID
+        ) else {
+            return nil
+        }
+        return (resolution.target, resolution.hostTerminalApp, resolution.socketPath)
+    }
+
+    private func resolveTmuxInfo(
+        agentTTYs: [String],
+        processes: [RunningProcess],
+        processesByPID: [String: RunningProcess]
+    ) -> TmuxResolution? {
         guard let tmuxPath = resolveTmuxPath() else {
+            return nil
+        }
+        guard !agentTTYs.isEmpty else {
             return nil
         }
 
@@ -1282,8 +1311,8 @@ struct ActiveAgentProcessDiscovery {
             }
         }
 
-        // Query tmux list-panes to find the pane matching our TTY
-        guard let tmuxTarget = queryTmuxTarget(agentTTY: agentTTY, tmuxPath: tmuxPath, socketPath: socketPath) else {
+        // Query tmux list-panes once and match any candidate TTY.
+        guard let match = queryTmuxTarget(agentTTYs: Set(agentTTYs), tmuxPath: tmuxPath, socketPath: socketPath) else {
             return nil
         }
 
@@ -1292,10 +1321,46 @@ struct ActiveAgentProcessDiscovery {
             return nil
         }
 
-        return (tmuxTarget, hostTerminalApp, socketPath)
+        return TmuxResolution(
+            target: match.target,
+            paneTTY: match.tty,
+            hostTerminalApp: hostTerminalApp,
+            socketPath: socketPath
+        )
     }
 
-    private func queryTmuxTarget(agentTTY: String, tmuxPath: String, socketPath: String?) -> String? {
+    /// TTYs to try when mapping a process to a tmux pane. Wrappers such as
+    /// `agy-suggest` allocate a child PTY for `agy`, so the agent's own TTY
+    /// may not belong to any pane; an ancestor's TTY usually does.
+    private func tmuxCandidateTTYs(
+        for process: RunningProcess,
+        processesByPID: [String: RunningProcess]
+    ) -> [String] {
+        var ttys: [String] = []
+        func append(_ tty: String?) {
+            guard let tty, !tty.isEmpty, !ttys.contains(tty) else { return }
+            ttys.append(tty)
+        }
+
+        append(process.terminalTTY)
+        var parentPID = process.parentPID
+        var visited: Set<String> = []
+        while !parentPID.isEmpty,
+              parentPID != "0",
+              parentPID != "1",
+              visited.insert(parentPID).inserted,
+              let parent = processesByPID[parentPID] {
+            append(parent.terminalTTY)
+            parentPID = parent.parentPID
+        }
+        return ttys
+    }
+
+    private func queryTmuxTarget(
+        agentTTYs: Set<String>,
+        tmuxPath: String,
+        socketPath: String?
+    ) -> (target: String, tty: String)? {
         var args: [String] = ["list-panes", "-a", "-F", "#{pane_tty}\t#{session_name}:#{window_index}.#{pane_index}"]
 
         if let socketPath = socketPath {
@@ -1312,11 +1377,11 @@ struct ActiveAgentProcessDiscovery {
                 continue
             }
 
-            let ptrTTY = parts[0].trimmingCharacters(in: .whitespacesAndNewlines)
+            let paneTTY = parts[0].trimmingCharacters(in: .whitespacesAndNewlines)
             let target = parts[1].trimmingCharacters(in: .whitespacesAndNewlines)
 
-            if ptrTTY == agentTTY {
-                return target
+            if agentTTYs.contains(paneTTY) {
+                return (target, paneTTY)
             }
         }
 
