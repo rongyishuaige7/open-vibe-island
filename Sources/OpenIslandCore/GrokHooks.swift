@@ -636,33 +636,16 @@ public extension GrokHookPayload {
     }
 
     private func commandOutput(executablePath: String, arguments: [String]) -> String? {
-        let process = Process()
-        process.executableURL = URL(fileURLWithPath: executablePath)
-        process.arguments = arguments
-
-        let outputPipe = Pipe()
-        process.standardOutput = outputPipe
-        process.standardError = Pipe()
-
-        do {
-            try process.run()
-            process.waitUntilExit()
-        } catch {
+        guard let result = SubprocessRunner.run(
+            executableURL: URL(fileURLWithPath: executablePath),
+            arguments: arguments,
+            timeout: 1.5
+        ), result.terminationStatus == 0 else {
             return nil
         }
 
-        guard process.terminationStatus == 0 else {
-            return nil
-        }
-
-        let data = outputPipe.fileHandleForReading.readDataToEndOfFile()
-        guard let output = String(data: data, encoding: .utf8)?
-            .trimmingCharacters(in: .whitespacesAndNewlines),
-              !output.isEmpty else {
-            return nil
-        }
-
-        return output
+        let output = result.stdout.trimmingCharacters(in: .whitespacesAndNewlines)
+        return output.isEmpty ? nil : output
     }
 }
 
