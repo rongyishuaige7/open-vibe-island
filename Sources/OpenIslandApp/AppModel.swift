@@ -1119,15 +1119,10 @@ final class AppModel {
                 }
             }
 
-            // These are already async or lightweight — safe to start immediately.
-            hooks.refreshCodexHookStatus()
-            hooks.refreshClaudeHookStatus()
-            hooks.refreshCCForkHookStatuses()
-            hooks.refreshOpenCodePluginStatus()
-            hooks.refreshPiExtensionStatuses()
+            // Cursor is not covered by refreshAllHookStatusAndWait below, so
+            // refresh it here. Everything else is read once, after startup
+            // discovery has applied, instead of being read twice.
             hooks.refreshCursorHookStatus()
-            hooks.refreshGrokHookStatus()
-            hooks.refreshClaudeUsageState()
             hooks.startClaudeUsageMonitoringIfNeeded()
             if showCodexUsage {
                 hooks.refreshCodexUsageState()
