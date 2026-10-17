@@ -107,6 +107,9 @@ struct IslandPanelView: View {
     @State private var isHovering = false
     @State private var showingQuitConfirmation = false
     @State private var showingTokenDetailPopover = false
+    /// AGY multi-account detail starts collapsed so the token card fits inside
+    /// the island; the AGY Pool row itself toggles this.
+    @State private var isAgyAccountBreakdownExpanded = false
     /// Set while the pointer that opened the token popover by hovering is
     /// still on the chip, so a click there keeps it open instead of closing it.
     @State private var tokenPopoverOpenedByHover = false
@@ -197,6 +200,7 @@ struct IslandPanelView: View {
         .onChange(of: model.notchStatus) { _, status in
             if status != .opened {
                 showingTokenDetailPopover = false
+                isAgyAccountBreakdownExpanded = false
             }
             syncOpenedSurfaceMount(with: status)
         }
@@ -364,6 +368,7 @@ struct IslandPanelView: View {
                     .onTapGesture {
                         withAnimation(.easeOut(duration: 0.15)) {
                             showingTokenDetailPopover = false
+                            isAgyAccountBreakdownExpanded = false
                         }
                     }
 
@@ -1213,6 +1218,9 @@ struct IslandPanelView: View {
                     tokenPopoverOpenedByHover = false
                 } else {
                     showingTokenDetailPopover.toggle()
+                    if !showingTokenDetailPopover {
+                        isAgyAccountBreakdownExpanded = false
+                    }
                 }
             }
         } label: {
@@ -1261,6 +1269,7 @@ struct IslandPanelView: View {
             }
             guard !showingTokenDetailPopover else { return }
             tokenPopoverOpenedByHover = true
+            isAgyAccountBreakdownExpanded = false
             withAnimation(.easeOut(duration: 0.16)) {
                 showingTokenDetailPopover = true
             }
@@ -1343,6 +1352,7 @@ struct IslandPanelView: View {
                 Button {
                     withAnimation(.easeOut(duration: 0.15)) {
                         showingTokenDetailPopover = false
+                        isAgyAccountBreakdownExpanded = false
                     }
                 } label: {
                     Image(systemName: "xmark.circle.fill")
@@ -1394,15 +1404,25 @@ struct IslandPanelView: View {
                     )
                 }
 
+                let hasAgyAccountBreakdown = (usage?.agyAccountBreakdown.count ?? 0) > 1
                 tokenDetailAgentRow(
                     label: lang.t("usage.todayTokens.agyPool"),
                     dotColor: IslandDesignPalette.Status.runningAgy,
                     totals: usage?.agy,
                     accountHint: usage?.agyAccountHint ?? "",
-                    languageCode: languageCode
+                    languageCode: languageCode,
+                    showsDisclosure: hasAgyAccountBreakdown,
+                    isDisclosureExpanded: isAgyAccountBreakdownExpanded,
+                    onDisclosureTap: hasAgyAccountBreakdown ? {
+                        withAnimation(.easeOut(duration: 0.15)) {
+                            isAgyAccountBreakdownExpanded.toggle()
+                        }
+                    } : nil
                 )
 
-                if let usage, usage.agyAccountBreakdown.count > 1 {
+                if isAgyAccountBreakdownExpanded,
+                   let usage,
+                   usage.agyAccountBreakdown.count > 1 {
                     ForEach(usage.agyAccountBreakdown) { sub in
                         HStack(alignment: .center, spacing: 6) {
                             Text("↳ \(sub.account)")
@@ -1418,6 +1438,7 @@ struct IslandPanelView: View {
                                 .foregroundStyle(.white.opacity(0.75))
                         }
                         .padding(.leading, 15)
+                        .transition(.opacity)
                     }
                 }
 
@@ -1488,19 +1509,23 @@ struct IslandPanelView: View {
         )
     }
 
+    @ViewBuilder
     private func tokenDetailAgentRow(
         label: String,
         dotColor: Color,
         totals: AgentTokenTotals?,
         accountHint: String,
         secondarySubtext: String? = nil,
-        languageCode: String
+        languageCode: String,
+        showsDisclosure: Bool = false,
+        isDisclosureExpanded: Bool = false,
+        onDisclosureTap: (() -> Void)? = nil
     ) -> some View {
         let total = totals?.totalTokens ?? 0
         let reqCount = totals?.requestCount ?? 0
         let cacheRead = totals?.cacheReadTokens ?? 0
 
-        return HStack(alignment: .center, spacing: 8) {
+        let row = HStack(alignment: .center, spacing: 8) {
             Circle()
                 .fill(dotColor)
                 .frame(width: 7.5, height: 7.5)
@@ -1511,6 +1536,12 @@ struct IslandPanelView: View {
                     Text(label)
                         .font(.system(size: 11.5, weight: .semibold))
                         .foregroundStyle(.white.opacity(0.88))
+
+                    if showsDisclosure {
+                        Image(systemName: isDisclosureExpanded ? "chevron.down" : "chevron.right")
+                            .font(.system(size: 8, weight: .semibold))
+                            .foregroundStyle(.white.opacity(0.35))
+                    }
 
                     if !accountHint.isEmpty {
                         Text("(\(accountHint))")
@@ -1542,6 +1573,15 @@ struct IslandPanelView: View {
             Text(TokenCountFormatter.compact(total, languageCode: languageCode))
                 .font(.system(size: 12, weight: .bold, design: .monospaced))
                 .foregroundStyle(.white.opacity(total > 0 ? 0.95 : 0.35))
+        }
+
+        if let onDisclosureTap, showsDisclosure {
+            Button(action: onDisclosureTap) {
+                row.contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+        } else {
+            row
         }
     }
 
