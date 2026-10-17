@@ -30,6 +30,27 @@ struct DSHHooksTests {
         #expect(buffer.isEmpty)
     }
 
+
+    @Test
+    func rawPluginJSONDecodesWithBridgeDateStrategy() throws {
+        let json = """
+        {"type":"command","command":{"type":"processDSHHook","dshHook":{"event":"snapshot","sessions":[{"sessionID":"session-ui-test","title":"DSH · Open Island","cwd":"/Users/rongyi/Developer/open-vibe-island","workspaceName":"open-vibe-island","summary":"Implemented the DeepSeek Harness bridge","phase":"running","createdAt":1792244300000,"updatedAt":1792244366004}],"todayTokens":{"totalTokens":123456,"cacheReadTokens":23456,"sessionCount":1},"timestamp":1792244366004}}}
+        """
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .millisecondsSince1970
+        let envelope = try decoder.decode(BridgeEnvelope.self, from: Data(json.utf8))
+
+        guard case let .command(.processDSHHook(payload)) = envelope else {
+            Issue.record("Expected processDSHHook, got \(envelope)")
+            return
+        }
+        #expect(payload.event == .snapshot)
+        #expect(payload.todayTokens?.totalTokens == 123_456)
+        #expect(payload.sessions?.first?.title == "DSH · Open Island")
+        #expect(payload.sessions?.first?.phase == .running)
+        #expect(payload.sessions?.first?.isSubagent == nil)
+    }
+
     @Test
     func dshSnapshotCreatesSessionEmitsTodayTotalsAndHeartbeat() async throws {
         let socketURL = BridgeSocketLocation.uniqueTestURL()
