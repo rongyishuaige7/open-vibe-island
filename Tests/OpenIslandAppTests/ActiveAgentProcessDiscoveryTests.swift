@@ -20,24 +20,23 @@ struct ActiveAgentProcessDiscoveryTests {
             }
 
             guard executablePath == "/usr/sbin/lsof",
-                  let pid = arguments.dropFirst(2).first else {
+                  let pidArg = arguments.dropFirst(2).first else {
                 return nil
             }
 
-            switch pid {
-            case "102":
+            switch pidArg {
+            case "102,202":
                 return """
+                p102
                 fcwd
                 n/tmp/open-island
-                """
-            case "202":
-                return """
+                p202
                 fcwd
                 n/tmp/open-island
                 n/Users/test/.codex/sessions/2026/04/03/rollout-2026-04-03T11-42-31-019d516f-71ee-7e40-bcff-502fedac0928.jsonl
                 """
             default:
-                Issue.record("unexpected lsof lookup for pid \(pid)")
+                Issue.record("unexpected lsof lookup for pids \(pidArg)")
                 return nil
             }
         }
@@ -225,16 +224,21 @@ struct ActiveAgentProcessDiscoveryTests {
             }
 
             guard executablePath == "/usr/sbin/lsof",
-                  let pid = arguments.dropFirst(2).first else {
+                  let pidArg = arguments.dropFirst(2).first else {
                 return nil
             }
 
-            guard pid == "302" || pid == "303" else {
-                Issue.record("unexpected lsof lookup for pid \(pid)")
+            guard pidArg == "302,303" else {
+                Issue.record("unexpected lsof lookup for pids \(pidArg)")
                 return nil
             }
 
             return """
+            p302
+            fcwd
+            n/tmp/simple-agent-lab
+            n/Users/test/.cursor/chats/cf595f65441221b71014fd6f7b9999b2/6f7b9f8a-2bd0-48b4-a497-9801dd191d03/store.db
+            p303
             fcwd
             n/tmp/simple-agent-lab
             n/Users/test/.cursor/chats/cf595f65441221b71014fd6f7b9999b2/6f7b9f8a-2bd0-48b4-a497-9801dd191d03/store.db

@@ -283,7 +283,7 @@ struct AgySessionReaderTests {
 
         let session = record.asAgentSession()
         #expect(session.id == "test-uuid-1234")
-        #expect(session.title == "Test Task")
+        #expect(session.title == "Test Task · myproject")
         #expect(session.tool == .geminiCLI)
         #expect(session.phase == .running)
         #expect(session.attachmentState == .attached)
