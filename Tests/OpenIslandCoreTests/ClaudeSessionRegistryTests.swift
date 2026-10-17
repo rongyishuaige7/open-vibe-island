@@ -76,3 +76,47 @@ struct ClaudeSessionRegistryTests {
         #expect(record.restorableSession.jumpTarget?.terminalSessionID == "ghostty-claude")
     }
 }
+
+struct ClaudeSessionMetadataCompatibilityTests {
+    @Test
+    func legacyMetadataWithoutNewArraysStillDecodes() throws {
+        let json = Data(#"""
+        {
+          "transcriptPath": "/tmp/claude.jsonl",
+          "lastAssistantMessage": "Still here",
+          "model": "sonnet"
+        }
+        """#.utf8)
+
+        let metadata = try JSONDecoder().decode(ClaudeSessionMetadata.self, from: json)
+
+        #expect(metadata.transcriptPath == "/tmp/claude.jsonl")
+        #expect(metadata.activeSubagents.isEmpty)
+        #expect(metadata.activeTasks.isEmpty)
+    }
+
+    @Test
+    func registryRecordWithLegacyMetadataIsNotDropped() throws {
+        let json = Data(#"""
+        [{
+          "sessionID": "claude-legacy",
+          "title": "Claude · repo",
+          "origin": "live",
+          "attachmentState": "stale",
+          "summary": "Older record",
+          "phase": "completed",
+          "updatedAt": 0,
+          "claudeMetadata": {
+            "transcriptPath": "/tmp/legacy.jsonl"
+          }
+        }]
+        """#.utf8)
+
+        let records = try JSONDecoder().decode([ClaudeTrackedSessionRecord].self, from: json)
+        let record = try #require(records.first)
+
+        #expect(record.sessionID == "claude-legacy")
+        #expect(record.claudeMetadata?.transcriptPath == "/tmp/legacy.jsonl")
+        #expect(record.claudeMetadata?.activeTasks.isEmpty == true)
+    }
+}

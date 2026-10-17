@@ -96,8 +96,8 @@ public struct ClaudeTrackedSessionRecord: Equatable, Codable, Sendable {
         phase = try container.decode(SessionPhase.self, forKey: .phase)
         updatedAt = try container.decode(Date.self, forKey: .updatedAt)
         firstSeenAt = try container.decodeIfPresent(Date.self, forKey: .firstSeenAt)
-        jumpTarget = try container.decodeIfPresent(JumpTarget.self, forKey: .jumpTarget)
-        claudeMetadata = try container.decodeIfPresent(ClaudeSessionMetadata.self, forKey: .claudeMetadata)
+        jumpTarget = (try? container.decodeIfPresent(JumpTarget.self, forKey: .jumpTarget)) ?? nil
+        claudeMetadata = (try? container.decodeIfPresent(ClaudeSessionMetadata.self, forKey: .claudeMetadata)) ?? nil
     }
 
     public func encode(to encoder: any Encoder) throws {
