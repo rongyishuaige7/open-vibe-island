@@ -290,9 +290,19 @@ function emit(ctx, event, session) {
 function emitSnapshot(ctx, sessions) {
   ensureDay();
   for (const session of sessions) recordUsage(ctx, session);
+
+  // DSH keeps conversations loaded after their turn ends. Reporting all of
+  // them makes idle history look live forever, so only an active turn is
+  // published; a completed turn was already sent as one activity event and
+  // expires on the island after the heartbeat grace period.
+  const running = sessions.filter((session) => {
+    const state = sessionState.get(sessionID(session));
+    return state?.phase === "running";
+  });
+
   enqueue({
     event: "snapshot",
-    sessions: sessions.map((session) => snapshotOf(ctx, session)),
+    sessions: running.map((session) => snapshotOf(ctx, session)),
     todayTokens: todayTotals(),
     timestamp: Date.now(),
   });
@@ -459,10 +469,14 @@ export function apply(ctx) {
 
   ctx.on("session/created", (session) => {
     if (isSubagent(session)) return;
-    const id = sessionID(session);
-    sessionState.set(id, { phase: "running", summary: "Started" });
+    // Restored conversations also pass through session/created. Hydrate from
+    // their event history so an idle conversation is not marked running just
+    // because the host recreated the Session object.
+    hydrateSessionState(ctx, session);
     recordUsage(ctx, session);
-    emit(ctx, "sessionStart", session);
+    if (sessionState.get(sessionID(session))?.phase === "running") {
+      emit(ctx, "sessionStart", session);
+    }
   });
 
   ctx.on("session/event", (session, event) => {
