@@ -75,6 +75,7 @@ public struct SessionState: Equatable, Sendable {
                 cursorMetadata: payload.cursorMetadata?.isEmpty == true ? nil : payload.cursorMetadata,
                 piMetadata: payload.piMetadata?.isEmpty == true ? nil : payload.piMetadata
             )
+            session.conversationTitle = payload.conversationTitle
             session.isRemote = payload.isRemote
             session.isHookManaged = payload.origin == .live
             // Codex.app sessions use app-level liveness (NSRunningApplication)

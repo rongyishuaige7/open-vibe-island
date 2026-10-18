@@ -3,6 +3,8 @@ import Foundation
 public struct SessionStarted: Equatable, Codable, Sendable {
     public var sessionID: String
     public var title: String
+    /// Agent-recorded conversation title, when the transport can provide one.
+    public var conversationTitle: String?
     public var tool: AgentTool
     public var origin: SessionOrigin?
     public var initialPhase: SessionPhase
@@ -20,6 +22,7 @@ public struct SessionStarted: Equatable, Codable, Sendable {
     public init(
         sessionID: String,
         title: String,
+        conversationTitle: String? = nil,
         tool: AgentTool,
         origin: SessionOrigin? = nil,
         initialPhase: SessionPhase = .running,
@@ -36,6 +39,7 @@ public struct SessionStarted: Equatable, Codable, Sendable {
     ) {
         self.sessionID = sessionID
         self.title = title
+        self.conversationTitle = conversationTitle
         self.tool = tool
         self.origin = origin
         self.initialPhase = initialPhase

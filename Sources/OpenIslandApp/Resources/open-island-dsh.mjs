@@ -179,12 +179,19 @@ function titleFor(ctx, session) {
   const id = sessionID(session);
   const known = titles.get(id);
   if (known) return known;
-  const cwd = session?.header?.cwd;
-  if (cwd) return basename(cwd);
+
   const projections = (typeof ctx?.get === "function" ? ctx.get("sessionProjections") : undefined)
     ?? ctx?.sessionProjections;
+  const projectedTitle = projections?.stateOf?.(session, "title");
+  const projected = typeof projectedTitle === "string" ? projectedTitle : projectedTitle?.title;
+  if (typeof projected === "string" && projected.trim()) return projected.trim();
+
   const meta = projections?.stateOf?.(session, "sessionListMetadata");
-  if (meta?.title) return meta.title;
+  if (typeof meta?.title === "string" && meta.title.trim()) return meta.title.trim();
+
+  // Do not use the cwd basename as the conversation title: the island already
+  // renders the project separately as the workspace, and a project title would
+  // read as "project · project".
   return undefined;
 }
 

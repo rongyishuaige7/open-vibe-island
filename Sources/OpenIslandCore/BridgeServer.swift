@@ -1291,18 +1291,26 @@ public final class BridgeServer: @unchecked Sendable {
     private func applyDSHSnapshot(_ snapshot: DSHSessionSnapshot, timestamp: Date) {
         let sessionID = dshSessionID(snapshot.sessionID)
         let title = dshTitle(for: snapshot)
+        let trimmedConversationTitle = snapshot.title?
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        let conversationTitle = (trimmedConversationTitle?.isEmpty == false)
+            ? trimmedConversationTitle
+            : nil
         let summary = snapshot.summary?.trimmingCharacters(in: .whitespacesAndNewlines)
         let resolvedSummary = (summary?.isEmpty == false ? summary : nil)
             ?? (snapshot.phase == .completed ? "DeepSeek Harness finished the turn." : "DeepSeek Harness is working.")
         let jumpTarget = dshJumpTarget(for: snapshot, title: title)
 
         let existing = localState.session(id: sessionID)
-        if existing == nil || existing?.title != title {
+        if existing == nil
+            || existing?.title != title
+            || existing?.conversationTitle != conversationTitle {
             emit(
                 .sessionStarted(
                     SessionStarted(
                         sessionID: sessionID,
                         title: title,
+                        conversationTitle: conversationTitle,
                         tool: .deepSeekHarness,
                         origin: .live,
                         initialPhase: snapshot.phase,

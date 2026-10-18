@@ -105,6 +105,7 @@ struct DSHHooksTests {
         #expect(started.sessionID == "dsh:session-1")
         #expect(started.tool == .deepSeekHarness)
         #expect(started.title == "Fix login")
+        #expect(started.conversationTitle == "Fix login")
         #expect(started.initialPhase == .running)
         #expect(started.jumpTarget?.terminalApp == "DeepSeek Harness")
         #expect(started.jumpTarget?.workingDirectory == "/tmp/project")

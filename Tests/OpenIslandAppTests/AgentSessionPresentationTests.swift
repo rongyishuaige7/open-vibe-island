@@ -98,6 +98,29 @@ struct AgentSessionPresentationTests {
         #expect(session.spotlightShowsDetailLines(at: referenceDate))
     }
 
+
+    @Test
+    func dshHeadlineShowsConversationTitleBeforeWorkspace() {
+        var session = AgentSession(
+            id: "dsh:session-1",
+            title: "DeepSeek Harness · repo",
+            tool: .deepSeekHarness,
+            phase: .running,
+            summary: "Working",
+            updatedAt: .now,
+            jumpTarget: JumpTarget(
+                terminalApp: "DeepSeek Harness",
+                workspaceName: "repo",
+                paneTitle: "Fix login",
+                workingDirectory: "/tmp/repo"
+            )
+        )
+        session.conversationTitle = "Fix login"
+
+        #expect(session.spotlightHeadlinePromptText == "Fix login")
+        #expect(session.spotlightHeadlineText == "Fix login · repo")
+    }
+
     @Test
     func completionReplyRecipientCoversEveryAgentTool() {
         let expectedNames: [(AgentTool, String)] = [

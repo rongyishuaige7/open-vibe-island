@@ -1930,6 +1930,29 @@ private func sendOnGCDThread(
 }
 
 struct DSHLivenessTests {
+
+    @Test
+    func dshConversationTitleDrivesTheSessionHeadline() {
+        let now = Date(timeIntervalSince1970: 1_000)
+        var state = SessionState()
+        state.apply(.sessionStarted(SessionStarted(
+            sessionID: "dsh:session-1",
+            title: "DeepSeek Harness · repo",
+            conversationTitle: "Fix login",
+            tool: .deepSeekHarness,
+            origin: .live,
+            summary: "Working",
+            timestamp: now,
+            jumpTarget: JumpTarget(
+                terminalApp: "DeepSeek Harness",
+                workspaceName: "repo",
+                paneTitle: "Fix login",
+                workingDirectory: "/tmp/repo"
+            )
+        )))
+
+        #expect(state.session(id: "dsh:session-1")?.conversationTitle == "Fix login")
+    }
     @Test
     func dshHeartbeatKeepsCompletedTurnVisible() {
         let now = Date(timeIntervalSince1970: 1_000)
