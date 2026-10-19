@@ -22,7 +22,7 @@ const SNAPSHOT_INTERVAL_MS = 10_000;
 const MAX_QUEUE = 100;
 // Bumped when the ledger semantics change so a stale file cannot keep an
 // inflated day total after the plugin is updated.
-const LEDGER_VERSION = 2;
+const LEDGER_VERSION = 3;
 
 let ledger = loadLedger();
 const sessionState = new Map();
@@ -35,6 +35,12 @@ function localDayKey(date = new Date()) {
   const month = String(date.getMonth() + 1).padStart(2, "0");
   const day = String(date.getDate()).padStart(2, "0");
   return `${year}-${month}-${day}`;
+}
+
+function startOfLocalDay(date = new Date()) {
+  const start = new Date(date);
+  start.setHours(0, 0, 0, 0);
+  return start.getTime();
 }
 
 function emptyLedger() {
@@ -137,12 +143,73 @@ function usageFromContext(ctx, session) {
   }
 }
 
+function todayUsageFromEvents(session) {
+  const start = startOfLocalDay();
+  let total = 0;
+  let cache = 0;
+
+  const addEvent = (event) => {
+    if (event?.type !== "assistant/message") return;
+    const usage = event.data?.usage;
+    if (!usage) return;
+    const input = number(usage.inputTokens);
+    const output = number(usage.outputTokens);
+    const cacheRead = number(usage.cacheReadTokens);
+    const cacheWrite = number(usage.cacheWriteTokens);
+    const reported = number(usage.totalTokens);
+    total += reported || (input + output + cacheRead + cacheWrite);
+    cache += cacheRead;
+  };
+
+  try {
+    const seq = Number(session?.seq);
+    if (Number.isSafeInteger(seq) && seq > 0 && typeof session.eventAt === "function") {
+      // Walk backwards from the newest event; stop as soon as we cross local
+      // midnight. This is the only reliable day boundary for resumed sessions.
+      for (let index = seq - 1; index >= 0; index -= 1) {
+        const event = session.eventAt(index);
+        if (!event) continue;
+        const time = Number(event.time);
+        if (Number.isFinite(time) && time < start) break;
+        addEvent(event);
+      }
+    } else if (typeof session.snapshotEvents === "function") {
+      for (const event of session.snapshotEvents()) {
+        const time = Number(event?.time);
+        if (Number.isFinite(time) && time < start) continue;
+        addEvent(event);
+      }
+    }
+  } catch {}
+
+  return { total, cache };
+}
+
 function isSubagent(session) {
   return session?.header?.origin === "subagent";
 }
 
 function sessionID(session) {
   return session?.header?.id;
+}
+
+function seedTodayUsage(ctx, session) {
+  const id = sessionID(session);
+  if (!id) return;
+  const usage = usageFromContext(ctx, session);
+  if (!usage) return;
+  const today = todayUsageFromEvents(session);
+  // Do not erase a persisted total when the event log is unavailable; only
+  // replace it when we actually found today's assistant messages.
+  if (today.total <= 0) return;
+
+  ledger.sessions[id] = {
+    total: today.total,
+    cache: today.cache,
+    lastSeen: usage.total,
+    lastCache: usage.cache,
+  };
+  saveLedger();
 }
 
 function recordUsage(ctx, session) {
@@ -495,6 +562,7 @@ export function apply(ctx) {
     for (const session of ctx.sessions.list()) {
       if (isSubagent(session)) continue;
       hydrateSessionState(ctx, session);
+      seedTodayUsage(ctx, session);
       recordUsage(ctx, session);
     }
   } catch {}
