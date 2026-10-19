@@ -20,6 +20,9 @@ const DSH_HOME = process.env.DSH_HOME || join(process.env.HOME || homedir(), ".d
 const LEDGER_PATH = join(DSH_HOME, "open-island-today-tokens.json");
 const SNAPSHOT_INTERVAL_MS = 10_000;
 const MAX_QUEUE = 100;
+// Bumped when the ledger semantics change so a stale file cannot keep an
+// inflated day total after the plugin is updated.
+const LEDGER_VERSION = 2;
 
 let ledger = loadLedger();
 const sessionState = new Map();
@@ -34,24 +37,47 @@ function localDayKey(date = new Date()) {
   return `${year}-${month}-${day}`;
 }
 
-function startOfLocalDay(date = new Date()) {
-  const start = new Date(date);
-  start.setHours(0, 0, 0, 0);
-  return start.getTime();
+function emptyLedger() {
+  return { version: LEDGER_VERSION, day: localDayKey(), sessions: {} };
 }
 
-function emptyLedger() {
-  return { day: localDayKey(), sessions: {} };
+function previousLocalDayKey() {
+  const date = new Date();
+  date.setDate(date.getDate() - 1);
+  return localDayKey(date);
 }
 
 function loadLedger() {
   try {
     if (!existsSync(LEDGER_PATH)) return emptyLedger();
     const parsed = JSON.parse(readFileSync(LEDGER_PATH, "utf8"));
-    if (!parsed || parsed.day !== localDayKey() || typeof parsed.sessions !== "object" || parsed.sessions === null) {
+    if (!parsed || typeof parsed.sessions !== "object" || parsed.sessions === null) {
       return emptyLedger();
     }
-    return parsed;
+    if (parsed.version !== LEDGER_VERSION) {
+      return emptyLedger();
+    }
+    if (parsed.day === localDayKey()) {
+      return parsed;
+    }
+    // If the plugin restarts just after midnight, keep yesterday's cumulative
+    // usage as the baseline so only post-midnight deltas are counted. Older
+    // ledgers are discarded: we cannot split their growth across days.
+    if (parsed.day === previousLocalDayKey()) {
+      const carried = { version: LEDGER_VERSION, day: localDayKey(), sessions: {} };
+      for (const [id, entry] of Object.entries(parsed.sessions)) {
+        if (entry && Number.isFinite(entry.total)) {
+          carried.sessions[id] = {
+            total: 0,
+            cache: 0,
+            lastSeen: Number.isFinite(entry.lastSeen) ? entry.lastSeen : entry.total,
+            lastCache: Number.isFinite(entry.lastCache) ? entry.lastCache : (entry.cache || 0),
+          };
+        }
+      }
+      return carried;
+    }
+    return emptyLedger();
   } catch {
     return emptyLedger();
   }
@@ -72,12 +98,17 @@ function ensureDay() {
   if (ledger.day === localDayKey()) return;
   const previous = ledger;
   ledger = emptyLedger();
-  // Carry today's already-counted totals only when the clock moved backwards
-  // or the session started before midnight; new sessions are seeded from
-  // their current cumulative usage when first seen.
+  // Keep each session's cumulative counter as the new-day baseline so only
+  // tokens observed after midnight are counted. New sessions get their own
+  // baseline on first observation.
   for (const [id, entry] of Object.entries(previous.sessions || {})) {
     if (entry && Number.isFinite(entry.total)) {
-      ledger.sessions[id] = { total: 0, cache: 0, lastSeen: entry.total, lastCache: entry.cache || 0 };
+      ledger.sessions[id] = {
+        total: 0,
+        cache: 0,
+        lastSeen: Number.isFinite(entry.lastSeen) ? entry.lastSeen : entry.total,
+        lastCache: Number.isFinite(entry.lastCache) ? entry.lastCache : (entry.cache || 0),
+      };
     }
   }
   saveLedger();
@@ -123,11 +154,12 @@ function recordUsage(ctx, session) {
 
   let entry = ledger.sessions[id];
   if (!entry) {
-    const createdAt = Number(session?.header?.createdAt);
-    const createdToday = Number.isFinite(createdAt) && createdAt >= startOfLocalDay();
+    // Baseline, never seed from the cumulative counter: DSH may resume an old
+    // conversation (and its runtime createdAt is not a reliable day boundary).
+    // Only deltas observed from this point count toward today.
     entry = {
-      total: createdToday ? usage.total : 0,
-      cache: createdToday ? usage.cache : 0,
+      total: 0,
+      cache: 0,
       lastSeen: usage.total,
       lastCache: usage.cache,
     };
