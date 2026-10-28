@@ -179,4 +179,63 @@ struct ClaudeProUsageReaderTests {
         #expect(replaced.outputTokens == 5)
         #expect(replaced.totals.requestCount == 1)
     }
+
+    @Test
+    func deduplicatesStreamingAndToolSnapshotLinesByMessageId() throws {
+        let tempDir = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        let sessionsDir = tempDir.appendingPathComponent("sessions")
+        let projSubdir = tempDir.appendingPathComponent("projects").appendingPathComponent("my-project")
+        try FileManager.default.createDirectory(at: sessionsDir, withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: projSubdir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: tempDir) }
+
+        let calendar = Calendar.current
+        let now = Date()
+        let todayTS = calendar.startOfDay(for: now).timeIntervalSince1970 + 60
+        let sessionID = "dedup-test-1234-1234-123456789abc"
+        try """
+        {"session_id": "\(sessionID)", "samples": [{"t": \(todayTS), "cost": 1.0}]}
+        """.write(to: sessionsDir.appendingPathComponent("\(sessionID).json"), atomically: true, encoding: .utf8)
+
+        let iso = ISO8601DateFormatter().string(from: Date(timeIntervalSince1970: todayTS))
+        func msgLine(msgId: String, out: Int, cacheRead: Int) -> String {
+            #"{"timestamp":"\#(iso)","type":"assistant","message":{"id":"\#(msgId)","usage":{"input_tokens":10,"output_tokens":\#(out),"cache_read_input_tokens":\#(cacheRead)}}}\#n"#
+        }
+
+        let transcriptURL = projSubdir.appendingPathComponent("\(sessionID).jsonl")
+        // Write the same message ID 3 times (simulating parallel tool usage / streaming snapshots) + msg_2 once
+        let content = msgLine(msgId: "msg_1", out: 100, cacheRead: 500)
+            + msgLine(msgId: "msg_1", out: 100, cacheRead: 500)
+            + msgLine(msgId: "msg_1", out: 100, cacheRead: 500)
+            + msgLine(msgId: "msg_2", out: 200, cacheRead: 1000)
+        try content.write(to: transcriptURL, atomically: true, encoding: .utf8)
+
+        let snapshot = try ClaudeProUsageReader.loadToday(
+            sessionsDirectoryURL: sessionsDir,
+            projectsDirectoryURL: tempDir.appendingPathComponent("projects"),
+            now: now,
+            calendar: calendar
+        )
+
+        // Only 2 distinct requests should be counted, not 4
+        #expect(snapshot.totals.requestCount == 2)
+        #expect(snapshot.outputTokens == 300) // 100 + 200
+        #expect(snapshot.totals.cacheReadTokens == 1500) // 500 + 1000
+        #expect(snapshot.totals.totalTokens == 20 + 300 + 1500)
+
+        // Appending another snapshot of msg_2 should not increase tokens
+        let handle = try FileHandle(forWritingTo: transcriptURL)
+        defer { try? handle.close() }
+        try handle.seekToEnd()
+        try handle.write(contentsOf: Data(msgLine(msgId: "msg_2", out: 200, cacheRead: 1000).utf8))
+
+        let secondSnapshot = try ClaudeProUsageReader.loadToday(
+            sessionsDirectoryURL: sessionsDir,
+            projectsDirectoryURL: tempDir.appendingPathComponent("projects"),
+            now: now,
+            calendar: calendar
+        )
+        #expect(secondSnapshot.totals.requestCount == 2)
+        #expect(secondSnapshot.outputTokens == 300)
+    }
 }

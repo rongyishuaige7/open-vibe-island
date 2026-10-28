@@ -223,6 +223,7 @@ public enum ClaudeProUsageReader {
         var offset: Int
         var dayStart: TimeInterval
         var tally: TranscriptTally
+        var seenMessageIDs: Set<String>
     }
 
     private static let transcriptProgress = OSAllocatedUnfairLock(initialState: [String: TranscriptProgress]())
@@ -244,7 +245,7 @@ public enum ClaudeProUsageReader {
             return TranscriptTally()
         }
 
-        let fresh = TranscriptProgress(fileNumber: fileNumber, offset: 0, dayStart: startTS, tally: TranscriptTally())
+        let fresh = TranscriptProgress(fileNumber: fileNumber, offset: 0, dayStart: startTS, tally: TranscriptTally(), seenMessageIDs: [])
         var progress = transcriptProgress.withLock { $0[path] } ?? fresh
         if progress.fileNumber != fileNumber || progress.dayStart != startTS || progress.offset > size {
             progress = fresh
@@ -260,6 +261,7 @@ public enum ClaudeProUsageReader {
                     endTS: endTS,
                     isoFormatter: isoFormatter,
                     fallbackFormatter: fallbackFormatter,
+                    seenMessageIDs: &progress.seenMessageIDs,
                     into: &progress.tally
                 )
             }
@@ -270,6 +272,8 @@ public enum ClaudeProUsageReader {
         return progress.tally
     }
 
+    private static let usageMarker: [UInt8] = Array("\"usage\"".utf8)
+
     /// Counts the lines in `data` and returns how many bytes it consumed. A
     /// last line without a newline is consumed only if it parses; otherwise
     /// the writer is still appending it and the next read picks it up.
@@ -279,9 +283,10 @@ public enum ClaudeProUsageReader {
         endTS: TimeInterval,
         isoFormatter: ISO8601DateFormatter,
         fallbackFormatter: ISO8601DateFormatter,
+        seenMessageIDs: inout Set<String>,
         into tally: inout TranscriptTally
     ) -> Int {
-        let marker = Array("\"usage\"".utf8)
+        let marker = usageMarker
         return data.withUnsafeBytes { (buffer: UnsafeRawBufferPointer) -> Int in
             guard let base = buffer.baseAddress else { return 0 }
             var consumed = 0
@@ -296,13 +301,13 @@ public enum ClaudeProUsageReader {
                     guard let object = try? JSONSerialization.jsonObject(with: Data(line)) else { break }
                     if hasUsage {
                         count(object, startTS: startTS, endTS: endTS, isoFormatter: isoFormatter,
-                              fallbackFormatter: fallbackFormatter, into: &tally)
+                              fallbackFormatter: fallbackFormatter, seenMessageIDs: &seenMessageIDs, into: &tally)
                     }
                     consumed = buffer.count
                 } else {
                     if hasUsage, let object = try? JSONSerialization.jsonObject(with: Data(line)) {
                         count(object, startTS: startTS, endTS: endTS, isoFormatter: isoFormatter,
-                              fallbackFormatter: fallbackFormatter, into: &tally)
+                              fallbackFormatter: fallbackFormatter, seenMessageIDs: &seenMessageIDs, into: &tally)
                     }
                     consumed += lineLength + 1
                 }
@@ -317,6 +322,7 @@ public enum ClaudeProUsageReader {
         endTS: TimeInterval,
         isoFormatter: ISO8601DateFormatter,
         fallbackFormatter: ISO8601DateFormatter,
+        seenMessageIDs: inout Set<String>,
         into tally: inout TranscriptTally
     ) {
         guard let obj = object as? [String: Any],
@@ -325,15 +331,27 @@ public enum ClaudeProUsageReader {
             return
         }
 
+        let msgID = (message["id"] as? String)
+            ?? (obj["requestId"] as? String)
+            ?? (obj["messageId"] as? String)
+
         // Check timestamp if present
         if let tsString = obj["timestamp"] as? String {
             let date = isoFormatter.date(from: tsString) ?? fallbackFormatter.date(from: tsString)
             if let date {
                 let ts = date.timeIntervalSince1970
                 if ts < startTS || ts >= endTS {
+                    if let msgID, !msgID.isEmpty {
+                        seenMessageIDs.insert(msgID)
+                    }
                     return
                 }
             }
+        }
+
+        if let msgID, !msgID.isEmpty {
+            guard !seenMessageIDs.contains(msgID) else { return }
+            seenMessageIDs.insert(msgID)
         }
 
         tally.requests += 1
