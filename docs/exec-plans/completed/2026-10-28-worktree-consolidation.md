@@ -73,3 +73,30 @@ are outside the cleanup scope.
   against the integrated working tree and remain present.
 - Original dirty trees are reachable through local `archive/20261028-*-wip`
   refs in addition to their saved patches and original file copies.
+
+## Completion evidence — 2026-10-28
+
+- Baseline commit `e63d7dc` and integration merge `0e93720` were pushed to
+  `origin/chore/consolidate-current-runtime`.
+- The retained checkout was promoted to an independent primary repository.
+  Its Git common directory is now its own `.git` directory, with one registered
+  worktree. Every pre-promotion ref was preserved; `git fsck --full --no-dangling`
+  and verification of the final recovery bundle passed.
+- The complete CI harness was run again at the final retained path after
+  promotion. Localization lint, documentation checks, all 623 Swift tests in
+  78 suites, and the Swift build passed. Evidence is in
+  `.git/maintenance-archives/20261028_095030/logs/final-retained-ci.log`.
+- Before removing the old primary checkout, its tracked tree was confirmed
+  clean, all refs were compared, and all 294 archived files and symlinks were
+  verified against the retained archive. Its only ignored files outside Git
+  metadata were disposable `.build` files and the preserved `Package.resolved`.
+- All 15 other original checkouts and the temporary integration checkout were
+  removed. Only `/Users/rongyi/Developer/open-vibe-island-dsh-local` remains.
+  Measured directory usage fell from approximately 12.99 GiB to 0.92 GiB,
+  including retained recovery material and one build cache.
+- The running installed development app was not restarted or replaced. PID
+  `89392` retained build UUID `C96F1AC2-E4D0-3423-97D3-EFAE9D9BAB10`.
+  The merged source changes require a later rebuild and launch to become active.
+- See [the local workspace guide](../../local-workspace.md) for the version
+  comparison, retained path, and recovery references. No remaining cleanup stage
+  is open; a later app update is outside this consolidation task.
