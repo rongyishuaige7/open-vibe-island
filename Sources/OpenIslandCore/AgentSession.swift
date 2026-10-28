@@ -698,6 +698,14 @@ private extension AgentSession {
         return (characters, originalIndices)
     }
 
+    /// Finds the longest suffix that also appears earlier as a complete block.
+    ///
+    /// The previous implementation compared every candidate length with every
+    /// offset, which is O(n³) and could freeze the UI on long Gemini replies.
+    /// This version uses double rolling hashes to binary-search the length
+    /// (the "has a repeated suffix of length L" predicate is monotonic) and
+    /// verifies the single matching slice, so it is O(n log n) with no false
+    /// positives.
     static func longestRepeatedGeminiTailStart(
         in characters: [Character],
         minimumLength: Int
@@ -707,23 +715,81 @@ private extension AgentSession {
             return nil
         }
 
-        for length in stride(from: count / 2, through: minimumLength, by: -1) {
-            let tailStart = count - length
-            let tail = Array(characters[tailStart...])
+        let maximumLength = count / 2
+        guard maximumLength >= minimumLength else {
+            return nil
+        }
 
-            if tailStart < length {
-                continue
+        var values = [UInt64]()
+        values.reserveCapacity(count)
+        for character in characters {
+            var value: UInt64 = 0
+            for scalar in character.unicodeScalars {
+                value = value &* 1_099_511_628_211 &+ UInt64(scalar.value)
+            }
+            values.append(value)
+        }
+
+        let base1: UInt64 = 911_382_323
+        let base2: UInt64 = 972_663_749
+
+        var prefix1 = [UInt64](repeating: 0, count: count + 1)
+        var prefix2 = [UInt64](repeating: 0, count: count + 1)
+        var powers1 = [UInt64](repeating: 1, count: count + 1)
+        var powers2 = [UInt64](repeating: 1, count: count + 1)
+
+        for index in 0..<count {
+            prefix1[index + 1] = prefix1[index] &* base1 &+ values[index]
+            prefix2[index + 1] = prefix2[index] &* base2 &+ values[index]
+            powers1[index + 1] = powers1[index] &* base1
+            powers2[index + 1] = powers2[index] &* base2
+        }
+
+        func hash(start: Int, length: Int, prefix: [UInt64], powers: [UInt64]) -> UInt64 {
+            prefix[start + length] &- (prefix[start] &* powers[length])
+        }
+
+        func hasRepeatedTail(length: Int) -> Bool {
+            let tailStart = count - length
+            let lastCandidateStart = tailStart - length
+            guard lastCandidateStart >= 0 else {
+                return false
             }
 
-            for candidateStart in 0...(tailStart - length) {
-                let candidateEnd = candidateStart + length
-                if Array(characters[candidateStart..<candidateEnd]) == tail {
-                    return tailStart
+            let tailHash1 = hash(start: tailStart, length: length, prefix: prefix1, powers: powers1)
+            let tailHash2 = hash(start: tailStart, length: length, prefix: prefix2, powers: powers2)
+
+            for candidateStart in 0...lastCandidateStart {
+                guard hash(start: candidateStart, length: length, prefix: prefix1, powers: powers1) == tailHash1,
+                      hash(start: candidateStart, length: length, prefix: prefix2, powers: powers2) == tailHash2 else {
+                    continue
                 }
+
+                // Verify the slice so hash collisions cannot trim real content.
+                if characters[candidateStart..<(candidateStart + length)]
+                    .elementsEqual(characters[tailStart..<count]) {
+                    return true
+                }
+            }
+
+            return false
+        }
+
+        var low = minimumLength
+        var high = maximumLength
+        var longest = 0
+
+        while low <= high {
+            let mid = low + (high - low) / 2
+            if hasRepeatedTail(length: mid) {
+                longest = mid
+                low = mid + 1
+            } else {
+                high = mid - 1
             }
         }
 
-        return nil
+        return longest >= minimumLength ? count - longest : nil
     }
 
     static func adjustedGeminiDuplicateBoundary(in text: String, from index: String.Index) -> String.Index {

@@ -923,9 +923,15 @@ struct SessionStateTests {
         try await observer.send(.resolvePermission(sessionID: "codex-permission-allow", resolution: .allowOnce()))
 
         let activityEvent = try await nextEvent(from: &iterator)
+        let resolvedEvent = try await nextEvent(from: &iterator)
         let response = try await responseTask
 
         #expect(activityEvent.activityUpdate?.summary == "Permission approved. Codex continued the tool.")
+        guard case let .actionableStateResolved(resolved) = resolvedEvent else {
+            Issue.record("Expected actionableStateResolved so Watch clients clear the card")
+            return
+        }
+        #expect(resolved.sessionID == "codex-permission-allow")
         #expect(response == .codexHookDirective(.permissionRequest(.allow)))
     }
 

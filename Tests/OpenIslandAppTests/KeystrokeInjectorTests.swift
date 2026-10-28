@@ -14,7 +14,7 @@ struct KeystrokeInjectorTests {
         }
 
         let injector = DefaultKeystrokeInjector()
-        injector.sendCmdShiftRightBracket()  // no XCTAssert — if this crashes the test fails
+        injector.sendCmdShiftRightBracket()
     }
 
     @Test

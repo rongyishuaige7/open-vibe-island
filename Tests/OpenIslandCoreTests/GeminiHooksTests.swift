@@ -331,3 +331,39 @@ private func nextMatchingGeminiEvent(
     Issue.record("Expected matching event within \(maxEvents) events")
     throw CancellationError()
 }
+
+struct GeminiCompletionPerformanceTests {
+    @Test
+    func largeNonRepeatedBodyIsDedupedQuickly() {
+        // 24k deterministic pseudorandom characters: no repeated suffix, so
+        // the old O(n³) scan had to exhaust every length and offset.
+        var state: UInt64 = 0x9E37_79B9_7F4A_7C15
+        var bytes: [UInt8] = []
+        bytes.reserveCapacity(24_000)
+        for _ in 0..<24_000 {
+            state = state &* 6_364_136_223_846_793_005 &+ 1_442_695_040_888_963_407
+            bytes.append(UInt8((state >> 33) % 26) + 97)
+        }
+        let body = String(decoding: bytes, as: UTF8.self)
+
+        let session = AgentSession(
+            id: "gemini-large-body",
+            title: "Gemini CLI · repo",
+            tool: .geminiCLI,
+            phase: .completed,
+            summary: "summary",
+            updatedAt: Date(timeIntervalSince1970: 2_000),
+            geminiMetadata: GeminiSessionMetadata(
+                lastAssistantMessage: "preview",
+                lastAssistantMessageBody: body
+            )
+        )
+
+        let start = Date()
+        let completion = session.completionAssistantMessageText
+        let elapsed = Date().timeIntervalSince(start)
+
+        #expect(completion == body)
+        #expect(elapsed < 2.0, "Dedup took \(elapsed)s for a 24k-character body")
+    }
+}

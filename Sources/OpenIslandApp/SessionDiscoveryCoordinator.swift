@@ -162,9 +162,12 @@ final class SessionDiscoveryCoordinator {
             try? piSessionRegistry.save(payload.piRecords)
         }
 
-        // Restore persisted Codex sessions.
+        // Restore persisted Codex sessions. Merge instead of replacing the
+        // whole state: the bridge observer starts concurrently with discovery,
+        // so a hook event may already have produced a live session here.
         if !payload.codexRecords.isEmpty {
-            state = SessionState(sessions: payload.codexRecords.map(\.restorableSession))
+            let restoredSessions = payload.codexRecords.map(\.restorableSession)
+            state = SessionState(sessions: mergeDiscoveredSessions(restoredSessions))
             onStatusMessage?("Restored \(payload.codexRecords.count) recent Codex session(s) from local cache.")
         }
 

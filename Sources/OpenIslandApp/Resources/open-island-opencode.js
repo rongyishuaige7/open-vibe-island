@@ -3,10 +3,15 @@
 // Install: copy to ~/.config/opencode/plugins/open-island.js
 import { connect } from "net";
 import { appendFileSync } from "fs";
+import { execSync } from "node:child_process";
 import { homedir } from "os";
 
+// Opt-in only: the log contains prompt/tool fragments, so never write it by
+// default. Set OPEN_ISLAND_DEBUG=1 when diagnosing a specific integration.
+const DEBUG = process.env.OPEN_ISLAND_DEBUG === "1";
 const DEBUG_LOG = "/tmp/open-island-opencode-debug.log";
 function debugLog(msg) {
+  if (!DEBUG) return;
   try { appendFileSync(DEBUG_LOG, `[${new Date().toISOString()}] ${msg}\n`); } catch {}
 }
 
@@ -39,26 +44,40 @@ function sendAndWaitResponse(json, timeoutMs = 300000) {
       const sock = connect({ path: SOCKET_PATH }, () => {
         sock.write(encodeEnvelope(json));
       });
+
       let buf = "";
+      let settled = false;
+      const finish = (value) => {
+        if (settled) return;
+        settled = true;
+        try { sock.destroy(); } catch {}
+        resolve(value);
+      };
+
       sock.on("data", (chunk) => {
         buf += chunk.toString();
-        // BridgeServer sends hello first, then response after processing
-        const lines = buf.split("\n").filter(Boolean);
-        if (lines.length >= 2) {
-          sock.destroy();
-          try { resolve(JSON.parse(lines[1])); } catch { resolve(null); }
+
+        // BridgeServer sends a hello envelope first and may interleave
+        // broadcasts from other sessions before our response. Only a
+        // `type: "response"` line is the answer to this command.
+        let newlineIndex;
+        while ((newlineIndex = buf.indexOf("\n")) >= 0) {
+          const line = buf.slice(0, newlineIndex).trim();
+          buf = buf.slice(newlineIndex + 1);
+          if (!line) continue;
+
+          let message;
+          try { message = JSON.parse(line); } catch { continue; }
+          if (message?.type === "response") {
+            finish(message);
+            return;
+          }
         }
       });
-      sock.on("end", () => {
-        const lines = buf.split("\n").filter(Boolean);
-        if (lines.length >= 2) {
-          try { resolve(JSON.parse(lines[1])); } catch { resolve(null); }
-        } else {
-          resolve(null);
-        }
-      });
-      sock.on("error", () => resolve(null));
-      sock.setTimeout(timeoutMs, () => { sock.destroy(); resolve(null); });
+
+      sock.on("end", () => finish(null));
+      sock.on("error", () => finish(null));
+      sock.setTimeout(timeoutMs, () => finish(null));
     } catch { resolve(null); }
   });
 }
@@ -66,7 +85,6 @@ function sendAndWaitResponse(json, timeoutMs = 300000) {
 // Terminal environment detection
 let detectedTty = null;
 try {
-  const { execSync } = require("child_process");
   let walkPid = process.pid;
   for (let i = 0; i < 8; i++) {
     const info = execSync(`ps -o tty=,ppid= -p ${walkPid}`, { timeout: 1000 }).toString().trim();
@@ -193,18 +211,20 @@ export default async ({ client, serverUrl }) => {
 
     // session.deleted
     if (t === "session.deleted" && p.info) {
+      const cwd = sessionCwd.get(p.info.id) || p.info.directory || "";
       sessions.delete(p.info.id);
       sessionCwd.delete(p.info.id);
-      return makePayload("SessionEnd", p.info.id, sessionCwd.get(p.info.id));
+      return makePayload("SessionEnd", p.info.id, cwd);
     }
 
     // session.updated (archived)
     if (t === "session.updated" && p.info) {
       if (p.info.directory) sessionCwd.set(p.info.id, p.info.directory);
       if (p.info.time?.archived) {
+        const cwd = sessionCwd.get(p.info.id) || p.info.directory || "";
         sessions.delete(p.info.id);
         sessionCwd.delete(p.info.id);
-        return makePayload("SessionEnd", p.info.id, sessionCwd.get(p.info.id));
+        return makePayload("SessionEnd", p.info.id, cwd);
       }
       return null;
     }
@@ -379,3 +399,6 @@ export default async ({ client, serverUrl }) => {
     },
   };
 };
+
+// Exported for integration tests; OpenCode only consumes the default export.
+export { sendAndWaitResponse };

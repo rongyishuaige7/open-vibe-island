@@ -145,7 +145,7 @@ final class ProcessMonitoringCoordinator {
                     let claudeDiscovery = self.claudeTranscriptDiscovery
                     let knownCodexIDs = Set(self.state.sessions.filter { $0.tool == .codex }.map(\.id))
                     let currentSessions = self.state.sessions
-                    let (snapshots, ghosttyAvail, terminalAvail, jumpTargets, liveCodexRecords, preloadedClaude, preloadedAgy, preloadedCodex) = await Task.detached(priority: .utility) {
+                    let (snapshots, ghosttyAvail, terminalAvail, itermAvail, jumpTargets, liveCodexRecords, preloadedClaude, preloadedAgy, preloadedCodex) = await Task.detached(priority: .utility) {
                         let s = discovery.discover()
                         let c = Self.untrackedLiveCodexRecords(
                             activeProcesses: s,
@@ -154,15 +154,18 @@ final class ProcessMonitoringCoordinator {
                         )
                         let g: TerminalSessionAttachmentProbe.SnapshotAvailability<TerminalSessionAttachmentProbe.GhosttyTerminalSnapshot>
                         let t: TerminalSessionAttachmentProbe.SnapshotAvailability<TerminalSessionAttachmentProbe.TerminalTabSnapshot>
+                        let i: TerminalSessionAttachmentProbe.SnapshotAvailability<TerminalSessionAttachmentProbe.ITermSessionSnapshot>
                         let j: [String: JumpTarget]
 
                         if shouldResolveTerminals {
                             g = probe.ghosttySnapshotAvailability()
                             t = probe.terminalSnapshotAvailability()
+                            i = probe.itermSnapshotAvailability()
                             j = resolver.resolveJumpTargets(for: liveSessions, activeProcesses: s)
                         } else {
                             g = .available([], appIsRunning: false)
                             t = .available([], appIsRunning: false)
+                            i = .available([], appIsRunning: false)
                             j = [:]
                         }
 
@@ -180,13 +183,14 @@ final class ProcessMonitoringCoordinator {
                             reader: liveCodexReader
                         )
 
-                        return (s, g, t, j, c, claude, agy, codex)
+                        return (s, g, t, i, j, c, claude, agy, codex)
                     }.value
                     let isCodexAppRunning = Self.isCodexDesktopAppRunning()
                     self.reconcileSessionAttachments(
                         activeProcesses: snapshots,
                         ghosttyAvailability: ghosttyAvail,
                         terminalAvailability: terminalAvail,
+                        itermAvailability: itermAvail,
                         preResolvedJumpTargets: jumpTargets,
                         observedCodexAppRunning: isCodexAppRunning,
                         liveCodexRecords: liveCodexRecords,
@@ -239,6 +243,7 @@ final class ProcessMonitoringCoordinator {
         activeProcesses: [ActiveProcessSnapshot]? = nil,
         ghosttyAvailability: TerminalSessionAttachmentProbe.SnapshotAvailability<TerminalSessionAttachmentProbe.GhosttyTerminalSnapshot>? = nil,
         terminalAvailability: TerminalSessionAttachmentProbe.SnapshotAvailability<TerminalSessionAttachmentProbe.TerminalTabSnapshot>? = nil,
+        itermAvailability: TerminalSessionAttachmentProbe.SnapshotAvailability<TerminalSessionAttachmentProbe.ITermSessionSnapshot>? = nil,
         preResolvedJumpTargets: [String: JumpTarget]? = nil,
         observedCodexAppRunning: Bool? = nil,
         liveCodexRecords: [CodexTrackedSessionRecord] = [],
@@ -306,6 +311,7 @@ final class ProcessMonitoringCoordinator {
                 for: sessions,
                 ghosttyAvailability: ghosttyAvailability,
                 terminalAvailability: terminalAvailability,
+                itermAvailability: itermAvailability ?? .available([], appIsRunning: false),
                 activeProcesses: activeProcesses,
                 allowRecentAttachmentGrace: !isResolvingInitialLiveSessions
             )

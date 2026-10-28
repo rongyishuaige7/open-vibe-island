@@ -97,10 +97,8 @@ public struct WatchStatusResponse: Codable, Sendable {
 /// Callback invoked when the Watch/iPhone submits a resolution via `/resolution`.
 public typealias WatchResolutionHandler = @Sendable (WatchResolutionRequest) -> Void
 
-/// Callback to query current active session count for `/status`.
+/// A thread-safe provider retained for existing app integrations.
 public typealias WatchActiveSessionCountProvider = @Sendable () -> Int
-
-// MARK: - WatchHTTPEndpoint
 
 /// A lightweight HTTP server embedded in the macOS app that enables iPhone/Watch communication.
 ///
@@ -115,12 +113,16 @@ public final class WatchHTTPEndpoint: @unchecked Sendable {
     private static let serviceType = "_openisland._tcp"
     private static let pairingCodeLength = 4
     private static let pairingCodeExpiry: TimeInterval = 120 // 2 minutes
+    private static let maximumPairingAttempts = 5
+    private static let pairingLockoutDuration: TimeInterval = 60
 
     private let queue = DispatchQueue(label: "app.openisland.watch.http", qos: .userInitiated)
 
     // Pairing state
     private var currentPairingCode: String = ""
     private var pairingCodeGeneratedAt: Date = .distantPast
+    private var failedPairingAttempts = 0
+    private var pairingLockoutUntil: Date?
     private var validTokens: Set<String> = []
 
     // SSE connections
@@ -129,9 +131,18 @@ public final class WatchHTTPEndpoint: @unchecked Sendable {
     // Listener
     private var listener: NWListener?
 
+    /// Snapshot updated by the app on the main actor and read by the HTTP
+    /// queue. A lock avoids `MainActor.assumeIsolated` from a background
+    /// queue, which traps when `/status` is requested.
+    private let activeSessionCount = OSAllocatedUnfairLock(initialState: 0)
+
     // Callbacks
     public var onResolution: WatchResolutionHandler?
+    /// Existing integrations can supply a Sendable snapshot reader. Otherwise
+    /// `/status` uses the value pushed through `updateActiveSessionCount`.
     public var activeSessionCountProvider: WatchActiveSessionCountProvider?
+    /// Fires whenever the number of live SSE clients changes.
+    public var onConnectionCountChanged: (@Sendable (Int) -> Void)?
 
     public init() {
         regeneratePairingCode()
@@ -150,10 +161,13 @@ public final class WatchHTTPEndpoint: @unchecked Sendable {
             guard let self else { return }
             self.listener?.cancel()
             self.listener = nil
-            for (id, connection) in self.sseConnections {
+
+            let connections = Array(self.sseConnections.values)
+            self.sseConnections.removeAll()
+            for connection in connections {
                 connection.cancel()
-                self.sseConnections.removeValue(forKey: id)
             }
+            self.notifyConnectionCountChanged()
         }
     }
 
@@ -176,11 +190,35 @@ public final class WatchHTTPEndpoint: @unchecked Sendable {
         }
     }
 
-    /// Revoke all paired tokens, forcing re-pairing.
+    /// Revoke all paired tokens and close existing SSE streams, forcing
+    /// every device to pair again.
     public func revokeAllTokens() {
         queue.sync {
             validTokens.removeAll()
+
+            let connections = Array(sseConnections.values)
+            sseConnections.removeAll()
+            for connection in connections {
+                connection.cancel()
+            }
+            notifyConnectionCountChanged()
         }
+    }
+
+    /// Updates the session count reported by `GET /status`.
+    ///
+    /// Safe to call from any thread; the HTTP queue reads the same lock.
+    public func updateActiveSessionCount(_ count: Int) {
+        activeSessionCount.withLock { $0 = max(0, count) }
+    }
+
+    /// Number of currently connected, authenticated SSE clients.
+    public func connectedClientCount() -> Int {
+        queue.sync { sseConnections.count }
+    }
+
+    func activeSessionCountForTests() -> Int {
+        activeSessionCount.withLock { $0 }
     }
 
     // MARK: - SSE Push
@@ -309,17 +347,46 @@ public final class WatchHTTPEndpoint: @unchecked Sendable {
             return
         }
 
+        let now = Date()
+        if let pairingLockoutUntil, now < pairingLockoutUntil {
+            let remaining = Int(ceil(pairingLockoutUntil.timeIntervalSince(now)))
+            sendHTTPResponse(
+                connection: connection,
+                status: "429 Too Many Requests",
+                body: #"{"error":"too many pairing attempts","retryAfterSeconds":\#(remaining)}"#
+            )
+            return
+        }
+        if pairingLockoutUntil != nil {
+            pairingLockoutUntil = nil
+            failedPairingAttempts = 0
+        }
+
         // Check if pairing code expired
-        if Date().timeIntervalSince(pairingCodeGeneratedAt) > Self.pairingCodeExpiry {
+        if now.timeIntervalSince(pairingCodeGeneratedAt) > Self.pairingCodeExpiry {
             regeneratePairingCodeUnsafe()
             sendHTTPResponse(connection: connection, status: "410 Gone", body: #"{"error":"pairing code expired"}"#)
             return
         }
 
         guard request.code == currentPairingCode else {
-            sendHTTPResponse(connection: connection, status: "403 Forbidden", body: #"{"error":"invalid pairing code"}"#)
+            failedPairingAttempts += 1
+            if failedPairingAttempts >= Self.maximumPairingAttempts {
+                failedPairingAttempts = 0
+                pairingLockoutUntil = now.addingTimeInterval(Self.pairingLockoutDuration)
+                sendHTTPResponse(
+                    connection: connection,
+                    status: "429 Too Many Requests",
+                    body: #"{"error":"too many pairing attempts","retryAfterSeconds":\#(Int(Self.pairingLockoutDuration))}"#
+                )
+            } else {
+                sendHTTPResponse(connection: connection, status: "403 Forbidden", body: #"{"error":"invalid pairing code"}"#)
+            }
             return
         }
+
+        failedPairingAttempts = 0
+        pairingLockoutUntil = nil
 
         // Generate token
         let token = UUID().uuidString
@@ -356,13 +423,16 @@ public final class WatchHTTPEndpoint: @unchecked Sendable {
 
         let connectionID = UUID()
         sseConnections[connectionID] = connection
+        notifyConnectionCountChanged()
 
         let queue = self.queue
         connection.send(content: headerData, completion: .contentProcessed { [weak self] error in
             if let error {
                 Self.logger.warning("Failed to send SSE headers: \(error.localizedDescription)")
                 queue.async { [weak self] in
-                    self?.sseConnections.removeValue(forKey: connectionID)
+                    guard let self else { return }
+                    self.sseConnections.removeValue(forKey: connectionID)
+                    self.notifyConnectionCountChanged()
                 }
                 connection.cancel()
                 return
@@ -377,7 +447,9 @@ public final class WatchHTTPEndpoint: @unchecked Sendable {
         connection.viabilityUpdateHandler = { [weak self] isViable in
             if !isViable {
                 queue.async { [weak self] in
-                    self?.sseConnections.removeValue(forKey: connectionID)
+                    guard let self else { return }
+                    self.sseConnections.removeValue(forKey: connectionID)
+                    self.notifyConnectionCountChanged()
                 }
             }
         }
@@ -391,7 +463,9 @@ public final class WatchHTTPEndpoint: @unchecked Sendable {
         connection.receive(minimumIncompleteLength: 1, maximumLength: 1) { [weak self] _, _, isComplete, error in
             if isComplete || error != nil {
                 queue.async { [weak self] in
-                    self?.sseConnections.removeValue(forKey: connectionID)
+                    guard let self else { return }
+                    self.sseConnections.removeValue(forKey: connectionID)
+                    self.notifyConnectionCountChanged()
                 }
                 connection.cancel()
             } else {
@@ -424,7 +498,7 @@ public final class WatchHTTPEndpoint: @unchecked Sendable {
 
         let response = WatchStatusResponse(
             connected: !sseConnections.isEmpty,
-            activeSessionCount: activeSessionCountProvider?() ?? 0
+            activeSessionCount: activeSessionCountProvider?() ?? activeSessionCount.withLock { $0 }
         )
 
         if let responseData = try? JSONEncoder().encode(response),
@@ -491,6 +565,10 @@ public final class WatchHTTPEndpoint: @unchecked Sendable {
     // MARK: - Private: Pairing Code Generation
 
     /// Must be called on `queue`.
+    private func notifyConnectionCountChanged() {
+        onConnectionCountChanged?(sseConnections.count)
+    }
+
     private func regeneratePairingCodeUnsafe() {
         let digits = (0..<Self.pairingCodeLength).map { _ in String(Int.random(in: 0...9)) }
         currentPairingCode = digits.joined()

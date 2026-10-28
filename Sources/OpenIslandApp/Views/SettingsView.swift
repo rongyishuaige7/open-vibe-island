@@ -1126,6 +1126,19 @@ struct WatchSettingsPane: View {
         .onAppear {
             pairingCode = model.watchPairingCode
         }
+        .task(id: model.watchNotificationEnabled) {
+            guard model.watchNotificationEnabled else {
+                pairingCode = "----"
+                return
+            }
+
+            // The endpoint regenerates an expired code on access, so keep the
+            // displayed value in sync instead of showing a dead code forever.
+            while !Task.isCancelled {
+                pairingCode = model.watchPairingCode
+                try? await Task.sleep(for: .seconds(1))
+            }
+        }
     }
 }
 

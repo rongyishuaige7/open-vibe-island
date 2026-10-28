@@ -56,6 +56,7 @@ final class AppModel {
             bridgeServer.updateStateSnapshot(state, appliedObserverEvents: appliedBridgeEventCount)
             let sessionCount = state.sessions.count
             sessionCountSnapshot.withLock { $0 = sessionCount }
+            watchRelay?.endpoint.updateActiveSessionCount(sessionCount)
         }
     }
     /// `state.sessions.count`, readable off the main actor. The Watch HTTP
@@ -521,16 +522,20 @@ final class AppModel {
     }
 
     /// Number of currently connected iPhone SSE clients.
-    var watchConnectedDevices: Int {
-        // Placeholder — endpoint doesn't expose count yet
-        0
-    }
+    private(set) var watchConnectedDevices = 0
 
     private func startWatchRelay() {
         guard watchRelay == nil else { return }
         let relay = WatchNotificationRelay()
         setupWatchRelayCallbacks(relay)
+        relay.endpoint.onConnectionCountChanged = { [weak self] count in
+            Task { @MainActor [weak self] in
+                self?.watchConnectedDevices = count
+            }
+        }
+        watchConnectedDevices = 0
         relay.start()
+        relay.endpoint.updateActiveSessionCount(state.sessions.count)
         self.watchRelay = relay
     }
 
@@ -563,6 +568,7 @@ final class AppModel {
     private func stopWatchRelay() {
         watchRelay?.stop()
         watchRelay = nil
+        watchConnectedDevices = 0
     }
 
     var ignoresPointerExitDuringHarness = false
@@ -1226,15 +1232,10 @@ final class AppModel {
                 }
             }
 
-            // These are already async or lightweight — safe to start immediately.
-            hooks.refreshCodexHookStatus()
-            hooks.refreshClaudeHookStatus()
-            hooks.refreshCCForkHookStatuses()
-            hooks.refreshOpenCodePluginStatus()
-            hooks.refreshPiExtensionStatuses()
+            // Cursor is not covered by refreshAllHookStatusAndWait below, so
+            // refresh it here. Everything else is read once, after startup
+            // discovery has applied, instead of being read twice.
             hooks.refreshCursorHookStatus()
-            hooks.refreshGrokHookStatus()
-            hooks.refreshClaudeUsageState()
             hooks.startClaudeUsageMonitoringIfNeeded()
             if showCodexUsage {
                 hooks.refreshCodexUsageState()
@@ -1268,7 +1269,11 @@ final class AppModel {
             connectBridgeObserver()
         } catch {
             isBridgeReady = false
-            lastActionMessage = "Failed to start local bridge: \(error.localizedDescription)"
+            if case let .bridgeAlreadyRunning(path)? = error as? BridgeTransportError {
+                lastActionMessage = "Another Open Island instance is already running on \(path). Quit it before launching this build."
+            } else {
+                lastActionMessage = "Failed to start local bridge: \(error.localizedDescription)"
+            }
             harnessRuntimeMonitor?.recordMilestone("bridgeStartFailed", message: lastActionMessage)
         }
     }
@@ -1530,17 +1535,24 @@ final class AppModel {
         }
 
         let resolution = permissionResolution(for: approved)
-        dismissNotificationSurfaceIfPresent(for: sessionID)
-        state.resolvePermission(sessionID: session.id, resolution: resolution)
-        synchronizeSelection()
-        refreshOverlayPlacementIfVisible()
+        let message = approved
+            ? "Approving permission for \(session.title)."
+            : "Denying permission for \(session.title)."
 
-        send(
-            .resolvePermission(sessionID: session.id, resolution: resolution),
-            userMessage: approved
-                ? "Approving permission for \(session.title)."
-                : "Denying permission for \(session.title)."
-        )
+        Task { @MainActor [weak self] in
+            guard let self else { return }
+            guard await self.sendBridgeCommand(
+                .resolvePermission(sessionID: sessionID, resolution: resolution),
+                userMessage: message
+            ) else {
+                return
+            }
+
+            self.dismissNotificationSurfaceIfPresent(for: sessionID)
+            self.state.resolvePermission(sessionID: sessionID, resolution: resolution)
+            self.synchronizeSelection()
+            self.refreshOverlayPlacementIfVisible()
+        }
     }
 
     func approvePermission(for sessionID: String, action: ApprovalAction) {
@@ -1563,15 +1575,20 @@ final class AppModel {
             message = "Always allowing for \(session.title)."
         }
 
-        dismissNotificationSurfaceIfPresent(for: sessionID)
-        state.resolvePermission(sessionID: session.id, resolution: resolution)
-        synchronizeSelection()
-        refreshOverlayPlacementIfVisible()
+        Task { @MainActor [weak self] in
+            guard let self else { return }
+            guard await self.sendBridgeCommand(
+                .resolvePermission(sessionID: sessionID, resolution: resolution),
+                userMessage: message
+            ) else {
+                return
+            }
 
-        send(
-            .resolvePermission(sessionID: session.id, resolution: resolution),
-            userMessage: message
-        )
+            self.dismissNotificationSurfaceIfPresent(for: sessionID)
+            self.state.resolvePermission(sessionID: sessionID, resolution: resolution)
+            self.synchronizeSelection()
+            self.refreshOverlayPlacementIfVisible()
+        }
     }
 
     func dismissSession(_ sessionID: String) {
@@ -1585,15 +1602,20 @@ final class AppModel {
             return
         }
 
-        dismissNotificationSurfaceIfPresent(for: sessionID)
-        state.answerQuestion(sessionID: session.id, response: answer)
-        synchronizeSelection()
-        refreshOverlayPlacementIfVisible()
+        Task { @MainActor [weak self] in
+            guard let self else { return }
+            guard await self.sendBridgeCommand(
+                .answerQuestion(sessionID: sessionID, response: answer),
+                userMessage: "Sending answer for \(session.title)."
+            ) else {
+                return
+            }
 
-        send(
-            .answerQuestion(sessionID: session.id, response: answer),
-            userMessage: "Sending answer for \(session.title)."
-        )
+            self.dismissNotificationSurfaceIfPresent(for: sessionID)
+            self.state.answerQuestion(sessionID: sessionID, response: answer)
+            self.synchronizeSelection()
+            self.refreshOverlayPlacementIfVisible()
+        }
     }
 
     func replyToSession(_ session: AgentSession, text: String) {
@@ -1628,6 +1650,21 @@ final class AppModel {
             } catch {
                 self.lastActionMessage = "Failed to send bridge command: \(error.localizedDescription)"
             }
+        }
+    }
+
+    /// Sends a decision to the bridge and reports whether it was delivered.
+    /// Permission and question state is only cleared after a successful send,
+    /// so a disconnected bridge cannot hide a still-pending request.
+    private func sendBridgeCommand(_ command: BridgeCommand, userMessage: String) async -> Bool {
+        lastActionMessage = userMessage
+
+        do {
+            try await bridgeClient.send(command)
+            return true
+        } catch {
+            lastActionMessage = "Failed to send bridge command: \(error.localizedDescription). The request is still pending."
+            return false
         }
     }
 

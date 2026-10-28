@@ -58,3 +58,18 @@ baselines. Resolve conflicts deliberately and retain the original refs. Git
 metadata promotion must preserve HEAD, index, reflogs, repository configuration,
 and all backups. Installed apps and user data outside these project checkouts
 are outside the cleanup scope.
+
+## Integration evidence
+
+- The preserved Claude Pro baseline passed all five reader tests; documentation
+  and localization checks passed before baseline commit `e63d7dc` was pushed.
+- The stability branch merged with three conflicted files. Resolution retained
+  bridge observer event accounting, background transcript preloading, and the
+  existing opt-in Warp keystroke check. The thread-safe Watch provider remains
+  compatible with existing callers alongside the endpoint snapshot API.
+- The integrated CI harness passed localization and documentation checks,
+  623 Swift tests in 78 suites, and the package build.
+- All ten uncommitted file patches in the old `local` checkout were checked
+  against the integrated working tree and remain present.
+- Original dirty trees are reachable through local `archive/20261028-*-wip`
+  refs in addition to their saved patches and original file copies.
