@@ -1,6 +1,7 @@
 import AppKit
 import Foundation
 import OpenIslandCore
+import os
 
 /// Polls PI Desktop's SQLite store and turns it into island session events.
 ///
@@ -23,6 +24,8 @@ final class PiDesktopDiscoveryCoordinator {
     private var isAppRunning = false
     private var lastAppProbeAt = Date.distantPast
 
+    private let logger = Logger(subsystem: "app.openisland.dev", category: "pi-desktop")
+
     private static let runningInterval: Duration = .seconds(1)
     private static let idleInterval: Duration = .seconds(3)
     private static let appProbeInterval: TimeInterval = 5
@@ -36,6 +39,7 @@ final class PiDesktopDiscoveryCoordinator {
         guard pollTask == nil else {
             return
         }
+        logger.notice("starting PI Desktop polling")
         pollTask = Task { [weak self] in
             while !Task.isCancelled {
                 guard let self else {
@@ -104,11 +108,17 @@ final class PiDesktopDiscoveryCoordinator {
             }
         }
 
-        for staleID in knownSessionIDs.subtracting(seen) {
+        let endedIDs = knownSessionIDs.subtracting(seen)
+        for staleID in endedIDs {
             onEvent?(
                 PiDesktopEventMapper.sessionEnded(sessionID: staleID, timestamp: timestamp)
             )
         }
+        let sessionCount = snapshots.count
+        let endedCount = endedIDs.count
+        logger.notice(
+            "published \(sessionCount, privacy: .public) PI Desktop session(s), ended \(endedCount, privacy: .public)"
+        )
         knownSessionIDs = seen
     }
 
