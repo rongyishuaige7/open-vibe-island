@@ -15,6 +15,9 @@ final class TodayTokenUsageMonitor {
     private(set) var piDesktopTotals: AgentTokenTotals?
     /// Why the last refresh failed. Today's last good totals stay visible.
     private(set) var lastErrorMessage: String?
+    /// Accounts whose KEEPER rows count as AGY Pro. Configured in Settings;
+    /// `KeeperUsageReader.defaultAgyProAccounts` until someone edits it.
+    private(set) var agyProAccounts: Set<String>
 
     private let databaseURL: URL
     private let keeperDatabaseURL: URL
@@ -38,13 +41,28 @@ final class TodayTokenUsageMonitor {
         keeperDatabaseURL: URL = KeeperUsageReader.defaultDatabaseURL,
         claudeProSessionsDirectoryURL: URL = ClaudeProUsageReader.defaultSessionsDirectoryURL,
         claudeProProjectsDirectoryURL: URL = ClaudeProUsageReader.defaultProjectsDirectoryURL,
-        interval: Duration = .seconds(30)
+        interval: Duration = .seconds(30),
+        agyProAccounts: Set<String> = KeeperUsageReader.defaultAgyProAccounts
     ) {
         self.databaseURL = databaseURL
         self.keeperDatabaseURL = keeperDatabaseURL
         self.claudeProSessionsDirectoryURL = claudeProSessionsDirectoryURL
         self.claudeProProjectsDirectoryURL = claudeProProjectsDirectoryURL
         self.interval = interval
+        self.agyProAccounts = agyProAccounts.isEmpty
+            ? KeeperUsageReader.defaultAgyProAccounts
+            : agyProAccounts
+    }
+
+    /// Re-reads today's totals after the Pro account list changes, so the
+    /// island does not keep the old split until the next poll. An empty list
+    /// falls back to the built-in account.
+    func setAgyProAccounts(_ accounts: Set<String>) {
+        let resolved = accounts.isEmpty ? KeeperUsageReader.defaultAgyProAccounts : accounts
+        guard resolved != agyProAccounts else { return }
+        agyProAccounts = resolved
+        guard task != nil else { return }
+        Task { await refresh() }
     }
 
     func start() {
@@ -195,14 +213,13 @@ final class TodayTokenUsageMonitor {
         piDesktopTotalsDay = calendar.startOfDay(for: date)
     }
 
-    func refresh() async {
+    func refresh(now: Date = Date(), calendar: Calendar = .current) async {
         let databaseURL = self.databaseURL
         let keeperDatabaseURL = self.keeperDatabaseURL
         let claudeProSessionsDirectoryURL = self.claudeProSessionsDirectoryURL
         let claudeProProjectsDirectoryURL = self.claudeProProjectsDirectoryURL
+        let agyProAccounts = self.agyProAccounts
         let result = await Task.detached(priority: .utility) { () -> Result<TodayTokenUsage, any Error> in
-            let calendar = Calendar.current
-            let now = Date()
             let dayStart = calendar.startOfDay(for: now)
 
             var usage = TodayTokenUsage(dayStart: dayStart)
@@ -225,7 +242,12 @@ final class TodayTokenUsageMonitor {
 
             // 2. Try reading KEEPER for Antigravity (Pool and Pro), Codex, Claude, and other upstreams
             do {
-                let keeperUsage = try KeeperUsageReader.loadToday(databaseURL: keeperDatabaseURL, now: now, calendar: calendar)
+                let keeperUsage = try KeeperUsageReader.loadToday(
+                    databaseURL: keeperDatabaseURL,
+                    now: now,
+                    calendar: calendar,
+                    agyProAccounts: agyProAccounts
+                )
                 usage.agy = keeperUsage.agy
                 usage.agyPro = keeperUsage.agyPro
                 usage.other = keeperUsage.other

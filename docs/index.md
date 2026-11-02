@@ -33,6 +33,7 @@ This index is the repository map for humans and coding agents. Read these files 
 
 - [docs/notch-surface-model.md](./notch-surface-model.md) for the island surface routing model and debug harness intent
 - [docs/app-ghostty-codex-chain.md](./app-ghostty-codex-chain.md) for terminal environment findings across the current supported chain
+- [docs/today-token-usage.md](./today-token-usage.md) for the Today token sources and the configurable AGY Pro account list
 
 ## Refactoring Plans
 

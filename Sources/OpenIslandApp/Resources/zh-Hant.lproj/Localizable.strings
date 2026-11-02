@@ -30,6 +30,9 @@
 "settings.general.showCodexUsage" = "顯示 Codex 用量";
 "settings.general.showTodayTokenUsage" = "顯示今日 Token";
 "settings.general.showTodayTokenUsage.caption" = "讀取 CC Switch、KEEPER 與 Claude Pro 本機日誌中各 Agent 的今日總量，以及 DeepSeek Harness 本機橋接記錄的今日總量，均含快取。";
+"settings.general.agyProAccounts" = "AGY Pro 帳號";
+"settings.general.agyProAccounts.caption" = "用逗號、空格或換行分隔，可寫電子郵件或帳號名稱；留空時使用內建帳號（%@）。";
+"settings.general.agyProAccounts.placeholder" = "帳號1, 帳號2";
 "usage.todayTokens.title" = "今日";
 "usage.todayTokens.help" = "從當地午夜起的 Token，含快取：Claude/Codex/AGY/Claude Pro 來自本機用量庫，DSH 來自本機帳本";
 "usage.todayTokens.helpLine" = "%@：%@ Token，其中快取讀取 %@，%@ 次請求";

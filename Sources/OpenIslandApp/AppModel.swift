@@ -328,6 +328,20 @@ final class AppModel {
             }
         }
     }
+    /// Free-form list of Antigravity accounts counted as AGY Pro, e.g.
+    /// "wisnumandala302, other@gmail.com". Empty falls back to
+    /// `KeeperUsageReader.defaultAgyProAccounts`.
+    var agyProAccountsText: String = "" {
+        didSet {
+            guard hasFinishedInit, agyProAccountsText != oldValue else { return }
+            if AgyProAccounts.parse(agyProAccountsText).isEmpty {
+                UserDefaults.standard.removeObject(forKey: AgyProAccounts.defaultsKey)
+            } else {
+                UserDefaults.standard.set(agyProAccountsText, forKey: AgyProAccounts.defaultsKey)
+            }
+            todayTokenUsageMonitor.setAgyProAccounts(AgyProAccounts.effective(agyProAccountsText))
+        }
+    }
     var completionReplyEnabled: Bool = false {
         didSet {
             guard hasFinishedInit, completionReplyEnabled != oldValue else { return }
@@ -707,6 +721,8 @@ final class AppModel {
                 atPath: ClaudeProUsageReader.defaultSessionsDirectoryURL.path
             ) || DSHIntegrationManager().status().isInstalled
         }
+        agyProAccountsText = UserDefaults.standard.string(forKey: AgyProAccounts.defaultsKey) ?? ""
+        todayTokenUsageMonitor.setAgyProAccounts(AgyProAccounts.effective(agyProAccountsText))
         completionReplyEnabled = UserDefaults.standard.bool(forKey: Self.completionReplyEnabledDefaultsKey)
         launchAtLoginEnabled = LaunchAtLoginService.shared.isEnabled
         appearanceSettingsProfile = IslandAppearanceDisplayProfile(
