@@ -1692,6 +1692,11 @@ final class AppModel {
             return
         }
 
+        if case let .piDesktopTodayTokensUpdated(payload) = event {
+            todayTokenUsageMonitor.updatePiDesktopTotals(payload.usage, at: payload.timestamp)
+            return
+        }
+
         if case .sessionHeartbeat = event {
             state.apply(event)
             return
@@ -1754,7 +1759,7 @@ final class AppModel {
                 case let .piSessionMetadataUpdated(p): return p.sessionID
                 case let .sessionHeartbeat(p): return p.sessionID
                 case let .actionableStateResolved(p): return p.sessionID
-                case .dshTodayTokensUpdated: return nil
+                case .dshTodayTokensUpdated, .piDesktopTodayTokensUpdated: return nil
                 }
             }()
             let session = eventSessionID.flatMap { state.session(id: $0) }
@@ -2055,6 +2060,8 @@ final class AppModel {
             return "Actionable state resolved for session \(payload.sessionID)."
         case let .dshTodayTokensUpdated(payload):
             return "DSH today tokens updated: \(payload.usage.totalTokens)."
+        case let .piDesktopTodayTokensUpdated(payload):
+            return "PI Desktop today tokens updated: \(payload.usage.totalTokens)."
         }
     }
 

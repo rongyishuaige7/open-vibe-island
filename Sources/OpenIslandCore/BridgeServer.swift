@@ -1470,6 +1470,14 @@ public final class BridgeServer: @unchecked Sendable {
     }
 
     private func handlePiDesktopHook(_ payload: PiDesktopHookPayload, from clientID: UUID) {
+        if let todayTokens = payload.todayTokens {
+            emit(
+                .piDesktopTodayTokensUpdated(
+                    PiDesktopTodayTokensUpdated(usage: todayTokens, timestamp: payload.timestamp)
+                )
+            )
+        }
+
         switch payload.event {
         case .snapshot:
             for snapshot in payload.sessions ?? [] {

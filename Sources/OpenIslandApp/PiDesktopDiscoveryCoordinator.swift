@@ -23,6 +23,7 @@ final class PiDesktopDiscoveryCoordinator {
     private var lastHeartbeatAt = Date.distantPast
     private var isAppRunning = false
     private var lastAppProbeAt = Date.distantPast
+    private var lastEmittedTokens: PiDesktopTodayTokens?
 
     private let logger = Logger(subsystem: "app.openisland.dev", category: "pi-desktop")
 
@@ -85,10 +86,40 @@ final class PiDesktopDiscoveryCoordinator {
 
         case let .success(records):
             publish(records.map(PiDesktopSessionSnapshot.init(record:)), at: now)
+            publishTodayTokens(now: now)
+            if signatureChanged {
+                // Heartbeat-only rounds stay silent; otherwise this would log
+                // every 15 seconds for as long as the app is open.
+                logger.notice("published \(records.count, privacy: .public) PI Desktop session(s)")
+            }
             lastSignature = signature
             lastHeartbeatAt = now
             return Self.runningInterval
         }
+    }
+
+    /// Today's PI Desktop tokens, deduplicated by turn id. Nil when the store
+    /// cannot be read, so the chip keeps its last known value instead of
+    /// flashing zero.
+    func todayTokens(now: Date = .now, calendar: Calendar = .current) -> PiDesktopTodayTokens? {
+        let dayStart = calendar.startOfDay(for: now)
+        guard case let .success(turns) = store.loadTurns(from: dayStart, to: now) else {
+            return nil
+        }
+        return PiDesktopTodayTokens(turns: turns)
+    }
+
+    private func publishTodayTokens(now: Date) {
+        guard let tokens = todayTokens(now: now), tokens != lastEmittedTokens else {
+            return
+        }
+        lastEmittedTokens = tokens
+        logger.notice("today tokens: \(tokens.totalTokens, privacy: .public) across \(tokens.sessionCount, privacy: .public) session(s)")
+        onEvent?(
+            .piDesktopTodayTokensUpdated(
+                PiDesktopTodayTokensUpdated(usage: tokens, timestamp: now)
+            )
+        )
     }
 
     /// Exposed for tests: feed a snapshot list directly.
@@ -114,11 +145,6 @@ final class PiDesktopDiscoveryCoordinator {
                 PiDesktopEventMapper.sessionEnded(sessionID: staleID, timestamp: timestamp)
             )
         }
-        let sessionCount = snapshots.count
-        let endedCount = endedIDs.count
-        logger.notice(
-            "published \(sessionCount, privacy: .public) PI Desktop session(s), ended \(endedCount, privacy: .public)"
-        )
         knownSessionIDs = seen
     }
 

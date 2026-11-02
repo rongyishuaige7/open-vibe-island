@@ -11,6 +11,8 @@ final class TodayTokenUsageMonitor {
     /// DSH tokens reported by the host plugin's local-day ledger. Nil until
     /// the integration is installed and has seen a session.
     private(set) var dshTotals: AgentTokenTotals?
+    /// PI Desktop tokens, computed from its own SQLite store for the local day.
+    private(set) var piDesktopTotals: AgentTokenTotals?
     /// Why the last refresh failed. Today's last good totals stay visible.
     private(set) var lastErrorMessage: String?
 
@@ -21,6 +23,7 @@ final class TodayTokenUsageMonitor {
     private let interval: Duration
     @ObservationIgnored private var task: Task<Void, Never>?
     @ObservationIgnored private var dshTotalsDay: Date = .distantPast
+    @ObservationIgnored private var piDesktopTotalsDay: Date = .distantPast
 
     public var onDatabaseChanged: (@MainActor () -> Void)?
 
@@ -166,6 +169,30 @@ final class TodayTokenUsageMonitor {
             cacheReadTokens: usage.cacheReadTokens
         )
         dshTotalsDay = calendar.startOfDay(for: date)
+    }
+
+    /// Merges PI Desktop's local-day totals. Same rollover rule as DSH: a total
+    /// left over from an earlier day is dropped even if the app never reports
+    /// again after midnight.
+    func updatePiDesktopTotals(
+        _ usage: PiDesktopTodayTokens?,
+        at date: Date = .now,
+        calendar: Calendar = .current
+    ) {
+        guard let usage, usage.totalTokens > 0 || usage.sessionCount > 0 else {
+            piDesktopTotals = nil
+            return
+        }
+
+        if piDesktopTotals != nil, !calendar.isDate(piDesktopTotalsDay, inSameDayAs: date) {
+            piDesktopTotals = nil
+        }
+        piDesktopTotals = AgentTokenTotals(
+            requestCount: usage.sessionCount,
+            totalTokens: usage.totalTokens,
+            cacheReadTokens: usage.cacheReadTokens
+        )
+        piDesktopTotalsDay = calendar.startOfDay(for: date)
     }
 
     func refresh() async {

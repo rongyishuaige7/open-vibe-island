@@ -530,7 +530,7 @@ final class ProcessMonitoringCoordinator {
             payload.sessionID
         case let .actionableStateResolved(payload):
             payload.sessionID
-        case .dshTodayTokensUpdated:
+        case .dshTodayTokensUpdated, .piDesktopTodayTokensUpdated:
             nil
         }
     }

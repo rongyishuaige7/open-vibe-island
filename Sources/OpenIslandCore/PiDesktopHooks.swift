@@ -105,15 +105,25 @@ public struct PiDesktopTodayTokens: Equatable, Codable, Sendable {
 
     public static let zero = PiDesktopTodayTokens()
 
+    /// Sums today's turns. Turns are keyed by id first: a resumed or retried
+    /// turn can appear twice in one window, and counting it twice would inflate
+    /// the chip with no way to notice.
     public init(turns: [PiDesktopTurnUsage]) {
-        let input = turns.reduce(0) { $0 + $1.inputTokens }
-        let output = turns.reduce(0) { $0 + $1.outputTokens }
+        var seen: Set<String> = []
+        var unique: [PiDesktopTurnUsage] = []
+        unique.reserveCapacity(turns.count)
+        for turn in turns where seen.insert(turn.id).inserted {
+            unique.append(turn)
+        }
+
+        let input = unique.reduce(0) { $0 + $1.inputTokens }
+        let output = unique.reduce(0) { $0 + $1.outputTokens }
         self.init(
             totalTokens: input + output,
             inputTokens: input,
             outputTokens: output,
-            cacheReadTokens: turns.reduce(0) { $0 + $1.cacheReadTokens },
-            sessionCount: Set(turns.map(\.sessionID)).count
+            cacheReadTokens: unique.reduce(0) { $0 + $1.cacheReadTokens },
+            sessionCount: Set(unique.map(\.sessionID)).count
         )
     }
 }
@@ -148,6 +158,16 @@ public struct PiDesktopHookPayload: Equatable, Codable, Sendable {
         self.session = session
         self.sessions = sessions
         self.todayTokens = todayTokens
+        self.timestamp = timestamp
+    }
+}
+
+public struct PiDesktopTodayTokensUpdated: Equatable, Codable, Sendable {
+    public var usage: PiDesktopTodayTokens
+    public var timestamp: Date
+
+    public init(usage: PiDesktopTodayTokens, timestamp: Date = .now) {
+        self.usage = usage
         self.timestamp = timestamp
     }
 }

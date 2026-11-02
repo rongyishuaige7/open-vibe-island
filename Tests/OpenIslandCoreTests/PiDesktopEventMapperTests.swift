@@ -172,6 +172,28 @@ struct PiDesktopEventMapperTests {
     }
 
     @Test
+    func todayTokensIgnoreDuplicateTurnIDs() {
+        let turn = PiDesktopTurnUsage(id: "t1", sessionID: "a", status: "completed", inputTokens: 100, outputTokens: 50, cacheReadTokens: 7, startedAt: .now)
+        let tokens = PiDesktopTodayTokens(turns: [turn, turn])
+        #expect(tokens.totalTokens == 150)
+        #expect(tokens.cacheReadTokens == 7)
+        #expect(tokens.sessionCount == 1)
+    }
+
+    @Test
+    func todayTokensEventRoundTripsThroughJSON() throws {
+        let event = AgentEvent.piDesktopTodayTokensUpdated(
+            PiDesktopTodayTokensUpdated(
+                usage: PiDesktopTodayTokens(totalTokens: 42, inputTokens: 20, outputTokens: 22, cacheReadTokens: 3, sessionCount: 2),
+                timestamp: Date(timeIntervalSince1970: 77)
+            )
+        )
+        let data = try JSONEncoder().encode(event)
+        let decoded = try JSONDecoder().decode(AgentEvent.self, from: data)
+        #expect(decoded == event)
+    }
+
+    @Test
     func bridgeRoundTripsThePiDesktopCommand() throws {
         let payload = PiDesktopHookPayload(
             event: .activity,
