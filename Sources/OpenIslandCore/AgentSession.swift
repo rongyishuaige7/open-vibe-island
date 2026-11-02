@@ -15,6 +15,8 @@ public enum AgentTool: String, CaseIterable, Codable, Sendable {
     case pi
     case ohMyPi
     case deepSeekHarness
+    /// PI Desktop (`net.aiuo.pi-desktop`), a separate runtime from the `pi` CLI.
+    case piDesktop
 
     public var displayName: String {
         switch self {
@@ -46,6 +48,8 @@ public enum AgentTool: String, CaseIterable, Codable, Sendable {
             "Oh My Pi"
         case .deepSeekHarness:
             "DeepSeek Harness"
+        case .piDesktop:
+            "PI Desktop"
         }
     }
 
@@ -79,6 +83,8 @@ public enum AgentTool: String, CaseIterable, Codable, Sendable {
             "OMP"
         case .deepSeekHarness:
             "DSH"
+        case .piDesktop:
+            "PI DESKTOP"
         }
     }
 
@@ -111,6 +117,9 @@ public enum AgentTool: String, CaseIterable, Codable, Sendable {
         case .pi:         "#a3e635"
         case .ohMyPi:     "#f472b6"
         case .deepSeekHarness: "#4d6bfe"
+        // Gray-white identity: a paper-like mark that stays readable on the
+        // black island without competing with body text.
+        case .piDesktop:  "#F4F1EA"
         }
     }
 }

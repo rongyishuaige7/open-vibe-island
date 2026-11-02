@@ -263,6 +263,8 @@ extension AgentSession {
             return "Pi"
         case .ohMyPi:
             return "Oh My Pi"
+        case .piDesktop:
+            return "PI Desktop"
         case .deepSeekHarness:
             return "DeepSeek Harness"
         }

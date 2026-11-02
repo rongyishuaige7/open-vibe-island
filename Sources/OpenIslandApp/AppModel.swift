@@ -80,6 +80,7 @@ final class AppModel {
     let overlay = OverlayUICoordinator()
     let discovery = SessionDiscoveryCoordinator()
     let monitoring = ProcessMonitoringCoordinator()
+    let piDesktopDiscovery = PiDesktopDiscoveryCoordinator()
     let codexAppServer = CodexAppServerCoordinator()
     let updateChecker = UpdateChecker()
     let todayTokenUsageMonitor = TodayTokenUsageMonitor()
@@ -768,6 +769,11 @@ final class AppModel {
         }
         codexAppServer.isSessionTracked = { [weak self] id in
             self?.state.session(id: id) != nil
+        }
+
+        piDesktopDiscovery.stateAccessor = { [weak self] in self?.state ?? SessionState() }
+        piDesktopDiscovery.onEvent = { [weak self] event in
+            self?.applyTrackedEvent(event)
         }
 
         monitoring.syntheticClaudeSessionPrefix = Self.syntheticClaudeSessionPrefix
@@ -1890,6 +1896,7 @@ final class AppModel {
 
         // Start monitoring in background (requires sessions to be loaded).
         monitoring.startMonitoringIfNeeded()
+        piDesktopDiscovery.start()
         discovery.startConversationTitleRefreshIfNeeded()
     }
 
