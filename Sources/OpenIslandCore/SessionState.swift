@@ -86,7 +86,8 @@ public struct SessionState: Equatable, Sendable {
             session.isProcessAlive = true
             if payload.tool == .pi
                 || payload.tool == .ohMyPi
-                || payload.tool == .deepSeekHarness {
+                || payload.tool == .deepSeekHarness
+                || payload.tool == .piDesktop {
                 session.lastHeartbeatAt = payload.timestamp
                 session.heartbeatReconnectStartedAt = nil
             }
@@ -238,7 +239,10 @@ public struct SessionState: Equatable, Sendable {
 
         case let .sessionHeartbeat(payload):
             guard var session = sessionsByID[payload.sessionID],
-                  (session.tool == .pi || session.tool == .ohMyPi || session.tool == .deepSeekHarness),
+                  (session.tool == .pi
+                    || session.tool == .ohMyPi
+                    || session.tool == .deepSeekHarness
+                    || session.tool == .piDesktop),
                   !session.isSessionEnded else {
                 return
             }

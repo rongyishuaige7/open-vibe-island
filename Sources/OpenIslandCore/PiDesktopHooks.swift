@@ -17,6 +17,8 @@ public struct PiDesktopSessionSnapshot: Equatable, Codable, Sendable {
     public var mode: String
     /// `ask`, `accept-edits`, `auto`, or `inherit`.
     public var permissionMode: String
+    /// PI Desktop's `title_source`: legacy | default | manual | generated.
+    public var titleSource: String
     public var phase: SessionPhase
     public var summary: String?
     /// Tool name of the most recent tool message, e.g. `Bash`.
@@ -35,6 +37,7 @@ public struct PiDesktopSessionSnapshot: Equatable, Codable, Sendable {
         modelID: String? = nil,
         mode: String = "agent",
         permissionMode: String = "inherit",
+        titleSource: String = "legacy",
         phase: SessionPhase = .completed,
         summary: String? = nil,
         currentTool: String? = nil,
@@ -51,6 +54,7 @@ public struct PiDesktopSessionSnapshot: Equatable, Codable, Sendable {
         self.modelID = modelID
         self.mode = mode
         self.permissionMode = permissionMode
+        self.titleSource = titleSource
         self.phase = phase
         self.summary = summary
         self.currentTool = currentTool
@@ -70,6 +74,7 @@ public struct PiDesktopSessionSnapshot: Equatable, Codable, Sendable {
             modelID: record.modelID,
             mode: record.mode,
             permissionMode: record.permissionMode,
+            titleSource: record.titleSource,
             phase: record.phase,
             summary: record.lastAssistantLine,
             currentTool: record.currentTool,

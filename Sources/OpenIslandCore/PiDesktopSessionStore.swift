@@ -17,6 +17,8 @@ public struct PiDesktopSessionRecord: Equatable, Sendable, Identifiable {
     public var mode: String
     /// `ask`, `accept-edits`, `auto`, or `inherit`.
     public var permissionMode: String
+    /// PI Desktop's `title_source`: legacy | default | manual | generated.
+    public var titleSource: String
     public var messageCount: Int
     /// Tool name of the most recent tool message, e.g. `Bash` or `Read`.
     public var currentTool: String?
@@ -38,6 +40,7 @@ public struct PiDesktopSessionRecord: Equatable, Sendable, Identifiable {
         modelID: String? = nil,
         mode: String = "agent",
         permissionMode: String = "inherit",
+        titleSource: String = "legacy",
         messageCount: Int = 0,
         currentTool: String? = nil,
         lastAssistantLine: String? = nil,
@@ -56,6 +59,7 @@ public struct PiDesktopSessionRecord: Equatable, Sendable, Identifiable {
         self.modelID = modelID
         self.mode = mode
         self.permissionMode = permissionMode
+        self.titleSource = titleSource
         self.messageCount = messageCount
         self.currentTool = currentTool
         self.lastAssistantLine = lastAssistantLine
@@ -191,7 +195,8 @@ public struct PiDesktopSessionStore: Sendable {
                         WHERE t.session_id = s.id AND t.status = 'running'
                         ORDER BY t.started_at DESC LIMIT 1),
                     (SELECT COUNT(*) FROM session_todo d WHERE d.session_id = s.id),
-                    (SELECT COUNT(*) FROM session_todo d WHERE d.session_id = s.id AND d.status = 'completed')
+                    (SELECT COUNT(*) FROM session_todo d WHERE d.session_id = s.id AND d.status = 'completed'),
+                    s.title_source
                 FROM sessions s
                 LEFT JOIN projects p ON p.id = s.project_id
                 WHERE s.deleted_at IS NULL
@@ -227,6 +232,7 @@ public struct PiDesktopSessionStore: Sendable {
                         modelID: Self.string(statement, 3),
                         mode: Self.string(statement, 4) ?? "agent",
                         permissionMode: Self.string(statement, 5) ?? "inherit",
+                        titleSource: Self.string(statement, 16) ?? "legacy",
                         messageCount: Self.int(statement, 10),
                         currentTool: Self.string(statement, 11),
                         lastAssistantLine: Self.clipFirstLine(Self.string(statement, 12)),
