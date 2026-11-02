@@ -30,6 +30,9 @@
 "settings.general.showCodexUsage" = "显示 Codex 用量";
 "settings.general.showTodayTokenUsage" = "显示今日 Token";
 "settings.general.showTodayTokenUsage.caption" = "读取 CC Switch、KEEPER 和 Claude Pro 本地日志中各 Agent 的今日总量，以及 DeepSeek Harness 本地桥接记录的今日总量，均含缓存。";
+"settings.general.agyProAccounts" = "AGY Pro 账号";
+"settings.general.agyProAccounts.caption" = "用逗号、空格或换行分隔，可写邮箱或账号名；留空时使用内置账号（%@）。";
+"settings.general.agyProAccounts.placeholder" = "账号1, 账号2";
 "usage.todayTokens.title" = "今日";
 "usage.todayTokens.help" = "从本地零点起的 Token，含缓存：Claude/Codex/AGY/Claude Pro 来自本地用量库，DSH 来自本地账本";
 "usage.todayTokens.helpLine" = "%@：%@ Token，其中缓存读取 %@，%@ 次请求";
