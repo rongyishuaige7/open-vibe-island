@@ -2,6 +2,24 @@ import SwiftUI
 import OpenIslandCore
 
 enum IslandDesignPalette {
+    /// Per-agent brand tokens that are more than a single hex: surfaces that
+    /// need a fill, a hairline or a glow read them here instead of guessing
+    /// opacities at the call site.
+    enum Agent {
+        /// PI Desktop: gray-white ("paper") identity. Deliberately low
+        /// saturation so it never competes with the island's body text.
+        enum PiDesktop {
+            static let accent = Color(red: 244.0 / 255.0, green: 241.0 / 255.0, blue: 234.0 / 255.0)
+            static let accentStrong = Color.white
+            static let accentMuted = Color(red: 207.0 / 255.0, green: 201.0 / 255.0, blue: 190.0 / 255.0)
+            static let accentSubtle = Color(red: 148.0 / 255.0, green: 142.0 / 255.0, blue: 131.0 / 255.0)
+            static let onAccent = Color(red: 27.0 / 255.0, green: 26.0 / 255.0, blue: 24.0 / 255.0)
+            static let fill = accent.opacity(0.10)
+            static let hairline = accent.opacity(0.28)
+            static let glow = accent.opacity(0.20)
+        }
+    }
+
     enum Status {
         static let waitingAggregate = Color(red: 231.0 / 255.0, green: 167.0 / 255.0, blue: 98.0 / 255.0)
         static let waitingForApproval = Color(red: 244.0 / 255.0, green: 164.0 / 255.0, blue: 164.0 / 255.0)
@@ -28,6 +46,8 @@ enum IslandDesignPalette {
                 return runningCodex
             case .claudeCode:
                 return runningClaude
+            case .piDesktop:
+                return Agent.PiDesktop.accent
             default:
                 if let hex = Color(hex: tool.brandColorHex) {
                     return hex

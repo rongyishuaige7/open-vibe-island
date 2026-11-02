@@ -84,7 +84,7 @@ public enum AgentTool: String, CaseIterable, Codable, Sendable {
         case .deepSeekHarness:
             "DSH"
         case .piDesktop:
-            "PI DESKTOP"
+            "PI-D"
         }
     }
 
