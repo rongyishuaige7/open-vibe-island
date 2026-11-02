@@ -462,20 +462,30 @@ struct TerminalJumpService {
 
     /// PI Desktop has no URL scheme. The plugin's socket focuses the exact
     /// conversation; without it we can still bring the app forward.
+    ///
+    /// Activation comes first on purpose: `session/open` unhides the window and
+    /// selects the conversation, but it does not raise the app above whatever
+    /// is frontmost, so relying on it alone leaves PI Desktop behind.
     private func jumpToPiDesktop(_ target: JumpTarget) throws -> String {
+        let bundleIdentifier = PiDesktopEventMapper.bundleIdentifier
+        let runningApp = NSRunningApplication
+            .runningApplications(withBundleIdentifier: bundleIdentifier)
+            .first
+
+        if let runningApp {
+            runningApp.activate(options: [])
+        } else {
+            try openAction(["-b", bundleIdentifier])
+        }
+
         if let sessionID = target.terminalSessionID,
            PiDesktopFocusClient.focus(sessionID: sessionID) {
             return "Focused the PI Desktop session."
         }
 
-        let bundleIdentifier = PiDesktopEventMapper.bundleIdentifier
-        if let app = NSRunningApplication.runningApplications(withBundleIdentifier: bundleIdentifier).first {
-            app.activate(options: [])
-            return "Activated PI Desktop. Install its bridge plugin to focus the exact session."
-        }
-
-        try openAction(["-b", bundleIdentifier])
-        return "Launched PI Desktop."
+        return runningApp == nil
+            ? "Launched PI Desktop."
+            : "Activated PI Desktop. Install its bridge plugin to focus the exact session."
     }
 
     private func jumpToITermSession(_ target: JumpTarget) throws -> Bool {
