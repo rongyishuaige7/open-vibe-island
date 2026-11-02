@@ -433,6 +433,12 @@ struct SetupSettingsPane: View {
 
     private var lang: LanguageManager { model.lang }
 
+    /// KEEPER records no Antigravity plan, so the Pro account is named by hand;
+    /// this is the built-in one used when the field is left empty.
+    private var builtInAgyProAccounts: String {
+        KeeperUsageReader.defaultAgyProAccounts.sorted().joined(separator: ", ")
+    }
+
     var body: some View {
         Form {
             if !model.hasAnyInstalledAgent {
@@ -735,6 +741,23 @@ struct SetupSettingsPane: View {
                             .font(.caption)
                             .foregroundStyle(.secondary)
                     }
+                }
+                if model.showTodayTokenUsage {
+                    VStack(alignment: .leading, spacing: 4) {
+                        TextField(
+                            lang.t("settings.general.agyProAccounts"),
+                            text: Binding(
+                                get: { model.agyProAccountsText },
+                                set: { model.agyProAccountsText = $0 }
+                            ),
+                            prompt: Text(lang.t("settings.general.agyProAccounts.placeholder"))
+                        )
+                        .textFieldStyle(.roundedBorder)
+                        Text(lang.t("settings.general.agyProAccounts.caption", builtInAgyProAccounts))
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                    .padding(.leading, 2)
                 }
             } header: {
                 HStack(spacing: 4) {

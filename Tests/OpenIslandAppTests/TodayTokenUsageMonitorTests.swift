@@ -1,6 +1,7 @@
 import Foundation
 import Observation
 import os
+import SQLite3
 import Testing
 @testable import OpenIslandApp
 import OpenIslandCore
@@ -201,5 +202,78 @@ struct TodayTokenUsageMonitorTests {
         #expect(monitor.usage?.claudeProRateLimit7d == 45)
         #expect(monitor.usage?.claudeProAccountHint == "Pro-Sandbox")
         #expect(monitor.usage?.totalTokens == 10_000 + 2_000_000)
+    }
+
+    /// The Pro account is user-configurable: KEEPER names no plan, so the
+    /// monitor has to be told which accounts to count as Pro.
+    @Test
+    func configuredProAccountsSplitKeeperRows() async throws {
+        let dbURL = try makeKeeperDatabase()
+        defer { try? FileManager.default.removeItem(at: dbURL) }
+
+        let monitor = TodayTokenUsageMonitor(
+            databaseURL: URL(fileURLWithPath: "/nonexistent/cc-switch.db"),
+            keeperDatabaseURL: dbURL,
+            claudeProSessionsDirectoryURL: URL(fileURLWithPath: "/nonexistent/claude-pro-sessions"),
+            claudeProProjectsDirectoryURL: URL(fileURLWithPath: "/nonexistent/claude-pro-projects"),
+            agyProAccounts: ["wisnumandala302"]
+        )
+
+        await monitor.refresh(now: Self.now, calendar: Self.calendar)
+        #expect(monitor.agyProAccounts == ["wisnumandala302"])
+        #expect(monitor.usage?.agy.totalTokens == 2_000)
+        #expect(monitor.usage?.agyPro.totalTokens == 1_000)
+        #expect(monitor.usage?.agyProAccounts == ["wisnumandala302"])
+
+        monitor.setAgyProAccounts(["sk44989"])
+        await monitor.refresh(now: Self.now, calendar: Self.calendar)
+        #expect(monitor.agyProAccounts == ["sk44989"])
+        #expect(monitor.usage?.agy.totalTokens == 1_000)
+        #expect(monitor.usage?.agyPro.totalTokens == 2_000)
+        #expect(monitor.usage?.agyProAccounts == ["sk44989"])
+    }
+
+    @Test
+    func emptyProAccountListFallsBackToTheBuiltInAccount() {
+        let monitor = TodayTokenUsageMonitor(
+            databaseURL: URL(fileURLWithPath: "/nonexistent/cc-switch.db"),
+            keeperDatabaseURL: URL(fileURLWithPath: "/nonexistent/keeper.db"),
+            agyProAccounts: []
+        )
+        #expect(monitor.agyProAccounts == KeeperUsageReader.defaultAgyProAccounts)
+    }
+
+    /// A KEEPER-shaped database with one pool and one Pro Antigravity row.
+    private func makeKeeperDatabase() throws -> URL {
+        let url = FileManager.default.temporaryDirectory
+            .appendingPathComponent("test-keeper-\(UUID().uuidString).db")
+        var handle: OpaquePointer?
+        guard sqlite3_open(url.path, &handle) == SQLITE_OK, let db = handle else {
+            throw CocoaError(.fileWriteUnknown)
+        }
+        defer { sqlite3_close(db) }
+
+        let schema = """
+            CREATE TABLE usage_identities (id INTEGER PRIMARY KEY, name TEXT, identity TEXT);
+            CREATE TABLE usage_overview_daily_stats (
+                id INTEGER PRIMARY KEY,
+                bucket_start TEXT,
+                auth_index TEXT,
+                request_count INTEGER,
+                total_tokens INTEGER,
+                cache_read_tokens INTEGER
+            );
+            INSERT INTO usage_identities (id, name, identity) VALUES
+                (1, 'sk44989@gmail.com', 'idx-pool'),
+                (2, 'wisnumandala302@gmail.com', 'idx-pro');
+            INSERT INTO usage_overview_daily_stats
+                (bucket_start, auth_index, request_count, total_tokens, cache_read_tokens) VALUES
+                ('2026-01-15T00:00:00+08:00', 'idx-pool', 5, 2000, 0),
+                ('2026-01-15T00:00:00+08:00', 'idx-pro', 3, 1000, 0);
+            """
+        guard sqlite3_exec(db, schema, nil, nil, nil) == SQLITE_OK else {
+            throw CocoaError(.fileReadCorruptFile)
+        }
+        return url
     }
 }
