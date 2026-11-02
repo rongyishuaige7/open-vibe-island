@@ -26,6 +26,26 @@ public enum PiDesktopEventMapper {
         return displayName
     }
 
+    /// Titles PI Desktop writes before it has anything to name the session
+    /// after. The island shows them verbatim, which reads as "new session".
+    private static let placeholderTitles: Set<String> = [
+        "新会话", "new session", "untitled", "no title", "无标题"
+    ]
+
+    /// The topic line the island renders. `spotlightHeadlinePromptText` prefers
+    /// `conversationTitle` over any other field, so a snapshot that only sets
+    /// `title` still renders as "新会话" for PI Desktop sessions.
+    public static func conversationTitle(for snapshot: PiDesktopSessionSnapshot) -> String? {
+        let trimmed = snapshot.title.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else {
+            return nil
+        }
+        guard !placeholderTitles.contains(trimmed.lowercased()) else {
+            return nil
+        }
+        return trimmed
+    }
+
     public static func summary(for snapshot: PiDesktopSessionSnapshot) -> String {
         let detail = snapshot.summary?.trimmingCharacters(in: .whitespacesAndNewlines)
 
@@ -69,17 +89,21 @@ public enum PiDesktopEventMapper {
     ) -> [AgentEvent] {
         var events: [AgentEvent] = []
         let resolvedTitle = title(for: snapshot)
+        let resolvedConversationTitle = conversationTitle(for: snapshot)
         let resolvedSummary = summary(for: snapshot)
         // A session we already ended (app quit, or it dropped out of a
         // snapshot) comes back to life when PI Desktop reports it again.
         let current = existing?.isSessionEnded == true ? nil : existing
 
-        if current == nil || current?.title != resolvedTitle {
+        if current == nil
+            || current?.title != resolvedTitle
+            || current?.conversationTitle != resolvedConversationTitle {
             events.append(
                 .sessionStarted(
                     SessionStarted(
                         sessionID: snapshot.sessionID,
                         title: resolvedTitle,
+                        conversationTitle: resolvedConversationTitle,
                         tool: .piDesktop,
                         origin: .live,
                         initialPhase: snapshot.phase,

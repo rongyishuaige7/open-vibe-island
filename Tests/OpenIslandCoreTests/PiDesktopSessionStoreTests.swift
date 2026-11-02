@@ -14,6 +14,7 @@ enum PiDesktopFixture {
         var modelID: String?
         var mode: String
         var permissionMode: String
+        var titleSource: String = "legacy"
         var createdAt: Int64
         var updatedAt: Int64
         var deletedAt: Int64?
@@ -79,8 +80,8 @@ enum PiDesktopFixture {
                 db,
                 """
                 INSERT INTO sessions (id, title, project_id, provider_id, model_id, mode, permission_mode,
-                                      created_at, updated_at, deleted_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
+                                      title_source, created_at, updated_at, deleted_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
                 """,
                 &statement
             )
@@ -95,12 +96,13 @@ enum PiDesktopFixture {
             bind(statement, 5, session.modelID)
             bind(statement, 6, session.mode)
             bind(statement, 7, session.permissionMode)
-            sqlite3_bind_int64(statement, 8, session.createdAt)
-            sqlite3_bind_int64(statement, 9, session.updatedAt)
+            bind(statement, 8, session.titleSource)
+            sqlite3_bind_int64(statement, 9, session.createdAt)
+            sqlite3_bind_int64(statement, 10, session.updatedAt)
             if let deletedAt = session.deletedAt {
-                sqlite3_bind_int64(statement, 10, deletedAt)
+                sqlite3_bind_int64(statement, 11, deletedAt)
             } else {
-                sqlite3_bind_null(statement, 10)
+                sqlite3_bind_null(statement, 11)
             }
             try step(db, statement)
 
@@ -181,6 +183,7 @@ enum PiDesktopFixture {
             model_id TEXT,
             mode TEXT NOT NULL DEFAULT 'agent',
             permission_mode TEXT NOT NULL DEFAULT 'inherit',
+            title_source TEXT NOT NULL DEFAULT 'legacy',
             source TEXT,
             deleted_at INTEGER,
             pinned INTEGER NOT NULL DEFAULT 0,
@@ -276,6 +279,7 @@ struct PiDesktopSessionStoreTests {
                     modelID: "cn:deepseek-v4.1-flash",
                     mode: "agent",
                     permissionMode: "auto",
+                    titleSource: "generated",
                     createdAt: 1_000,
                     updatedAt: 2_000,
                     messages: [
@@ -301,6 +305,7 @@ struct PiDesktopSessionStoreTests {
         #expect(records.count == 1)
         #expect(record.id == "s1")
         #expect(record.title == "修复跳转")
+        #expect(record.titleSource == "generated")
         #expect(record.projectPath == "/Users/u/open-island")
         #expect(record.workspaceName == "open-island")
         #expect(record.currentTool == "Bash")

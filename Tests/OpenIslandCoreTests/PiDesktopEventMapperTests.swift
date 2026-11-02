@@ -53,6 +53,34 @@ struct PiDesktopEventMapperTests {
     }
 
     @Test
+    func startedSessionCarriesTheTopicAsConversationTitle() throws {
+        let started = try #require(PiDesktopEventMapper.events(for: snapshot(), existing: nil, timestamp: .now).compactMap { event -> SessionStarted? in
+            if case let .sessionStarted(payload) = event { return payload }
+            return nil
+        }.first)
+        #expect(started.conversationTitle == "看看搜索走哪个 API")
+    }
+
+    @Test
+    func placeholderTitlesDoNotBecomeTheTopic() {
+        #expect(PiDesktopEventMapper.conversationTitle(for: snapshot(title: "新会话")) == nil)
+        #expect(PiDesktopEventMapper.conversationTitle(for: snapshot(title: "  ")) == nil)
+        #expect(PiDesktopEventMapper.conversationTitle(for: snapshot(title: "主对话")) == "主对话")
+    }
+
+    @Test
+    func heartbeatsRefreshPiDesktopLiveness() throws {
+        var state = SessionState()
+        for event in PiDesktopEventMapper.events(for: snapshot(), existing: nil, timestamp: Date(timeIntervalSince1970: 10)) {
+            state.apply(event)
+        }
+        state.apply(.sessionHeartbeat(SessionHeartbeat(sessionID: "s1", timestamp: Date(timeIntervalSince1970: 60))))
+
+        let session = try #require(state.session(id: "s1"))
+        #expect(session.lastHeartbeatAt == Date(timeIntervalSince1970: 60))
+    }
+
+    @Test
     func existingSessionOnlyGetsActivityPlusHeartbeat() throws {
         let initial = snapshot(phase: .running, summary: "正在检查搜索结果", currentTool: "Bash")
         var mutableState = SessionState()
