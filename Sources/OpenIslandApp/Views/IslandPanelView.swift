@@ -1029,6 +1029,7 @@ struct IslandPanelView: View {
         let monitor = model.todayTokenUsageMonitor
         guard monitor.usage != nil
                 || monitor.dshTotals != nil
+                || monitor.piDesktopTotals != nil
                 || monitor.lastErrorMessage != nil else {
             return nil
         }
@@ -1046,11 +1047,16 @@ struct IslandPanelView: View {
         if let dsh = monitor.dshTotals {
             candidateAgents.append((id: "deepSeekHarness", label: "DSH", shortLabel: "DS", totals: dsh))
         }
+        if let piDesktop = monitor.piDesktopTotals {
+            candidateAgents.append((id: "piDesktop", label: "PI Desktop", shortLabel: "PI", totals: piDesktop))
+        }
         if let other = monitor.usage?.other, other.totalTokens > 0 {
             candidateAgents.append((id: "other", label: lang.t("usage.todayTokens.other"), shortLabel: "Oth", totals: other))
         }
 
-        let grandTotal = (monitor.usage?.totalTokens ?? 0) + (monitor.dshTotals?.totalTokens ?? 0)
+        let grandTotal = (monitor.usage?.totalTokens ?? 0)
+            + (monitor.dshTotals?.totalTokens ?? 0)
+            + (monitor.piDesktopTotals?.totalTokens ?? 0)
         let totalFormatted = TokenCountFormatter.compact(grandTotal, languageCode: languageCode)
 
         var helpLines = [
@@ -1059,7 +1065,7 @@ struct IslandPanelView: View {
         ]
         for agent in candidateAgents {
             guard let totals = agent.totals else { continue }
-            let key = agent.id == "deepSeekHarness"
+            let key = ["deepSeekHarness", "piDesktop"].contains(agent.id)
                 ? "usage.todayTokens.helpLineSessions"
                 : "usage.todayTokens.helpLine"
             helpLines.append(lang.t(
@@ -1405,6 +1411,17 @@ struct IslandPanelView: View {
                     )
                 }
 
+                if let piDesktop = monitor.piDesktopTotals {
+                    tokenDetailAgentRow(
+                        label: "PI Desktop",
+                        dotColor: Color(red: 244.0 / 255.0, green: 241.0 / 255.0, blue: 234.0 / 255.0),
+                        totals: piDesktop,
+                        accountHint: "",
+                        languageCode: languageCode,
+                        subtextKey: "usage.todayTokens.subtextSessions"
+                    )
+                }
+
                 let hasAgyAccountBreakdown = (usage?.agyAccountBreakdown.count ?? 0) > 1
                 tokenDetailAgentRow(
                     label: lang.t("usage.todayTokens.agyPool"),
@@ -1474,7 +1491,9 @@ struct IslandPanelView: View {
                 Spacer()
 
                 Text(TokenCountFormatter.compact(
-                    (usage?.totalTokens ?? 0) + (monitor.dshTotals?.totalTokens ?? 0),
+                    (usage?.totalTokens ?? 0)
+                        + (monitor.dshTotals?.totalTokens ?? 0)
+                        + (monitor.piDesktopTotals?.totalTokens ?? 0),
                     languageCode: languageCode
                 ))
                 .font(.system(size: 12, weight: .bold, design: .monospaced))
@@ -1980,6 +1999,15 @@ private struct IslandSessionRow: View {
 
     private var agentBadge: some View {
         let tint = Color(hex: session.tool.brandColorHex) ?? V6Palette.paper
+        // PI Desktop's brand is near-white; a flat tint opacity disappears
+        // into the island's own text, so its badge uses the paper tokens.
+        let isPiDesktop = session.tool == .piDesktop
+        let badgeFill = isPiDesktop
+            ? IslandDesignPalette.Agent.PiDesktop.fill
+            : tint.opacity(notificationBadgeFillOpacity)
+        let badgeStroke = isPiDesktop
+            ? IslandDesignPalette.Agent.PiDesktop.hairline
+            : tint.opacity(notificationBadgeStrokeOpacity)
         return HStack(spacing: 4) {
             if let icon = AgentBrandIcon.image(for: session.tool) {
                 Image(nsImage: icon)
@@ -1997,8 +2025,8 @@ private struct IslandSessionRow: View {
             .foregroundStyle(tint.opacity(notificationChromeOpacity))
             .padding(.horizontal, 8)
             .padding(.vertical, 3)
-            .background(tint.opacity(notificationBadgeFillOpacity), in: Capsule())
-            .overlay(Capsule().stroke(tint.opacity(notificationBadgeStrokeOpacity), lineWidth: 1))
+            .background(badgeFill, in: Capsule())
+            .overlay(Capsule().stroke(badgeStroke, lineWidth: 1))
     }
 
     private func sideBadge(_ title: String, help: String? = nil) -> some View {

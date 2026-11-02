@@ -57,6 +57,7 @@
 "settings.general.uninstallConfirmAction" = "Uninstall";
 "settings.general.uninstallConfirmMessage.claude" = "This will remove Open Island hooks from Claude Code. You can reinstall them at any time.";
 "settings.general.uninstallConfirmMessage.dsh" = "This removes the Open Island bridge from your DeepSeek Harness profiles. Restart DeepSeek Harness afterwards.";
+"settings.general.uninstallConfirmMessage.piDesktop" = "This removes Open Island's plugin from ~/.pi-desktop/plugins/dev/. PI Desktop keeps running with its own plugins untouched.";
 "settings.general.uninstallConfirmMessage.codex" = "This will remove Open Island hooks from Codex. You can reinstall them at any time.";
 "settings.general.uninstallConfirmMessage.claudeUsage" = "This will remove the Claude usage bridge. You can reinstall it at any time.";
 "settings.general.cancel" = "Cancel";

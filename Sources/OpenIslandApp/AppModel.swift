@@ -80,6 +80,7 @@ final class AppModel {
     let overlay = OverlayUICoordinator()
     let discovery = SessionDiscoveryCoordinator()
     let monitoring = ProcessMonitoringCoordinator()
+    let piDesktopDiscovery = PiDesktopDiscoveryCoordinator()
     let codexAppServer = CodexAppServerCoordinator()
     let updateChecker = UpdateChecker()
     let todayTokenUsageMonitor = TodayTokenUsageMonitor()
@@ -125,6 +126,9 @@ final class AppModel {
     var dshIntegrationInstalled: Bool { hooks.dshIntegrationInstalled }
     var dshIntegrationStatus: DSHIntegrationStatus? { hooks.dshIntegrationStatus }
     var isDSHSetupBusy: Bool { hooks.isDSHSetupBusy }
+    var isPiDesktopSetupBusy: Bool { hooks.isPiDesktopSetupBusy }
+    var piDesktopIntegrationStatus: PiDesktopIntegrationStatus? { hooks.piDesktopIntegrationStatus }
+    var piDesktopIntegrationInstalled: Bool { hooks.piDesktopIntegrationStatus?.isInstalled == true }
     var claudeUsageInstalled: Bool { hooks.claudeUsageInstalled }
     var claudeHookStatusTitle: String { hooks.claudeHookStatusTitle }
     var claudeHookStatusSummary: String { hooks.claudeHookStatusSummary }
@@ -238,6 +242,9 @@ final class AppModel {
         hooks.installDSHIntegration()
     }
     func uninstallDSHIntegration() { hooks.uninstallDSHIntegration() }
+
+    func installPiDesktopIntegration() { hooks.installPiDesktopIntegration() }
+    func uninstallPiDesktopIntegration() { hooks.uninstallPiDesktopIntegration() }
     func installClaudeUsageBridge() { hooks.installClaudeUsageBridge() }
     func uninstallClaudeUsageBridge() { hooks.uninstallClaudeUsageBridge() }
     func updateClaudeConfigDirectory(to newDirectory: URL?) { hooks.updateClaudeConfigDirectory(to: newDirectory) }
@@ -784,6 +791,11 @@ final class AppModel {
         }
         codexAppServer.isSessionTracked = { [weak self] id in
             self?.state.session(id: id) != nil
+        }
+
+        piDesktopDiscovery.stateAccessor = { [weak self] in self?.state ?? SessionState() }
+        piDesktopDiscovery.onEvent = { [weak self] event in
+            self?.applyTrackedEvent(event)
         }
 
         monitoring.syntheticClaudeSessionPrefix = Self.syntheticClaudeSessionPrefix
@@ -1702,6 +1714,11 @@ final class AppModel {
             return
         }
 
+        if case let .piDesktopTodayTokensUpdated(payload) = event {
+            todayTokenUsageMonitor.updatePiDesktopTotals(payload.usage, at: payload.timestamp)
+            return
+        }
+
         if case .sessionHeartbeat = event {
             state.apply(event)
             return
@@ -1764,7 +1781,7 @@ final class AppModel {
                 case let .piSessionMetadataUpdated(p): return p.sessionID
                 case let .sessionHeartbeat(p): return p.sessionID
                 case let .actionableStateResolved(p): return p.sessionID
-                case .dshTodayTokensUpdated: return nil
+                case .dshTodayTokensUpdated, .piDesktopTodayTokensUpdated: return nil
                 }
             }()
             let session = eventSessionID.flatMap { state.session(id: $0) }
@@ -1906,6 +1923,7 @@ final class AppModel {
 
         // Start monitoring in background (requires sessions to be loaded).
         monitoring.startMonitoringIfNeeded()
+        piDesktopDiscovery.start()
         discovery.startConversationTitleRefreshIfNeeded()
     }
 
@@ -2064,6 +2082,8 @@ final class AppModel {
             return "Actionable state resolved for session \(payload.sessionID)."
         case let .dshTodayTokensUpdated(payload):
             return "DSH today tokens updated: \(payload.usage.totalTokens)."
+        case let .piDesktopTodayTokensUpdated(payload):
+            return "PI Desktop today tokens updated: \(payload.usage.totalTokens)."
         }
     }
 

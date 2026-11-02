@@ -44,6 +44,8 @@ final class HookInstallationCoordinator {
     var isCodebuddyHookSetupBusy = false
     var isOpenCodeSetupBusy = false
     var isDSHSetupBusy = false
+    var isPiDesktopSetupBusy = false
+    var piDesktopIntegrationStatus: PiDesktopIntegrationStatus?
     var isCursorHookSetupBusy = false
     var isGeminiHookSetupBusy = false
     var isKimiHookSetupBusy = false
@@ -92,6 +94,7 @@ final class HookInstallationCoordinator {
 
     @ObservationIgnored
     private let dshIntegrationManager = DSHIntegrationManager()
+    private let piDesktopIntegrationManager = PiDesktopIntegrationManager()
 
     @ObservationIgnored
     private let cursorHookInstallationManager = CursorHookInstallationManager()
@@ -778,6 +781,7 @@ final class HookInstallationCoordinator {
             group.addTask { @MainActor [weak self] in
                 guard let self else { return }
                 self.refreshDSHIntegrationStatus()
+                self.refreshPiDesktopIntegrationStatus()
             }
 
             group.addTask { @MainActor [weak self] in
@@ -1597,6 +1601,55 @@ final class HookInstallationCoordinator {
         dshIntegrationStatus = dshIntegrationManager.status()
     }
 
+    func refreshPiDesktopIntegrationStatus() {
+        piDesktopIntegrationStatus = piDesktopIntegrationManager.status()
+    }
+
+    func installPiDesktopIntegration() {
+        guard let pluginData = loadBundledPiDesktopPlugin() else {
+            onStatusMessage?("Could not find the bundled PI Desktop plugin resource.")
+            return
+        }
+
+        isPiDesktopSetupBusy = true
+        onStatusMessage?("Installing PI Desktop bridge.")
+
+        Task { [weak self] in
+            guard let self else { return }
+            defer { self.isPiDesktopSetupBusy = false }
+
+            do {
+                let status = try self.piDesktopIntegrationManager.install(pluginSourceData: pluginData)
+                self.piDesktopIntegrationStatus = status
+                if status.pluginInstalled {
+                    self.onStatusMessage?("PI Desktop bridge installed. Load it once from PI Desktop → Extensions → Load local plugin.")
+                } else {
+                    self.onStatusMessage?("PI Desktop bridge installation incomplete.")
+                }
+            } catch {
+                self.onStatusMessage?("PI Desktop bridge install failed: \(error.localizedDescription)")
+            }
+        }
+    }
+
+    func uninstallPiDesktopIntegration() {
+        isPiDesktopSetupBusy = true
+        onStatusMessage?("Removing PI Desktop bridge.")
+
+        Task { [weak self] in
+            guard let self else { return }
+            defer { self.isPiDesktopSetupBusy = false }
+
+            do {
+                let status = try self.piDesktopIntegrationManager.uninstall()
+                self.piDesktopIntegrationStatus = status
+                self.onStatusMessage?("PI Desktop bridge removed.")
+            } catch {
+                self.onStatusMessage?("PI Desktop bridge removal failed: \(error.localizedDescription)")
+            }
+        }
+    }
+
     func installDSHIntegration() {
         guard let pluginData = loadBundledDSHPlugin() else {
             onStatusMessage?("Could not find the bundled DeepSeek Harness plugin resource.")
@@ -1640,6 +1693,16 @@ final class HookInstallationCoordinator {
                 self.onStatusMessage?("DeepSeek Harness bridge removal failed: \(error.localizedDescription)")
             }
         }
+    }
+
+    private func loadBundledPiDesktopPlugin() -> Data? {
+        if let url = Bundle.appResources.url(forResource: "open-island-pi-desktop", withExtension: "js") {
+            return try? Data(contentsOf: url)
+        }
+        if let url = Bundle.main.url(forResource: "open-island-pi-desktop", withExtension: "js") {
+            return try? Data(contentsOf: url)
+        }
+        return nil
     }
 
     private func loadBundledDSHPlugin() -> Data? {

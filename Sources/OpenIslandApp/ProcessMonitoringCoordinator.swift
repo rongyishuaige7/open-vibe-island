@@ -530,7 +530,7 @@ final class ProcessMonitoringCoordinator {
             payload.sessionID
         case let .actionableStateResolved(payload):
             payload.sessionID
-        case .dshTodayTokensUpdated:
+        case .dshTodayTokensUpdated, .piDesktopTodayTokensUpdated:
             nil
         }
     }
@@ -2123,6 +2123,8 @@ final class ProcessMonitoringCoordinator {
             return "Oh My Pi \(session.id.prefix(8))"
         case .deepSeekHarness:
             return "DSH \(session.id.prefix(8))"
+        case .piDesktop:
+            return "PI Desktop \(session.id.prefix(8))"
         }
     }
 }

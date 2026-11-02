@@ -253,6 +253,9 @@ public struct SessionState: Equatable, Sendable {
         case .dshTodayTokensUpdated:
             return
 
+        case .piDesktopTodayTokensUpdated:
+            return
+
         case let .actionableStateResolved(payload):
             guard var session = sessionsByID[payload.sessionID] else {
                 return

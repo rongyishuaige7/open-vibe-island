@@ -419,6 +419,7 @@ struct SetupSettingsPane: View {
     @State private var confirmingUninstallCodex = false
     @State private var confirmingUninstallOpenCode = false
     @State private var confirmingUninstallDSH = false
+    @State private var confirmingUninstallPiDesktop = false
     @State private var confirmingUninstallQoder = false
     @State private var confirmingUninstallQwenCode = false
     @State private var confirmingUninstallFactory = false
@@ -517,6 +518,26 @@ struct SetupSettingsPane: View {
                         Button(lang.t("settings.general.cancel"), role: .cancel) {}
                     } message: {
                         Text(lang.t("settings.general.uninstallConfirmMessage.dsh"))
+                    }
+                }
+
+                if model.piDesktopIntegrationStatus?.appInstalled == true {
+                    hookRow(
+                        name: "PI Desktop",
+                        installed: model.piDesktopIntegrationInstalled,
+                        busy: model.isPiDesktopSetupBusy,
+                        requiresBinary: false,
+                        configLocationURL: model.piDesktopIntegrationStatus?.pluginPath,
+                        installAction: { model.installPiDesktopIntegration() },
+                        uninstallAction: { confirmingUninstallPiDesktop = true }
+                    )
+                    .alert(lang.t("settings.general.uninstallConfirmTitle"), isPresented: $confirmingUninstallPiDesktop) {
+                        Button(lang.t("settings.general.uninstallConfirmAction"), role: .destructive) {
+                            model.uninstallPiDesktopIntegration()
+                        }
+                        Button(lang.t("settings.general.cancel"), role: .cancel) {}
+                    } message: {
+                        Text(lang.t("settings.general.uninstallConfirmMessage.piDesktop"))
                     }
                 }
 

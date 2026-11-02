@@ -624,6 +624,8 @@ public final class BridgeServer: @unchecked Sendable {
             handlePiHook(payload, from: clientID)
         case let .processDSHHook(payload):
             handleDSHHook(payload, from: clientID)
+        case let .processPiDesktopHook(payload):
+            handlePiDesktopHook(payload, from: clientID)
         }
     }
 
@@ -1465,6 +1467,52 @@ public final class BridgeServer: @unchecked Sendable {
             paneTitle: title,
             workingDirectory: workingDirectory
         )
+    }
+
+    private func handlePiDesktopHook(_ payload: PiDesktopHookPayload, from clientID: UUID) {
+        if let todayTokens = payload.todayTokens {
+            emit(
+                .piDesktopTodayTokensUpdated(
+                    PiDesktopTodayTokensUpdated(usage: todayTokens, timestamp: payload.timestamp)
+                )
+            )
+        }
+
+        switch payload.event {
+        case .snapshot:
+            for snapshot in payload.sessions ?? [] {
+                applyPiDesktopSnapshot(snapshot, timestamp: payload.timestamp)
+            }
+
+        case .sessionStart, .activity, .approval:
+            if let snapshot = payload.session {
+                applyPiDesktopSnapshot(snapshot, timestamp: payload.timestamp)
+            }
+
+        case .sessionEnd:
+            guard let snapshot = payload.session else {
+                send(.response(.acknowledged), to: clientID)
+                return
+            }
+            if localState.session(id: snapshot.sessionID) != nil {
+                emit(
+                    PiDesktopEventMapper.sessionEnded(
+                        sessionID: snapshot.sessionID,
+                        summary: snapshot.summary,
+                        timestamp: payload.timestamp
+                    )
+                )
+            }
+        }
+
+        send(.response(.acknowledged), to: clientID)
+    }
+
+    private func applyPiDesktopSnapshot(_ snapshot: PiDesktopSessionSnapshot, timestamp: Date) {
+        let existing = localState.session(id: snapshot.sessionID)
+        for event in PiDesktopEventMapper.events(for: snapshot, existing: existing, timestamp: timestamp) {
+            emit(event)
+        }
     }
 
     private func handlePiHook(_ payload: PiHookPayload, from clientID: UUID) {

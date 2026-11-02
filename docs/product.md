@@ -34,6 +34,7 @@ CLI coding agents are powerful, but they pull attention away from the editor and
 | **Kimi CLI** | Supported | Hook integration via `~/.kimi/config.toml` `[[hooks]]` (Moonshot AI). Kimi's hook payload is byte-compatible with Claude Code, so runtime reuses the Claude decode path; a dedicated TOML installer preserves user-authored hooks |
 | **Pi** | Supported | Runtime extension at `~/.pi/agent/extensions/open-island.ts`; lifecycle/tool events, session persistence, process detection, and terminal jump metadata |
 | **Oh My Pi (OMP)** | Supported | Runtime extension at `~/.omp/agent/extensions/open-island.ts`; equivalent coverage through OMP lifecycle aliases |
+| **PI Desktop** | Supported | Host integration: read-only polling of `~/.pi-desktop/pi.sqlite` (schema v24) for sessions, current tool, turn state, todos and today tokens; jump activates the app. Its plugin exposes no approval actions, so approvals are display-only |
 
 ## Supported Terminals
 
