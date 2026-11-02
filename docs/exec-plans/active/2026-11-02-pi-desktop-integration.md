@@ -53,7 +53,14 @@ extension，靠 hook 报事件」的模型，而应该走 **DSH 式的宿主集�
 | 用量 API | `pi.usage.listTurns`（`usage.read`）返回每 turn 计数器与会话标题，不含消息体 | 文档 + asar |
 | 桌面控制 | `pi.desktop.listOperations()` / `invoke()`（`desktop.control`，高风险），操作集需运行时枚举 | asar |
 | 事件 | RACP 事件族：`session.created/changed/archived`、`turn.queued/started/completed/interrupted/failed/canceled/activity`、`item.started/delta/completed`、`tool.progress`、`approval.requested/resolved`、`input.requested/resolved`、`terminal.*`、`resync.required` | asar schema |
-| 插件可收事件 | `broadcastEvent` 广播；已确认 `session:turnEnded`、`session:activated`、`session:modelChanged`、`appearance:changed`、`workspace:changed`，其余事件名待 spike | asar |
+| 插件可收事件 | 插件侧只有 3 个 session 事件：`session:activated`、`session:modelChanged`、`session:turnEnded`；另有 `appearance:changed`、`workspace:changed`。实测收到过 `session:activated`（载荷含 `sessionId`/`projectPath`/`activeTurn`）与 `appearance:changed` | asar + 探针日志 |
+| 桌面操作（实测） | `desktop.listOperations()` 只公示 3 个（`app/getVersion`、`app/health`、`app/getOnboarding`），但 `desktop.invoke` 实际还接受 `session/list`、`session/get`、`session/open`；`session/messages`、`approval/*`、`session/turns` 返回 `NOT_FOUND` | 探针日志 |
+| `session/open` 语义 | 参数是**裸字符串** `args: [sessionId]`；成功后返回该会话与消息窗口（`messageStart/End`），即可做会话级聚焦 | 探针日志 |
+| 审批可控性 | `approval/respond`、`approval/pending`、`approval/list` 全部未暴露 → 插件**无法**代用户批准/拒绝 | 探针日志 |
+| `usage.listTurns` | 跨会话返回每 turn 计数与 `sessionId`/`sessionTitle`/`turnId`，可直接用于今日账本 | 探针日志 |
+| `session.read.own` 边界 | 实测 `pi.session.list` 返回 `{"items":[]}`（只能看到插件自己导入的会话） | 探针日志 |
+| 插件热更新 | 改代码保存即热重载（0.2.0 → 0.7.0 全自动）；**扩权限必须显式重载** | 探针日志 |
+| WAL 并发 | 15 s 内 143 次只读查询：`busy=0`，p50 1.4 ms / p95 2.5 ms / max 25 ms | 实测 |
 | 跳转 | **没有 URL scheme**（`CFBundleURLTypes` 不存在），只能激活 app，会话级定位要靠插件或 AX | `Info.plist` |
 | 审批持久化 | 不落库；`audit_log` 只有 `tool_execute` | sqlite |
 | 进程形态 | 主进程 + Electron helpers + `sidecar.js`，**每会话无独立进程**，`ps` 只能看到 `PI-Desktop` | `ps`、Resources |
@@ -64,8 +71,10 @@ extension，靠 hook 报事件」的模型，而应该走 **DSH 式的宿主集�
 1. **进程级发现不可用**。`ActiveAgentProcessDiscovery` 只能在 `piAgentVariant`
    （`binaryName == "pi"`）里识别 CLI，识别不到 PI Desktop；也不需要为它加，
    因为一个 PI Desktop 进程对应 N 个会话。
-2. **插件拿不到会话列表**。`session.read.own` 把 `pi.session.*` 限制在插件自建会话上，
-   所以插件不适合作为主数据源。
+2. **插件读不到会话列表，但能通过桌面操作绕过去**。`pi.session.*` 受 `session.read.own`
+   限制（实测返回空列表）；而 `desktop.invoke("session/list")` 能拿到全部会话 —— 代价是
+   `desktop.control` 这个高风险权限，且该操作**未在 `listOperations()` 里公示**，
+   属于可用但无契约的口子，只能当增强、不能当唯一依赖。
 3. **SQLite 是唯一完整的事实来源**。会话、消息、工具名、turn 状态、token 都在里面，
    且 WAL 持续写入，外部只读连接可看到最新提交。
 
@@ -73,15 +82,16 @@ extension，靠 hook 报事件」的模型，而应该走 **DSH 式的宿主集�
 
 | 方案 | 数据完整度 | 延迟 | 稳定性 | 权限面 | 结论 |
 |---|---|---|---|---|---|
-| A. 纯插件（`pi.events` + `pi.session`） | 低（读不到会话列表） | 高 | 中（事件目录未公开） | 大（`desktop.control` 高风险） | 不可单独成立 |
+| A. 纯插件（`pi.events` + `desktop.invoke`） | 中高（会话列表要靠未公示的 `session/list`） | 高 | 低（操作集未公示，版本间可能变） | 大（`desktop.control` 高风险） | 可作增强，不作主路径 |
 | B. 纯 SQLite 只读轮询 | 高（全字段） | 1–3 s | 中（私有 schema 会漂） | 无（不碰插件权限） | 可独立成立 |
 | C. 混合：B 读 + A 推/控 | 高 | 高 | 高（互为降级） | 中 | **选定** |
 
 混合的边界很清晰：
 
 - **B 负责「事实」**：会话列表、当前工具、turn 状态、token、todo 进度；
-- **A 只负责三件事**：① 事件秒推（省掉 1 s 轮询延迟）；② 审批（若 `desktop.invoke`
-  支持 respond）；③ 会话级聚焦（`focus(sessionId)`）；
+- **A 只负责三件事**：① 事件秒推（省掉 1 s 轮询延迟）；② 会话级聚焦
+  （`desktop.invoke("session/open", [sessionId])`，实测可用）；③ 未来若拿到审批能力再说
+  （当前**确认不可用**，见 §10）；
 - 插件缺失 / 未启用 / 报错 → 自动退回 B-only，功能降级但不报错。
 
 ## 4. 目标架构
@@ -238,34 +248,47 @@ public struct PiDesktopHookPayload: Equatable, Codable, Sendable {
 
 ## 10. 审批与提问的能力边界
 
-事实：`approval.requested/resolved` 只存在于运行时事件流，**不落库**，所以：
+事实（P0 已核实）：
 
-- **只读降级（默认）**：插件把 approval 事件推给岛，岛上显示「需要审批」并展开通知层，
-  但**不给按钮**，文案明确「在 PI Desktop 中处理」。
-- **可写增强（待 spike）**：若 `desktop.listOperations()` 里有 respond 类操作，
-  则开启按钮：点「允许」→ command.sock → 插件 `desktop.invoke` → 回执
-  `approval.resolved` 后清状态。
-- **绝不**做「按钮点了没反应」的假交互。能力探测失败一律降级。
+- `approval.requested/resolved` 只存在于运行时事件流，**不落库**（`audit_log` 只有 `tool_execute`）；
+- `desktop.invoke("approval/respond")`、`"approval/pending"`、`"approval/list"` 全部返回
+  `NOT_FOUND: operation is not exposed` —— **插件没有审批读写能力**；
+- `session:approval*` 之类事件也不在插件事件表里。
+
+因此结论定为**只读降级**，不做按钮：
+
+- 若将来某个版本把 `approval/*` 暴露出来，再按「探测 → 启用按钮」的路径加；
+- 在探测为否时，岛上不显示批准/拒绝按钮，只显示「需要审批（在 PI Desktop 中处理）」；
+- 绝不出现「按钮点了没反应」的假交互。
+
+这条结论会直接影响产品文案：PI Desktop 的审批是**提醒型**，不是**操作型**。
 
 ## 11. 跳回
 
 | 级别 | 手段 | 可用性 |
 |---|---|---|
 | L1 基础 | `NSRunningApplication(bundleIdentifier:)` 激活 app | 一定可用 |
-| L2 会话级 | 插件 `focus(sessionId)`（若 ops 支持 `session/open`） | 取决于 spike |
+| L2 会话级 | `desktop.invoke("session/open", [sessionId])`（**裸字符串**参数，非对象） | **P0 已实测可用**，需 `desktop.control` 权限 |
 | L3 兜底 | AX 遍历窗口选中会话 | 需要辅助功能授权，默认关闭 |
 
-L1 必须实现；L2 有条件实现；L3 只做 Lab 实验开关，不进主路径。
+L1 必须实现（无插件时唯一手段）；L2 在插件已安装并授权时启用，失败自动退回 L1；
+L3 只做 Lab 实验开关，不进主路径。
+
+注意 `session/open` 的参数形状是踩过的坑：传 `{id}` 或 `{sessionId}` 都返回
+`Session not found`，只有 `args: ["<id>"]` 才成功，实现时要在插件里固定这一形状。
 
 ## 12. 安装、发现与设置
 
 - 安装：把插件写到 `~/.pi-desktop/plugins/dev/local.openisland.pi-desktop-bridge/`
-  （`manifest.json` + `main.js`），首次需要用户在 PI Desktop 插件页启用一次。
+  （`manifest.json` + `main.js`），首次需要用户在 PI Desktop「扩展」页点
+  **「加载本地插件」并选中该目录**；加载后会出现在 `registry.json`（`source: "dev"`）。
+- 更新语义（P0 实测）：**改代码保存即热重载**，无需重新选目录；**扩权限必须显式重载**
+  （重载会重新走一次授权）。所以首次安装的权限清单要一次写全，避免二次点击。
 - 状态检测（设置页展示四项）：
   1. PI Desktop 是否安装（`/Applications/PI-Desktop.app`）；
   2. 是否运行（`NSRunningApplication`）；
   3. `pi.sqlite` 是否可读（`PRAGMA user_version` 是否在支持区间）；
-  4. 插件目录是否存在 / 是否在 `registry.json` 里 enabled。
+  4. 插件目录是否存在 / 是否在 `registry.json` 里 enabled / 已授予哪些权限。
 - 卸载：删插件目录 + 删 ledger；不动 PI Desktop 自身配置。
 - 失败文案：区分「未安装」「未运行」「schema 不支持（期望 24，实际 N）」「插件未启用」。
 
@@ -329,7 +352,7 @@ L1 必须实现；L2 有条件实现；L3 只做 Lab 实验开关，不进主路
 
 | 阶段 | 内容 | 验收 | 预估 |
 |---|---|---|---|
-| P0 Spike | 探针插件：打印 `pi.events` 实际收到的事件名/载荷、`desktop.listOperations()`、`usage.listTurns` 返回结构、dev 插件是否自动启用 | 一份 `docs/references/pi-desktop-spike.md` | 0.5 d |
+| P0 Spike | 探针插件：事件目录、桌面操作集、`usage.listTurns` 结构、WAL 并发 | **已完成**，结论见 §2 与 §18 | ✅ |
 | P1 读取层 | `PiDesktopSessionStore` + 单测（临时 DB fixture，含 WAL） | 能从真实库读出 5 个会话、49 个 turn，字段齐全 | 1 d |
 | P2 桥接 | 协议 + reducer + coordinator，先用脚本伪造 payload | 刘海出现 PI Desktop 行，状态随 turn 变化 | 0.5 d |
 | P3 Token | 账本 + 今日卡片 | 与直接 SQL 求和一致（抽样 3 天） | 0.5 d |
@@ -351,20 +374,39 @@ L1 必须实现；L2 有条件实现；L3 只做 Lab 实验开关，不进主路
 
 | 风险 | 影响 | 缓解 |
 |---|---|---|
-| 私有 schema 漂移 | 读不到 / 读错 | 每次读校验 `user_version`；只 SELECT 明确列；失败即降级为「仅显示 app 运行中」 |
-| WAL 并发 | `SQLITE_BUSY` | `READONLY` + `busy_timeout=200ms` + 单条短查询；失败跳过本轮 |
+| 私有 schema 漂移 | 读不到 / 读错 | 每次读校验 `user_version`（当前 24）；只 SELECT 明确列；失败即降级为「仅显示 app 运行中」 |
+| WAL 并发 | `SQLITE_BUSY` | 实测 15 s / 143 次查询 `busy=0`，p50 1.4 ms。仍按 `READONLY` + `busy_timeout=200 ms` + 短查询实现，失败跳过本轮 |
+| 未公示的桌面操作 | `session/list`、`session/open` 在版本升级后可能消失 | 只在插件路径使用，且每次启动做能力探测；失败退回 SQLite 读取 + app 激活 |
+| `session/open` 参数形状反直觉 | 聚焦静默失败 | 固定 `args: ["<id>"]`；有单测覆盖；返回 `NOT_FOUND` 时退回 L1 |
 | 与 pi CLI 会话重复 | 列表里出现两份 | 两套 tool 枚举分开；PI Desktop 只认 `pi.sqlite`，CLI 只认 `~/.pi/agent` |
 | 隐私 | 消息内容进日志/上传 | 只取首行 ≤120 字符，不落盘原文；日志打码；无网络上报（local-first） |
 | 插件权限过大 | `desktop.control` 高风险 | 默认不装插件即可用；装时在设置页显示权限清单 |
 | 事件目录不公开 | 推送失效 | 以 SQLite 为准，事件只是加速；失效不影响正确性 |
 
-## 18. P0 需要回答的问题
+## 18. P0 结论（2026-11-02 实测）
 
-1. `pi.events.on("*")` 收不到通配，如何枚举事件名？（读 asar / 逐个试注册）
-2. `desktop.listOperations()` 的实际操作集（是否有 approve / focus）？
-3. `usage.listTurns` 是否覆盖全部会话（若覆盖，token 可走官方 API，不必读库）？
-4. dev 目录插件是否自动 enable，还是需要用户点一次？
-5. 两个进程同时读同一 WAL 的稳定性（压测 10 分钟）。
+探针：`local.openisland.pi-desktop-probe`（只读，跑完即删），PI Desktop 0.21.0，
+宿主 `protocolVersion 11`。
+
+| 问题 | 结论 |
+|---|---|
+| 插件能收到哪些事件 | 仅 `session:activated`、`session:modelChanged`、`session:turnEnded` + `appearance:changed`、`workspace:changed`；RACP 的 `turn.*`/`tool.progress`/`approval.*` **不广播** |
+| 审批能否代理 | **不能**：`approval/respond`、`approval/pending`、`approval/list` 均 `NOT_FOUND` |
+| 能否读到会话列表 | `pi.session.list` → `{"items":[]}`；`desktop.invoke("session/list")` → 全量（title/modelId/permissionMode/messageCount/updatedAt/source） |
+| 能否会话级聚焦 | **能**：`desktop.invoke("session/open", ["<id>"])`，返回打开的会话与消息窗口 |
+| 会话详情 | `session/get` 接受 `{id}`，返回会话 + 消息窗口 + compaction 信息；`session/messages` 不存在 |
+| token | `usage.listTurns` 跨会话返回 `turnId`/`sessionId`/`sessionTitle`/`inputTokens`/`outputTokens`/`cacheReadTokens`/`reasoningTokens`/时间戳，可直接做账本 |
+| WAL 并发 | 15 s / 143 次只读查询：`busy=0`，p50 1.4 ms，p95 2.5 ms，max 25 ms |
+| 热重载 | 改代码保存即重载；**扩权限必须显式重载** |
+
+仍未验证（不阻塞 P1）：
+
+- `session:turnEnded` 的真实载荷 —— 静态确认存在，探针窗口内没有完成一次 turn；
+- `approval.requested` 的运行时形状 —— 同上；
+- `session_todo` 的更新时机 —— 表里有 8 行，未观察到变更；
+- `activeTurn` 字段在真正运行 turn 时的取值。
+
+P1 起以 SQLite 为事实源，事件仅作加速，因此这些空项不会阻塞主线。
 
 ## 19. 文档与发布
 
