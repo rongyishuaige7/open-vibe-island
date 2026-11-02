@@ -50,7 +50,7 @@ Open Island 驻留在 Mac 的**刘海区域**（或顶部栏），为你的 AI c
 
 ## 支持的 Agents 和终端
 
-**13 个 Agents**：Claude Code、Codex、Cursor、Gemini CLI、Grok Build、Kimi CLI、OpenCode、Pi、Oh My Pi、Qoder、Qwen Code、Factory、CodeBuddy
+**15 个 Agents**：Claude Code、Codex、Cursor、DeepSeek Harness、Gemini CLI、Grok Build、Kimi CLI、OpenCode、Pi、PI Desktop、Oh My Pi、Qoder、Qwen Code、Factory、CodeBuddy
 
 **15+ 终端和 IDE**：Terminal.app、Ghostty、iTerm2、WezTerm、Zellij、tmux、cmux、Kaku、VS Code、Cursor、Windsurf、Trae、Zed、JetBrains 全家桶（IDEA、WebStorm、PyCharm、GoLand、CLion、RubyMine、PhpStorm、Rider、RustRover）
 
@@ -62,9 +62,11 @@ Open Island 驻留在 Mac 的**刘海区域**（或顶部栏），为你的 AI c
 | Agent | 状态 | 说明 |
 |---|---|---|
 | **Claude Code** | 已支持 | Hook 集成、JSONL 会话发现、status line bridge、用量追踪 |
+| **Claude Code 桌面 App** | 已支持 | 与 CLI 相同的 hooks；桌面版以无 TTY 子进程运行，`ps`/`lsof` 看不到，因此存活判断跟随桌面 App，跳转激活 Claude。用量面板为账号级，需要 CLI 的 status line 偶尔刷新 |
 | **Codex**（CLI） | 已支持 | Hook 集成（默认 SessionStart、UserPromptSubmit、Stop；PreToolUse/PostToolUse 可解析但非默认安装）、用量追踪 |
 | **Codex 桌面 App** | 已支持 | Hook 集成 + app-server JSON-RPC 直连，实时获取 thread/turn 生命周期。点击 session 通过 `codex://threads/<id>` 精确跳转到对应会话 |
 | **OpenCode** | 已支持 | JS 插件集成、权限/问答交互、进程检测 |
+| **DeepSeek Harness** | 已支持 | 宿主插件写入 DSH profile 的 `cordis.patch.yml`；会话生命周期 + 今日 token 账本；跳转激活 DSH。审批/问答为只读展示 |
 | **Qoder** | 已支持 | Claude Code 分支——相同 hook 格式，配置位于 `~/.qoder/settings.json` |
 | **Qwen Code** | 已支持 | Claude Code 分支——相同 hook 格式，配置位于 `~/.qwen/settings.json` |
 | **Factory** | 已支持 | Claude Code 分支——相同 hook 格式，配置位于 `~/.factory/settings.json` |
@@ -74,6 +76,7 @@ Open Island 驻留在 Mac 的**刘海区域**（或顶部栏），为你的 AI c
 | **Kimi CLI** | 已支持 | Hook 集成，通过 `~/.kimi/config.toml` 的 `[[hooks]]` 数组配置，会话追踪，复用 Claude payload 协议 |
 | **Grok Build** | 已支持 | Hook 集成，写入 `~/.grok/hooks/open-island.json`，会话追踪与终端跳回，fire-and-forget 事件（暂无权限拦截；camelCase payload） |
 | **Pi** | 已支持 | TypeScript 扩展，位于 `~/.pi/agent/extensions/open-island.ts`，会话/提示词/工具/完成事件追踪，进程检测，会话持久化，终端跳转 |
+| **PI Desktop** | 已支持 | 宿主集成：只读轮询 `~/.pi-desktop/pi.sqlite`，读取会话名、当前工具、turn 状态、todo 进度与今日 token。跳转先激活 app，装了可选插件后可精确聚焦到具体会话。审批只读——PI Desktop 未向插件开放审批操作 |
 | **Oh My Pi (OMP)** | 已支持 | TypeScript 扩展，位于 `~/.omp/agent/extensions/open-island.ts`，同等生命周期覆盖，适配 OMP 事件别名 |
 
 ### 终端和 IDE
@@ -272,6 +275,7 @@ AI coding 正在成为日常开发流程的一部分，但围绕它的控制层�
 - **Codex 桌面 App** — 通过 `__CFBundleIdentifier` 识别；hook session 标记为 `isCodexAppSession`，生命周期由 `NSWorkspace.shared.runningApplications` 判断（而不是每轮对话后退出的 CLI 子进程）。除 hook 外，Open Island 还会启动自己的 `codex app-server` 子进程，通过 stdio JSON-RPC 接收实时的 `thread/started`、`turn/started`、`turn/completed`、`thread/closed` 通知。点击 session 会通过 `codex://threads/<id>` URL scheme 精确打开对应对话。
 - **Claude Code** — 基于 hook 的集成，通过 `~/.claude/settings.json` 配置。从 `~/.claude/projects/` JSONL transcript 自动发现会话。跨应用启动持久化和恢复会话。受管 status line bridge，opt-in 安装。读取缓存的 5 小时和 7 天 usage windows。
 - **OpenCode** — JS 插件集成，通过 `~/.config/opencode/plugins/`。首次启动自动安装插件。接收会话生命周期、工具使用、权限和问答事件。支持权限审批和问答交互。通过 `ps` 进行进程检测。
+- **PI Desktop** — Electron 应用，所有会话共用一个进程，进程发现看不到；插件 API 的 `session.read.own` 也读不到用户会话。Open Island 以只读方式轮询它的 WAL SQLite（带 `user_version` schema 门禁），映射会话、标题、当前工具、running/completed、todo 进度与每 turn token。跳转先激活 app，装在 `~/.pi-desktop/plugins/dev/` 的可选插件通过 `desktop.invoke("session/open", [id])` 聚焦到具体会话。PI Desktop 未暴露审批操作，权限卡片只读。
 - **Qoder** — Claude Code 分支。相同 hook 格式和事件，配置位于 `~/.qoder/settings.json`。使用 `--source qoder` 调用 hooks binary。
 - **Qwen Code** — Claude Code 分支。相同 hook 格式和事件，配置位于 `~/.qwen/settings.json`。使用 `--source qwen` 调用 hooks binary。
 - **Factory** — Claude Code 分支。相同 hook 格式和事件，配置位于 `~/.factory/settings.json`。使用 `--source factory` 调用 hooks binary。
