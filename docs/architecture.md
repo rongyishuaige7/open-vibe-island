@@ -31,10 +31,15 @@ OpenIslandHooks CLI
 Agent
 ```
 
-### Plugin-based agents (OpenCode)
+### Plugin-based agents (OpenCode, DeepSeek Harness)
 
 ```
 OpenCode → JS plugin (~/.config/opencode/plugins/) → Unix socket → BridgeServer → AppModel → UI
+
+DeepSeek Harness → Host plugin (profile cordis.patch.yml) → Unix socket → BridgeServer → AppModel → UI
+                  ├ session/created, session/event, session/disposed
+                  ├ tokenUsage projection → local-day ledger
+                  └ 10s snapshot (liveness + late-launch catch-up)
 ```
 
 ### Session discovery (on launch)

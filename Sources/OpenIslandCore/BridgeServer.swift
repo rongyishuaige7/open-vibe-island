@@ -9,6 +9,10 @@ public final class BridgeServer: @unchecked Sendable {
         let readSource: DispatchSourceRead
         var role: BridgeClientRole?
         var buffer = Data()
+        /// `.event` envelopes written to this client since it connected. An
+        /// observer counts the events it receives the same way, so the two
+        /// counts name the same position in the stream.
+        var sentEventCount = 0
     }
 
     private struct PendingApproval {
@@ -83,12 +87,18 @@ public final class BridgeServer: @unchecked Sendable {
     /// Tracks the portion of each live Claude transcript already inspected for
     /// terminal background-agent task notifications.
     private var claudeTranscriptCursors: [String: ClaudeTranscriptCursor] = [:]
-    private var stateSnapshot = SessionState()
-    /// Local working state: tracks sessions emitted by this server between
-    /// snapshot pushes from AppModel. This is NOT a duplicate of AppModel's
-    /// state — it only contains sessions created via bridge hooks and is
-    /// overwritten whenever AppModel pushes a fresh snapshot.
+    /// Local working state: AppModel's latest snapshot plus the events this
+    /// server emitted that the snapshot does not cover yet.
     private var localState = SessionState()
+    /// The client that registered as observer (AppModel), whose snapshots
+    /// report how many of its events they include.
+    private var observerClientID: UUID?
+    /// Events sent to the observer that its latest snapshot did not cover,
+    /// with their 1-based position in that client's event stream.
+    private var unacknowledgedObserverEvents: [(index: Int, event: AgentEvent)] = []
+    /// A cap for an observer that stops reporting; past it the oldest events
+    /// stop being replayed, which is how every snapshot behaved before.
+    static let maxUnacknowledgedObserverEvents = 512
 
     public init(
         socketURL: URL = BridgeSocketLocation.defaultURL
@@ -123,7 +133,16 @@ public final class BridgeServer: @unchecked Sendable {
     private func bindListener(at url: URL) throws -> Listener {
         let parentURL = url.deletingLastPathComponent()
         try FileManager.default.createDirectory(at: parentURL, withIntermediateDirectories: true)
-        try? FileManager.default.removeItem(at: url)
+
+        // Never unlink a socket another instance is actively serving: that
+        // would leave the old process listening on an orphaned inode while
+        // new hooks silently connect to this process.
+        if FileManager.default.fileExists(atPath: url.path) {
+            if Self.isSocketAcceptingConnections(at: url) {
+                throw BridgeTransportError.bridgeAlreadyRunning(url.path)
+            }
+            try? FileManager.default.removeItem(at: url)
+        }
 
         let fd = socket(AF_UNIX, SOCK_STREAM, 0)
         guard fd != -1 else {
@@ -168,6 +187,74 @@ public final class BridgeServer: @unchecked Sendable {
         return Listener(fileDescriptor: fd, acceptSource: source, socketURL: url)
     }
 
+    /// Best-effort probe used before reclaiming an existing socket path.
+    /// A stale socket refuses the connection immediately; a live listener
+    /// accepts it. Ambiguous in-progress connects are treated as live so we
+    /// never unlink a socket that may still be in use.
+    private static func isSocketAcceptingConnections(at url: URL) -> Bool {
+        let descriptor = socket(AF_UNIX, SOCK_STREAM, 0)
+        guard descriptor >= 0 else {
+            return false
+        }
+        defer { close(descriptor) }
+
+        do {
+            try makeSocketNonBlocking(descriptor)
+        } catch {
+            return false
+        }
+
+        var isAccepting = false
+
+        do {
+            try withUnixSocketAddress(path: url.path) { address, length in
+                if Darwin.connect(descriptor, address, length) == 0 {
+                    isAccepting = true
+                    return
+                }
+
+                guard errno == EINPROGRESS || errno == EAGAIN || errno == EALREADY else {
+                    return
+                }
+
+                var pollDescriptor = pollfd(
+                    fd: descriptor,
+                    events: Int16(POLLOUT),
+                    revents: 0
+                )
+                let pollResult = poll(&pollDescriptor, 1, 250)
+
+                // A timeout is ambiguous. Prefer refusing to unlink over
+                // stealing a socket from a busy or wedged listener.
+                if pollResult == 0 {
+                    isAccepting = true
+                    return
+                }
+                guard pollResult > 0 else {
+                    return
+                }
+
+                var socketError: Int32 = 0
+                var errorLength = socklen_t(MemoryLayout<Int32>.size)
+                guard getsockopt(
+                    descriptor,
+                    SOL_SOCKET,
+                    SO_ERROR,
+                    &socketError,
+                    &errorLength
+                ) == 0, socketError == 0 else {
+                    return
+                }
+
+                isAccepting = true
+            }
+        } catch {
+            return false
+        }
+
+        return isAccepting
+    }
+
     public func stop() {
         if DispatchQueue.getSpecific(key: queueKey) != nil {
             stopLocked()
@@ -178,12 +265,39 @@ public final class BridgeServer: @unchecked Sendable {
         }
     }
 
-    /// Pushes the authoritative session state from AppModel so BridgeServer
-    /// can read session data without maintaining its own copy.
-    public func updateStateSnapshot(_ snapshot: SessionState) {
+    /// Pushes the authoritative session state from AppModel.
+    ///
+    /// Events reach AppModel over the observer socket, so a snapshot usually
+    /// lags what this server already emitted: replacing `localState` with it
+    /// outright would drop those events until AppModel catches up, and a
+    /// hook arriving in between would act on the stale state (a duplicate
+    /// `sessionStarted` resets the session it re-creates). So the snapshot
+    /// replaces the state, then the observer's events it does not cover are
+    /// replayed on top.
+    ///
+    /// - Parameter appliedObserverEvents: how many events AppModel's current
+    ///   observer connection had applied when it took the snapshot. Nil
+    ///   replaces the state outright and forgets pending events.
+    public func updateStateSnapshot(_ snapshot: SessionState, appliedObserverEvents: Int? = nil) {
         queue.async { [self] in
-            stateSnapshot = snapshot
-            localState = snapshot
+            applyStateSnapshot(snapshot, appliedObserverEvents: appliedObserverEvents)
+        }
+    }
+
+    private func applyStateSnapshot(_ snapshot: SessionState, appliedObserverEvents: Int?) {
+        localState = snapshot
+        guard let applied = appliedObserverEvents,
+              let observerClientID,
+              let observer = clients[observerClientID],
+              applied <= observer.sentEventCount else {
+            // No observer to match the count against, or a count from another
+            // connection: nothing can be replayed safely.
+            unacknowledgedObserverEvents.removeAll()
+            return
+        }
+        unacknowledgedObserverEvents.removeAll { $0.index <= applied }
+        for pending in unacknowledgedObserverEvents {
+            localState.apply(pending.event)
         }
     }
 
@@ -195,6 +309,8 @@ public final class BridgeServer: @unchecked Sendable {
         pendingTaskCreations.removeAll()
         pendingOpenCodeInteractions.removeAll()
         pendingCursorInteractions.removeAll()
+        observerClientID = nil
+        unacknowledgedObserverEvents.removeAll()
 
         let activeConnections = Array(clients.values)
         activeConnections.forEach { $0.readSource.cancel() }
@@ -317,6 +433,12 @@ public final class BridgeServer: @unchecked Sendable {
 
             client.role = role
             clients[clientID] = client
+            if role == .observer {
+                // Events sent before registration still count toward the
+                // index; only those sent from here on can be replayed.
+                observerClientID = clientID
+                unacknowledgedObserverEvents.removeAll()
+            }
             send(.response(.acknowledged), to: clientID)
 
         case let .requestQuestion(sessionID, prompt):
@@ -384,6 +506,15 @@ public final class BridgeServer: @unchecked Sendable {
                 )
 
                 send(.response(.cursorHookDirective(directive)), to: interaction.clientID)
+                emit(
+                    .actionableStateResolved(
+                        ActionableStateResolved(
+                            sessionID: sessionID,
+                            summary: summary,
+                            timestamp: .now
+                        )
+                    )
+                )
                 send(.response(.acknowledged), to: clientID)
                 return
             }
@@ -433,6 +564,15 @@ public final class BridgeServer: @unchecked Sendable {
                     )
             )])
             resolvePendingApproval(sessionID: sessionID, resolution: resolution)
+            emit(
+                .actionableStateResolved(
+                    ActionableStateResolved(
+                        sessionID: sessionID,
+                        summary: resolution.isApproved ? approvedSummary : deniedSummary,
+                        timestamp: .now
+                    )
+                )
+            )
             send(.response(.acknowledged), to: clientID)
 
         case let .answerQuestion(sessionID, response):
@@ -482,6 +622,8 @@ public final class BridgeServer: @unchecked Sendable {
             handleGrokHook(payload, from: clientID)
         case let .processPiHook(payload):
             handlePiHook(payload, from: clientID)
+        case let .processDSHHook(payload):
+            handleDSHHook(payload, from: clientID)
         }
     }
 
@@ -1189,6 +1331,140 @@ public final class BridgeServer: @unchecked Sendable {
             )
             send(.response(.acknowledged), to: clientID)
         }
+    }
+
+    private static let dshSessionPrefix = "dsh:"
+
+    private func dshSessionID(_ rawSessionID: String) -> String {
+        Self.dshSessionPrefix + rawSessionID
+    }
+
+    private func handleDSHHook(_ payload: DSHHookPayload, from clientID: UUID) {
+        if let todayTokens = payload.todayTokens {
+            emit(
+                .dshTodayTokensUpdated(
+                    DSHTodayTokensUpdated(usage: todayTokens, timestamp: payload.timestamp)
+                )
+            )
+        }
+
+        switch payload.event {
+        case .snapshot:
+            for snapshot in payload.sessions ?? [] {
+                applyDSHSnapshot(snapshot, timestamp: payload.timestamp)
+            }
+
+        case .sessionStart, .activity:
+            if let snapshot = payload.session {
+                applyDSHSnapshot(snapshot, timestamp: payload.timestamp)
+            }
+
+        case .sessionEnd:
+            guard let snapshot = payload.session else {
+                send(.response(.acknowledged), to: clientID)
+                return
+            }
+
+            let sessionID = dshSessionID(snapshot.sessionID)
+            if localState.session(id: sessionID) != nil {
+                emit(
+                    .sessionCompleted(
+                        SessionCompleted(
+                            sessionID: sessionID,
+                            summary: snapshot.summary ?? "DeepSeek Harness session ended.",
+                            timestamp: payload.timestamp,
+                            isSessionEnd: true
+                        )
+                    )
+                )
+            }
+        }
+
+        send(.response(.acknowledged), to: clientID)
+    }
+
+    private func applyDSHSnapshot(_ snapshot: DSHSessionSnapshot, timestamp: Date) {
+        let sessionID = dshSessionID(snapshot.sessionID)
+        let title = dshTitle(for: snapshot)
+        let trimmedConversationTitle = snapshot.title?
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        let conversationTitle = (trimmedConversationTitle?.isEmpty == false)
+            ? trimmedConversationTitle
+            : nil
+        let summary = snapshot.summary?.trimmingCharacters(in: .whitespacesAndNewlines)
+        let resolvedSummary = (summary?.isEmpty == false ? summary : nil)
+            ?? (snapshot.phase == .completed ? "DeepSeek Harness finished the turn." : "DeepSeek Harness is working.")
+        let jumpTarget = dshJumpTarget(for: snapshot, title: title)
+
+        let existing = localState.session(id: sessionID)
+        if existing == nil
+            || existing?.title != title
+            || existing?.conversationTitle != conversationTitle {
+            emit(
+                .sessionStarted(
+                    SessionStarted(
+                        sessionID: sessionID,
+                        title: title,
+                        conversationTitle: conversationTitle,
+                        tool: .deepSeekHarness,
+                        origin: .live,
+                        initialPhase: snapshot.phase,
+                        summary: resolvedSummary,
+                        timestamp: timestamp,
+                        jumpTarget: jumpTarget
+                    )
+                )
+            )
+        } else {
+            emit(
+                .activityUpdated(
+                    SessionActivityUpdated(
+                        sessionID: sessionID,
+                        summary: resolvedSummary,
+                        phase: snapshot.phase,
+                        timestamp: timestamp
+                    )
+                )
+            )
+        }
+
+        // The snapshot cadence owns liveness. `completed` is a turn state,
+        // not a session end, so it must keep heartbeating until DSH disposes
+        // the session (or the plugin stops reporting it).
+        emit(
+            .sessionHeartbeat(
+                SessionHeartbeat(sessionID: sessionID, timestamp: timestamp)
+            )
+        )
+    }
+
+    private func dshTitle(for snapshot: DSHSessionSnapshot) -> String {
+        if let title = snapshot.title?.trimmingCharacters(in: .whitespacesAndNewlines), !title.isEmpty {
+            return title
+        }
+        if let workspace = snapshot.workspaceName?.trimmingCharacters(in: .whitespacesAndNewlines), !workspace.isEmpty {
+            return "DeepSeek Harness · \(workspace)"
+        }
+        if let cwd = snapshot.cwd, !cwd.isEmpty {
+            let name = URL(fileURLWithPath: cwd).lastPathComponent
+            if !name.isEmpty {
+                return "DeepSeek Harness · \(name)"
+            }
+        }
+        return "DeepSeek Harness"
+    }
+
+    private func dshJumpTarget(for snapshot: DSHSessionSnapshot, title: String) -> JumpTarget {
+        let workingDirectory = snapshot.cwd
+        let workspaceName = snapshot.workspaceName
+            ?? workingDirectory.map { URL(fileURLWithPath: $0).lastPathComponent }
+            ?? "DSH"
+        return JumpTarget(
+            terminalApp: "DeepSeek Harness",
+            workspaceName: workspaceName,
+            paneTitle: title,
+            workingDirectory: workingDirectory
+        )
     }
 
     private func handlePiHook(_ payload: PiHookPayload, from clientID: UUID) {
@@ -2215,6 +2491,15 @@ public final class BridgeServer: @unchecked Sendable {
         )
 
         send(.response(.openCodeHookDirective(directive)), to: pendingInteraction.clientID)
+        emit(
+            .actionableStateResolved(
+                ActionableStateResolved(
+                    sessionID: sessionID,
+                    summary: summary,
+                    timestamp: .now
+                )
+            )
+        )
     }
 
     private func resolvePendingOpenCodeQuestion(
@@ -2244,6 +2529,15 @@ public final class BridgeServer: @unchecked Sendable {
         send(
             .response(.openCodeHookDirective(.answer(text: answerText))),
             to: pendingInteraction.clientID
+        )
+        emit(
+            .actionableStateResolved(
+                ActionableStateResolved(
+                    sessionID: sessionID,
+                    summary: summary,
+                    timestamp: .now
+                )
+            )
         )
     }
 
@@ -2478,7 +2772,8 @@ public final class BridgeServer: @unchecked Sendable {
                 existing: existing?.currentCommandPreview,
                 update: update.currentCommandPreview,
                 hookEventName: hookEventName
-            )
+            ),
+            model: update.model ?? existing?.model
         )
     }
 
@@ -2732,6 +3027,15 @@ public final class BridgeServer: @unchecked Sendable {
                 agentDescriptionCount: pendingAgentDescriptions.count,
                 taskCreationCount: pendingTaskCreations.count
             )
+        }
+    }
+
+    /// Test-only accessor: `.event` envelopes sent to the observer, and how
+    /// many of them still wait for a snapshot that covers them.
+    func observerEventCountsForTests() -> (sent: Int, unacknowledged: Int) {
+        queue.sync {
+            let sent = observerClientID.flatMap { clients[$0]?.sentEventCount } ?? 0
+            return (sent, unacknowledgedObserverEvents.count)
         }
     }
 
@@ -3009,6 +3313,15 @@ public final class BridgeServer: @unchecked Sendable {
         )
 
         send(.response(.claudeHookDirective(directive)), to: pendingInteraction.clientID)
+        emit(
+            .actionableStateResolved(
+                ActionableStateResolved(
+                    sessionID: sessionID,
+                    summary: summary,
+                    timestamp: .now
+                )
+            )
+        )
     }
 
     private func resolvePendingClaudeQuestion(
@@ -3050,6 +3363,15 @@ public final class BridgeServer: @unchecked Sendable {
                 )
             ),
             to: pendingInteraction.clientID
+        )
+        emit(
+            .actionableStateResolved(
+                ActionableStateResolved(
+                    sessionID: sessionID,
+                    summary: summary,
+                    timestamp: .now
+                )
+            )
         )
     }
 
@@ -3125,6 +3447,17 @@ public final class BridgeServer: @unchecked Sendable {
             try writeAll(data, to: client.fileDescriptor)
         } catch {
             removeClient(clientID)
+            return
+        }
+
+        guard case let .event(event) = envelope else { return }
+        let index = client.sentEventCount + 1
+        clients[clientID]?.sentEventCount = index
+        if clientID == observerClientID {
+            unacknowledgedObserverEvents.append((index: index, event: event))
+            if unacknowledgedObserverEvents.count > Self.maxUnacknowledgedObserverEvents {
+                unacknowledgedObserverEvents.removeFirst()
+            }
         }
     }
 
@@ -3141,6 +3474,10 @@ public final class BridgeServer: @unchecked Sendable {
     private func removeClient(_ clientID: UUID) {
         guard let client = clients.removeValue(forKey: clientID) else {
             return
+        }
+        if clientID == observerClientID {
+            observerClientID = nil
+            unacknowledgedObserverEvents.removeAll()
         }
 
         let pendingSessionIDs = pendingApprovals.compactMap { entry -> String? in

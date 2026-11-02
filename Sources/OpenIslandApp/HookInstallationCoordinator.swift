@@ -25,6 +25,7 @@ final class HookInstallationCoordinator {
     var factoryHookStatus: ClaudeHookInstallationStatus?
     var codebuddyHookStatus: ClaudeHookInstallationStatus?
     var openCodePluginStatus: OpenCodePluginInstallationStatus?
+    var dshIntegrationStatus: DSHIntegrationStatus?
     var cursorHookStatus: CursorHookInstallationStatus?
     var geminiHookStatus: GeminiHookInstallationStatus?
     var kimiHookStatus: KimiHookInstallationStatus?
@@ -42,6 +43,7 @@ final class HookInstallationCoordinator {
     var isFactoryHookSetupBusy = false
     var isCodebuddyHookSetupBusy = false
     var isOpenCodeSetupBusy = false
+    var isDSHSetupBusy = false
     var isCursorHookSetupBusy = false
     var isGeminiHookSetupBusy = false
     var isKimiHookSetupBusy = false
@@ -87,6 +89,9 @@ final class HookInstallationCoordinator {
 
     @ObservationIgnored
     private let openCodePluginInstallationManager = OpenCodePluginInstallationManager()
+
+    @ObservationIgnored
+    private let dshIntegrationManager = DSHIntegrationManager()
 
     @ObservationIgnored
     private let cursorHookInstallationManager = CursorHookInstallationManager()
@@ -150,6 +155,10 @@ final class HookInstallationCoordinator {
 
     var openCodePluginInstalled: Bool {
         openCodePluginStatus?.isInstalled == true
+    }
+
+    var dshIntegrationInstalled: Bool {
+        dshIntegrationStatus?.isInstalled == true
     }
 
     var cursorHooksInstalled: Bool {
@@ -707,8 +716,12 @@ final class HookInstallationCoordinator {
                 guard let self else { return }
                 do {
                     let usageState = try self.readClaudeUsageState(repairManagedBridgeIfNeeded: true)
-                    self.claudeStatusLineStatus = usageState.status
-                    self.claudeUsageSnapshot = usageState.snapshot
+                    if self.claudeStatusLineStatus != usageState.status {
+                        self.claudeStatusLineStatus = usageState.status
+                    }
+                    if self.claudeUsageSnapshot != usageState.snapshot {
+                        self.claudeUsageSnapshot = usageState.snapshot
+                    }
                 } catch {
                     self.onStatusMessage?("Failed to read Claude usage state: \(error.localizedDescription)")
                 }
@@ -760,6 +773,11 @@ final class HookInstallationCoordinator {
                 } catch {
                     self.onStatusMessage?("Failed to read Grok hook status: \(error.localizedDescription)")
                 }
+            }
+
+            group.addTask { @MainActor [weak self] in
+                guard let self else { return }
+                self.refreshDSHIntegrationStatus()
             }
 
             group.addTask { @MainActor [weak self] in
@@ -877,8 +895,12 @@ final class HookInstallationCoordinator {
                     let snapshot = try ClaudeUsageLoader.load()
                     return (status: status, snapshot: snapshot, repairedManagedBridge: repairedManagedBridge)
                 }.value
-                self.claudeStatusLineStatus = usageState.status
-                self.claudeUsageSnapshot = usageState.snapshot
+                if self.claudeStatusLineStatus != usageState.status {
+                    self.claudeStatusLineStatus = usageState.status
+                }
+                if self.claudeUsageSnapshot != usageState.snapshot {
+                    self.claudeUsageSnapshot = usageState.snapshot
+                }
                 if usageState.repairedManagedBridge {
                     self.onStatusMessage?("Recovered the Claude usage bridge after repairing a missing managed script.")
                 }
@@ -896,9 +918,31 @@ final class HookInstallationCoordinator {
                 let snapshot = try await Task.detached(priority: .utility) {
                     try CodexUsageLoader.load()
                 }.value
-                self.codexUsageSnapshot = snapshot
+                if self.codexUsageSnapshot != snapshot {
+                    self.codexUsageSnapshot = snapshot
+                }
             } catch {
                 self.onStatusMessage?("Failed to read Codex usage state: \(error.localizedDescription)")
+            }
+        }
+    }
+
+    /// KEEPER's database changed. Re-reads only KEEPER's Codex rate limits:
+    /// the rollout scan in `refreshCodexUsageState` stays on its 120 s
+    /// cadence. Keeps whichever snapshot is newer, as `CodexUsageLoader.load`
+    /// does.
+    func refreshCodexRateLimitsFromKeeper() {
+        Task { [weak self] in
+            let keeper = try? await Task.detached(priority: .utility) {
+                try KeeperUsageReader.loadCodexRateLimits()
+            }.value
+            guard let self, let keeper, !keeper.isEmpty else { return }
+            if let current = self.codexUsageSnapshot, !current.isEmpty,
+               (current.capturedAt ?? .distantPast) > (keeper.capturedAt ?? .distantPast) {
+                return
+            }
+            if self.codexUsageSnapshot != keeper {
+                self.codexUsageSnapshot = keeper
             }
         }
     }
@@ -1547,6 +1591,65 @@ final class HookInstallationCoordinator {
                 self.onStatusMessage?("Claude usage bridge update failed: \(error.localizedDescription)")
             }
         }
+    }
+
+    func refreshDSHIntegrationStatus() {
+        dshIntegrationStatus = dshIntegrationManager.status()
+    }
+
+    func installDSHIntegration() {
+        guard let pluginData = loadBundledDSHPlugin() else {
+            onStatusMessage?("Could not find the bundled DeepSeek Harness plugin resource.")
+            return
+        }
+
+        isDSHSetupBusy = true
+        onStatusMessage?("Installing DeepSeek Harness bridge.")
+
+        Task { [weak self] in
+            guard let self else { return }
+            defer { self.isDSHSetupBusy = false }
+
+            do {
+                let status = try self.dshIntegrationManager.install(pluginSourceData: pluginData)
+                self.dshIntegrationStatus = status
+                if status.isInstalled {
+                    self.onStatusMessage?("DeepSeek Harness bridge installed. Restart DeepSeek Harness to activate.")
+                } else {
+                    self.onStatusMessage?("DeepSeek Harness bridge installation incomplete.")
+                }
+            } catch {
+                self.onStatusMessage?("DeepSeek Harness bridge install failed: \(error.localizedDescription)")
+            }
+        }
+    }
+
+    func uninstallDSHIntegration() {
+        isDSHSetupBusy = true
+        onStatusMessage?("Removing DeepSeek Harness bridge.")
+
+        Task { [weak self] in
+            guard let self else { return }
+            defer { self.isDSHSetupBusy = false }
+
+            do {
+                let status = try self.dshIntegrationManager.uninstall()
+                self.dshIntegrationStatus = status
+                self.onStatusMessage?("DeepSeek Harness bridge removed. Restart DeepSeek Harness to complete.")
+            } catch {
+                self.onStatusMessage?("DeepSeek Harness bridge removal failed: \(error.localizedDescription)")
+            }
+        }
+    }
+
+    private func loadBundledDSHPlugin() -> Data? {
+        if let url = Bundle.appResources.url(forResource: "open-island-dsh", withExtension: "mjs") {
+            return try? Data(contentsOf: url)
+        }
+        if let url = Bundle.main.url(forResource: "open-island-dsh", withExtension: "mjs") {
+            return try? Data(contentsOf: url)
+        }
+        return nil
     }
 
     private func loadBundledOpenCodePlugin() -> Data? {

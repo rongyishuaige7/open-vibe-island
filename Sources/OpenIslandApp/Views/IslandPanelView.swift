@@ -106,6 +106,13 @@ struct IslandPanelView: View {
 
     @State private var isHovering = false
     @State private var showingQuitConfirmation = false
+    @State private var showingTokenDetailPopover = false
+    /// AGY multi-account detail starts collapsed so the token card fits inside
+    /// the island; the AGY Pool row itself toggles this.
+    @State private var isAgyAccountBreakdownExpanded = false
+    /// Set while the pointer that opened the token popover by hovering is
+    /// still on the chip, so a click there keeps it open instead of closing it.
+    @State private var tokenPopoverOpenedByHover = false
     @State private var keepsOpenedSurfaceMounted = false
     @State private var openedSurfaceMountGeneration: UInt64 = 0
 
@@ -191,6 +198,10 @@ struct IslandPanelView: View {
             syncOpenedSurfaceMount(with: model.notchStatus, immediate: true)
         }
         .onChange(of: model.notchStatus) { _, status in
+            if status != .opened {
+                showingTokenDetailPopover = false
+                isAgyAccountBreakdownExpanded = false
+            }
             syncOpenedSurfaceMount(with: status)
         }
     }
@@ -338,16 +349,43 @@ struct IslandPanelView: View {
 
     @ViewBuilder
     private func openedSurfaceContent(width openedWidth: CGFloat, height openedHeight: CGFloat) -> some View {
-        VStack(spacing: 0) {
-            openedHeaderContent
-                .frame(height: closedNotchHeight)
+        ZStack(alignment: .topLeading) {
+            VStack(spacing: 0) {
+                openedHeaderContent
+                    .frame(height: closedNotchHeight)
 
-            openedContent
-                .frame(width: openedWidth)
-                .frame(maxHeight: max(0, openedHeight - closedNotchHeight), alignment: .top)
-                .clipped()
+                openedContent
+                    .frame(width: openedWidth)
+                    .frame(maxHeight: max(0, openedHeight - closedNotchHeight), alignment: .top)
+                    .clipped()
+            }
+            .frame(width: openedWidth, height: openedHeight, alignment: .top)
+
+            if showingTokenDetailPopover {
+                Color.black.opacity(0.001)
+                    .frame(width: openedWidth, height: openedHeight)
+                    .contentShape(Rectangle())
+                    .onTapGesture {
+                        withAnimation(.easeOut(duration: 0.15)) {
+                            showingTokenDetailPopover = false
+                            isAgyAccountBreakdownExpanded = false
+                        }
+                    }
+
+                tokenDetailPopoverView
+                    .padding(.leading, openedHeaderHorizontalPadding)
+                    .padding(.top, closedNotchHeight + 4)
+                    .contentShape(Rectangle())
+                    .onTapGesture {
+                        // Keep open when clicking inside the card
+                    }
+                    .transition(.asymmetric(
+                        insertion: .opacity.combined(with: .scale(scale: 0.95, anchor: .topLeading)),
+                        removal: .opacity
+                    ))
+            }
         }
-        .frame(width: openedWidth, height: openedHeight, alignment: .top)
+        .animation(.easeOut(duration: 0.18), value: showingTokenDetailPopover)
     }
 
     // MARK: - Closed state
@@ -847,7 +885,7 @@ struct IslandPanelView: View {
     private func sectionTint(for section: IslandSessionSection) -> Color {
         guard let first = section.sessions.first else { return IslandDesignPalette.Status.idle }
         if section.id == "state-idle" { return IslandDesignPalette.Status.idle }
-        return IslandDesignPalette.Status.tint(for: first.phase)
+        return IslandDesignPalette.Status.tint(for: first.phase, tool: first.tool)
     }
 
     private func sessionSectionTitle(for section: IslandSessionSection) -> String {
@@ -915,6 +953,11 @@ struct IslandPanelView: View {
             return []
         }
 
+        if model.showTodayTokenUsage,
+           let todayTokens = todayTokenUsagePresentation {
+            return [todayTokens]
+        }
+
         var providers: [UsageProviderPresentation] = []
 
         if let snapshot = model.claudeUsageSnapshot,
@@ -978,6 +1021,80 @@ struct IslandPanelView: View {
         }
 
         return providers
+    }
+
+    /// The "Today" chip: Claude, Codex, AGY pool and AGY Pro token totals logged since local
+    /// midnight, cache included, plus any other KEEPER upstream that logged usage today.
+    private var todayTokenUsagePresentation: UsageProviderPresentation? {
+        let monitor = model.todayTokenUsageMonitor
+        guard monitor.usage != nil
+                || monitor.dshTotals != nil
+                || monitor.lastErrorMessage != nil else {
+            return nil
+        }
+
+        let languageCode = lang.language.resolvedCode
+        var candidateAgents: [(id: String, label: String, shortLabel: String, totals: AgentTokenTotals?)] = [
+            (id: "claude", label: "Claude", shortLabel: "Cl", totals: monitor.usage?.claude),
+        ]
+        if isClaudeProAvailable(usage: monitor.usage) {
+            candidateAgents.append((id: "claude-pro", label: lang.t("usage.todayTokens.claudePro"), shortLabel: "C-Pro", totals: monitor.usage?.claudePro))
+        }
+        candidateAgents.append((id: "codex", label: "Codex", shortLabel: "Cx", totals: monitor.usage?.codex))
+        candidateAgents.append((id: "agy", label: lang.t("usage.todayTokens.agyPool"), shortLabel: "AGY", totals: monitor.usage?.agy))
+        candidateAgents.append((id: "agy-pro", label: lang.t("usage.todayTokens.agyPro"), shortLabel: "Pro", totals: monitor.usage?.agyPro))
+        if let dsh = monitor.dshTotals {
+            candidateAgents.append((id: "deepSeekHarness", label: "DSH", shortLabel: "DS", totals: dsh))
+        }
+        if let other = monitor.usage?.other, other.totalTokens > 0 {
+            candidateAgents.append((id: "other", label: lang.t("usage.todayTokens.other"), shortLabel: "Oth", totals: other))
+        }
+
+        let grandTotal = (monitor.usage?.totalTokens ?? 0) + (monitor.dshTotals?.totalTokens ?? 0)
+        let totalFormatted = TokenCountFormatter.compact(grandTotal, languageCode: languageCode)
+
+        var helpLines = [
+            lang.t("usage.todayTokens.help"),
+            lang.t("usage.todayTokens.totalLine", totalFormatted)
+        ]
+        for agent in candidateAgents {
+            guard let totals = agent.totals else { continue }
+            let key = agent.id == "deepSeekHarness"
+                ? "usage.todayTokens.helpLineSessions"
+                : "usage.todayTokens.helpLine"
+            helpLines.append(lang.t(
+                key,
+                agent.label,
+                totals.totalTokens.formatted(),
+                totals.cacheReadTokens.formatted(),
+                totals.requestCount.formatted()
+            ))
+            if agent.id == "claude-pro", let subtext = claudeProSecondarySubtext(usage: monitor.usage) {
+                helpLines.append("  ↳ \(subtext)")
+            }
+        }
+        if let message = monitor.lastErrorMessage {
+            helpLines.append(lang.t("usage.todayTokens.readFailed", message))
+        }
+
+        return UsageProviderPresentation(
+            id: "today-tokens",
+            title: lang.t("usage.todayTokens.title"),
+            windows: [],
+            tokens: candidateAgents.map { agent in
+                UsageTokenPresentation(
+                    id: "today-\(agent.id)",
+                    label: agent.label,
+                    shortLabel: agent.shortLabel,
+                    value: agent.totals.map {
+                        TokenCountFormatter.compact($0.totalTokens, languageCode: languageCode)
+                    } ?? "—"
+                )
+            },
+            helpText: helpLines.joined(separator: "\n"),
+            totalTokensCount: grandTotal,
+            totalTokensFormatted: totalFormatted
+        )
     }
 
     private func splitUsageProviders(
@@ -1079,7 +1196,88 @@ struct IslandPanelView: View {
         .fixedSize(horizontal: true, vertical: false)
     }
 
+    @ViewBuilder
     private func compactUsageChip(
+        _ provider: UsageProviderPresentation,
+        layout: UsageChipLayout
+    ) -> some View {
+        if provider.id == "today-tokens" {
+            todayTokensChip(provider, layout: layout)
+        } else {
+            legacyUsageChip(provider, layout: layout)
+        }
+    }
+
+    private func todayTokensChip(
+        _ provider: UsageProviderPresentation,
+        layout: UsageChipLayout
+    ) -> some View {
+        Button {
+            withAnimation(.spring(response: 0.28, dampingFraction: 0.82)) {
+                if tokenPopoverOpenedByHover {
+                    tokenPopoverOpenedByHover = false
+                } else {
+                    showingTokenDetailPopover.toggle()
+                    if !showingTokenDetailPopover {
+                        isAgyAccountBreakdownExpanded = false
+                    }
+                }
+            }
+        } label: {
+            HStack(spacing: 5) {
+                Image(systemName: "bolt.fill")
+                    .font(.system(size: 9.5, weight: .bold))
+                    .foregroundStyle(Color.orange.opacity(0.95))
+
+                if !layout.usesShortTitle {
+                    Text(provider.title)
+                        .font(.system(size: 11, weight: .semibold))
+                        .foregroundStyle(.white.opacity(0.74))
+                }
+
+                Text(provider.totalTokensFormatted.isEmpty ? "0" : provider.totalTokensFormatted)
+                    .font(.system(size: 11.5, weight: .bold, design: .monospaced))
+                    .foregroundStyle(.white.opacity(0.95))
+
+                Image(systemName: showingTokenDetailPopover ? "chevron.up" : "chevron.down")
+                    .font(.system(size: 8, weight: .semibold))
+                    .foregroundStyle(.white.opacity(0.45))
+            }
+            .padding(.horizontal, 8)
+            .padding(.vertical, 4)
+            .background(
+                showingTokenDetailPopover
+                    ? Color.white.opacity(0.12)
+                    : Color.white.opacity(0.055),
+                in: Capsule()
+            )
+            .overlay(
+                Capsule()
+                    .strokeBorder(
+                        showingTokenDetailPopover
+                            ? Color.orange.opacity(0.4)
+                            : Color.white.opacity(0.06),
+                        lineWidth: 1
+                    )
+            )
+        }
+        .buttonStyle(.plain)
+        .onHover { isHovered in
+            guard isHovered else {
+                tokenPopoverOpenedByHover = false
+                return
+            }
+            guard !showingTokenDetailPopover else { return }
+            tokenPopoverOpenedByHover = true
+            isAgyAccountBreakdownExpanded = false
+            withAnimation(.easeOut(duration: 0.16)) {
+                showingTokenDetailPopover = true
+            }
+        }
+        .help(usageHelpText(for: provider))
+    }
+
+    private func legacyUsageChip(
         _ provider: UsageProviderPresentation,
         layout: UsageChipLayout
     ) -> some View {
@@ -1111,6 +1309,18 @@ struct IslandPanelView: View {
                     }
                 }
             }
+
+            ForEach(provider.tokens) { token in
+                HStack(spacing: 4) {
+                    Text(layout.usesShortTitle ? token.shortLabel : token.label)
+                        .font(.system(size: 10.5, weight: .semibold, design: .monospaced))
+                        .foregroundStyle(.white.opacity(0.42))
+
+                    Text(token.value)
+                        .font(.system(size: 11.5, weight: .bold, design: .monospaced))
+                        .foregroundStyle(.white.opacity(0.86))
+                }
+            }
         }
         .padding(.horizontal, 8)
         .padding(.vertical, 4)
@@ -1122,8 +1332,289 @@ struct IslandPanelView: View {
         .help(usageHelpText(for: provider))
     }
 
+    private var tokenDetailPopoverView: some View {
+        let monitor = model.todayTokenUsageMonitor
+        let usage = monitor.usage
+        let languageCode = lang.language.resolvedCode
+
+        return VStack(alignment: .leading, spacing: 9) {
+            HStack(spacing: 6) {
+                Image(systemName: "bolt.fill")
+                    .font(.system(size: 11, weight: .bold))
+                    .foregroundStyle(.orange)
+
+                Text(lang.t("usage.todayTokens.detailTitle"))
+                    .font(.system(size: 12, weight: .semibold))
+                    .foregroundStyle(.white.opacity(0.92))
+
+                Spacer()
+
+                Button {
+                    withAnimation(.easeOut(duration: 0.15)) {
+                        showingTokenDetailPopover = false
+                        isAgyAccountBreakdownExpanded = false
+                    }
+                } label: {
+                    Image(systemName: "xmark.circle.fill")
+                        .font(.system(size: 12))
+                        .foregroundStyle(.white.opacity(0.35))
+                }
+                .buttonStyle(.plain)
+            }
+
+            Rectangle()
+                .fill(Color.white.opacity(0.08))
+                .frame(height: 1)
+
+            VStack(spacing: 6) {
+                tokenDetailAgentRow(
+                    label: "Claude",
+                    dotColor: IslandDesignPalette.Status.runningClaude,
+                    totals: usage?.claude,
+                    accountHint: usage?.claudeAccountHint ?? "",
+                    languageCode: languageCode
+                )
+
+                if isClaudeProAvailable(usage: usage) {
+                    tokenDetailAgentRow(
+                        label: lang.t("usage.todayTokens.claudePro"),
+                        dotColor: IslandDesignPalette.Status.runningClaude,
+                        totals: usage?.claudePro,
+                        accountHint: usage?.claudeProAccountHint ?? "",
+                        secondarySubtext: claudeProSecondarySubtext(usage: usage),
+                        languageCode: languageCode
+                    )
+                }
+
+                tokenDetailAgentRow(
+                    label: "Codex",
+                    dotColor: IslandDesignPalette.Status.runningCodex,
+                    totals: usage?.codex,
+                    accountHint: usage?.codexAccountHint ?? "",
+                    languageCode: languageCode
+                )
+
+                if let dsh = monitor.dshTotals {
+                    tokenDetailAgentRow(
+                        label: "DSH",
+                        dotColor: Color(red: 77.0 / 255.0, green: 107.0 / 255.0, blue: 254.0 / 255.0),
+                        totals: dsh,
+                        accountHint: "",
+                        languageCode: languageCode,
+                        subtextKey: "usage.todayTokens.subtextSessions"
+                    )
+                }
+
+                let hasAgyAccountBreakdown = (usage?.agyAccountBreakdown.count ?? 0) > 1
+                tokenDetailAgentRow(
+                    label: lang.t("usage.todayTokens.agyPool"),
+                    dotColor: IslandDesignPalette.Status.runningAgy,
+                    totals: usage?.agy,
+                    accountHint: usage?.agyAccountHint ?? "",
+                    languageCode: languageCode,
+                    showsDisclosure: hasAgyAccountBreakdown,
+                    isDisclosureExpanded: isAgyAccountBreakdownExpanded,
+                    onDisclosureTap: hasAgyAccountBreakdown ? {
+                        withAnimation(.easeOut(duration: 0.15)) {
+                            isAgyAccountBreakdownExpanded.toggle()
+                        }
+                    } : nil
+                )
+
+                if isAgyAccountBreakdownExpanded,
+                   let usage,
+                   usage.agyAccountBreakdown.count > 1 {
+                    ForEach(usage.agyAccountBreakdown) { sub in
+                        HStack(alignment: .center, spacing: 6) {
+                            Text("↳ \(sub.account)")
+                                .font(.system(size: 9.5, design: .monospaced))
+                                .foregroundStyle(.white.opacity(0.52))
+                                .lineLimit(1)
+                            Spacer(minLength: 4)
+                            Text("\(sub.totals.requestCount) 次")
+                                .font(.system(size: 8.5, design: .monospaced))
+                                .foregroundStyle(.white.opacity(0.35))
+                            Text(TokenCountFormatter.compact(sub.totals.totalTokens, languageCode: languageCode))
+                                .font(.system(size: 10, weight: .semibold, design: .monospaced))
+                                .foregroundStyle(.white.opacity(0.75))
+                        }
+                        .padding(.leading, 15)
+                        .transition(.opacity)
+                    }
+                }
+
+                tokenDetailAgentRow(
+                    label: lang.t("usage.todayTokens.agyPro"),
+                    dotColor: IslandDesignPalette.Status.runningAgy,
+                    totals: usage?.agyPro,
+                    accountHint: usage?.agyProAccountHint ?? "",
+                    languageCode: languageCode
+                )
+
+                if let usage, usage.other.totalTokens > 0 {
+                    tokenDetailAgentRow(
+                        label: lang.t("usage.todayTokens.other"),
+                        dotColor: Color.white.opacity(0.5),
+                        totals: usage.other,
+                        accountHint: usage.otherAccountHint,
+                        languageCode: languageCode
+                    )
+                }
+            }
+
+            Rectangle()
+                .fill(Color.white.opacity(0.08))
+                .frame(height: 1)
+
+            HStack {
+                Text(lang.t("usage.todayTokens.totalLabel"))
+                    .font(.system(size: 11, weight: .medium))
+                    .foregroundStyle(.white.opacity(0.55))
+
+                Spacer()
+
+                Text(TokenCountFormatter.compact(
+                    (usage?.totalTokens ?? 0) + (monitor.dshTotals?.totalTokens ?? 0),
+                    languageCode: languageCode
+                ))
+                .font(.system(size: 12, weight: .bold, design: .monospaced))
+                .foregroundStyle(.white)
+            }
+
+            if let error = monitor.lastErrorMessage {
+                HStack(spacing: 4) {
+                    Image(systemName: "exclamationmark.triangle.fill")
+                        .font(.system(size: 9))
+                        .foregroundStyle(.orange)
+                    Text(error)
+                        .font(.system(size: 9.5))
+                        .foregroundStyle(.orange.opacity(0.85))
+                        .lineLimit(1)
+                }
+            } else {
+                Text(lang.t("usage.todayTokens.dataSource"))
+                    .font(.system(size: 9))
+                    .foregroundStyle(.white.opacity(0.32))
+            }
+        }
+        .padding(12)
+        .frame(width: 300)
+        .background(
+            RoundedRectangle(cornerRadius: 12, style: .continuous)
+                .fill(Color(red: 0.11, green: 0.11, blue: 0.13).opacity(0.97))
+                .overlay(
+                    RoundedRectangle(cornerRadius: 12, style: .continuous)
+                        .strokeBorder(Color.white.opacity(0.12), lineWidth: 1)
+                )
+                .shadow(color: .black.opacity(0.5), radius: 14, x: 0, y: 6)
+        )
+    }
+
+    @ViewBuilder
+    private func tokenDetailAgentRow(
+        label: String,
+        dotColor: Color,
+        totals: AgentTokenTotals?,
+        accountHint: String,
+        secondarySubtext: String? = nil,
+        languageCode: String,
+        subtextKey: String = "usage.todayTokens.subtext",
+        showsDisclosure: Bool = false,
+        isDisclosureExpanded: Bool = false,
+        onDisclosureTap: (() -> Void)? = nil
+    ) -> some View {
+        let total = totals?.totalTokens ?? 0
+        let reqCount = totals?.requestCount ?? 0
+        let cacheRead = totals?.cacheReadTokens ?? 0
+
+        let row = HStack(alignment: .center, spacing: 8) {
+            Circle()
+                .fill(dotColor)
+                .frame(width: 7.5, height: 7.5)
+                .shadow(color: dotColor.opacity(0.48), radius: 2.5)
+
+            VStack(alignment: .leading, spacing: 1.5) {
+                HStack(spacing: 4) {
+                    Text(label)
+                        .font(.system(size: 11.5, weight: .semibold))
+                        .foregroundStyle(.white.opacity(0.88))
+
+                    if showsDisclosure {
+                        Image(systemName: isDisclosureExpanded ? "chevron.down" : "chevron.right")
+                            .font(.system(size: 8, weight: .semibold))
+                            .foregroundStyle(.white.opacity(0.35))
+                    }
+
+                    if !accountHint.isEmpty {
+                        Text("(\(accountHint))")
+                            .font(.system(size: 9.5))
+                            .foregroundStyle(.white.opacity(0.35))
+                            .lineLimit(1)
+                    }
+                }
+
+                if reqCount > 0 || cacheRead > 0 {
+                    Text(lang.t(
+                        subtextKey,
+                        reqCount.formatted(),
+                        TokenCountFormatter.compact(cacheRead, languageCode: languageCode)
+                    ))
+                    .font(.system(size: 9, design: .monospaced))
+                    .foregroundStyle(.white.opacity(0.4))
+                }
+
+                if let secondarySubtext, !secondarySubtext.isEmpty {
+                    Text(secondarySubtext)
+                        .font(.system(size: 8.5, design: .monospaced))
+                        .foregroundStyle(.white.opacity(0.45))
+                }
+            }
+
+            Spacer(minLength: 4)
+
+            Text(TokenCountFormatter.compact(total, languageCode: languageCode))
+                .font(.system(size: 12, weight: .bold, design: .monospaced))
+                .foregroundStyle(.white.opacity(total > 0 ? 0.95 : 0.35))
+        }
+
+        if let onDisclosureTap, showsDisclosure {
+            Button(action: onDisclosureTap) {
+                row.contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+        } else {
+            row
+        }
+    }
+
+    private func isClaudeProAvailable(usage: TodayTokenUsage?) -> Bool {
+        if let usage, usage.claudePro.totalTokens > 0 || usage.claudeProCostUSD != nil {
+            return true
+        }
+        return FileManager.default.fileExists(atPath: ClaudeProUsageReader.defaultProjectsDirectoryURL.path)
+            || FileManager.default.fileExists(atPath: ClaudeProUsageReader.defaultSessionsDirectoryURL.path)
+    }
+
+    private func claudeProSecondarySubtext(usage: TodayTokenUsage?) -> String? {
+        guard let usage else { return nil }
+        var parts: [String] = []
+        if let cost = usage.claudeProCostUSD, cost > 0 {
+            parts.append(String(format: "$%.2f", cost))
+        }
+        if let r5 = usage.claudeProRateLimit5h {
+            parts.append("5h: \(r5)%")
+        }
+        if let r7 = usage.claudeProRateLimit7d {
+            parts.append("7d: \(r7)%")
+        }
+        return parts.isEmpty ? nil : parts.joined(separator: " · ")
+    }
+
     private func usageHelpText(for provider: UsageProviderPresentation) -> String {
-        provider.windows.map { window in
+        if let helpText = provider.helpText {
+            return helpText
+        }
+        return provider.windows.map { window in
             var parts = ["\(window.label) \(window.roundedUsedPercentage)%"]
             if let resetsAt = window.resetsAt,
                let remaining = remainingDurationString(until: resetsAt) {
@@ -1186,10 +1677,24 @@ private struct UsageChipLayout {
     let showsRemaining: Bool
 }
 
+/// One agent's token total inside a token chip.
+private struct UsageTokenPresentation: Identifiable {
+    let id: String
+    let label: String
+    let shortLabel: String
+    let value: String
+}
+
 private struct UsageProviderPresentation: Identifiable {
     let id: String
     let title: String
     let windows: [UsageWindowPresentation]
+    /// Token totals shown instead of quota windows (the "Today" chip).
+    var tokens: [UsageTokenPresentation] = []
+    /// Overrides the tooltip otherwise built from `windows`.
+    var helpText: String?
+    var totalTokensCount: Int = 0
+    var totalTokensFormatted: String = ""
 
     var peakWindow: UsageWindowPresentation? {
         windows.max { lhs, rhs in
@@ -1215,6 +1720,8 @@ private struct UsageProviderPresentation: Identifiable {
             "Cl"
         case "codex":
             "Cx"
+        case "today-tokens":
+            title
         default:
             String(title.prefix(2))
         }
@@ -1366,8 +1873,8 @@ private struct IslandSessionRow: View {
                 if session.isRemote {
                     sideBadge("SSH")
                 }
-                if let terminalBadge = session.spotlightTerminalBadge {
-                    sideBadge(terminalBadge)
+                if let contextBadge = session.spotlightContextBadge {
+                    sideBadge(contextBadge, help: session.spotlightContextBadgeHelp)
                 }
                 Text(session.spotlightAgeBadge)
                     .font(.system(size: 10.5, weight: .medium, design: .monospaced))
@@ -1388,7 +1895,7 @@ private struct IslandSessionRow: View {
     @ViewBuilder
     private func rowAuxiliaryDetails(presence: IslandSessionPresence) -> some View {
         if !shouldShowEmbeddedDetailBody,
-           let activityLine = session.spotlightActivityLineText ?? expandedActivityLineText {
+           let activityLine = session.localizedActivityLineText(textLocalizer) ?? expandedActivityLineText {
             Text(activityLine)
                 .font(.system(size: 11, weight: .medium))
                 .foregroundStyle(activityColor(for: presence).opacity(0.94))
@@ -1473,18 +1980,28 @@ private struct IslandSessionRow: View {
 
     private var agentBadge: some View {
         let tint = Color(hex: session.tool.brandColorHex) ?? V6Palette.paper
-        return Text(agentBadgeTitle)
-            .font(.system(size: 10.5, weight: .semibold, design: .monospaced))
+        return HStack(spacing: 4) {
+            if let icon = AgentBrandIcon.image(for: session.tool) {
+                Image(nsImage: icon)
+                    .renderingMode(.template)
+                    .resizable()
+                    .interpolation(.high)
+                    .frame(width: 11, height: 11)
+                    .accessibilityHidden(true)
+            }
+            Text(agentBadgeTitle)
+                .font(.system(size: 10.5, weight: .semibold, design: .monospaced))
+                .lineLimit(1)
+                .fixedSize(horizontal: true, vertical: false)
+        }
             .foregroundStyle(tint.opacity(notificationChromeOpacity))
-            .lineLimit(1)
-            .fixedSize(horizontal: true, vertical: false)
             .padding(.horizontal, 8)
             .padding(.vertical, 3)
             .background(tint.opacity(notificationBadgeFillOpacity), in: Capsule())
             .overlay(Capsule().stroke(tint.opacity(notificationBadgeStrokeOpacity), lineWidth: 1))
     }
 
-    private func sideBadge(_ title: String) -> some View {
+    private func sideBadge(_ title: String, help: String? = nil) -> some View {
         Text(title)
             .font(.system(size: 10.5, weight: .medium, design: .monospaced))
             .foregroundStyle(V6Palette.paper.opacity(presentation == .notification ? 0.52 : 0.7))
@@ -1493,17 +2010,20 @@ private struct IslandSessionRow: View {
             .padding(.horizontal, 8)
             .padding(.vertical, 3)
             .background(.white.opacity(presentation == .notification ? 0.045 : 0.06), in: Capsule())
+            .help(help ?? title)
     }
+
+    private var textLocalizer: SessionTextLocalizer { .current(lang) }
 
     private var summaryPromptLineText: String? {
         if presentation == .notification {
             if session.phase == .completed {
                 return notificationCompletedPromptLineText
             }
-            return session.notificationHeaderPromptLineText
+            return session.localizedNotificationHeaderPromptLineText(textLocalizer)
         }
 
-        return session.spotlightPromptLineText ?? expandedPromptLineText
+        return session.localizedPromptLineText(textLocalizer) ?? expandedPromptLineText
     }
 
     private var summaryHeadlineText: String {
@@ -1516,22 +2036,25 @@ private struct IslandSessionRow: View {
 
     private var notificationWorkspaceHeadlineText: String {
         let workspace = session.spotlightWorkspaceName.trimmedForNotificationCard
-        let title = workspace.isEmpty ? session.tool.displayName : workspace
-        guard let branch = session.spotlightWorktreeBranch?.trimmedForNotificationCard,
-              !branch.isEmpty else {
-            return title
+        var location = workspace.isEmpty ? session.tool.displayName : workspace
+        if let branch = session.spotlightWorktreeBranch?.trimmedForNotificationCard, !branch.isEmpty {
+            location += " (\(branch))"
         }
-
-        return "\(title) (\(branch))"
+        let title = (session.conversationTitle?.trimmedForNotificationCard).flatMap { $0.isEmpty ? nil : $0 }
+            ?? session.spotlightHeadlinePromptText
+        if let title, !title.isEmpty {
+            return "\(title) · \(location)"
+        }
+        return location
     }
 
     private var notificationCompletedPromptLineText: String? {
         if let prompt = session.latestUserPromptText?.trimmedForNotificationCard, !prompt.isEmpty {
-            return "You: \(prompt)"
+            return textLocalizer.promptLine(prompt)
         }
 
         if let prompt = session.initialUserPromptText?.trimmedForNotificationCard, !prompt.isEmpty {
-            return "You: \(prompt)"
+            return textLocalizer.promptLine(prompt)
         }
 
         return nil
@@ -1562,7 +2085,7 @@ private struct IslandSessionRow: View {
             max(28, sideInset)
         case .tint:
             sideInset
-        case .animatedDot, .glyph:
+        case .animatedDot, .glyph, .pixel:
             sideInset
         }
     }
@@ -1577,7 +2100,7 @@ private struct IslandSessionRow: View {
             max(28, sideInset)
         case .tint:
             sideInset
-        case .animatedDot, .glyph:
+        case .animatedDot, .glyph, .pixel:
             sideInset + 30
         }
     }
@@ -1642,7 +2165,7 @@ private struct IslandSessionRow: View {
     }
 
     private var actionableStatusTint: Color {
-        IslandDesignPalette.Status.tint(for: session.phase)
+        IslandDesignPalette.Status.tint(for: session.phase, tool: session.tool)
     }
 
     @ViewBuilder
@@ -1872,7 +2395,7 @@ private struct IslandSessionRow: View {
             return text
         }
         let summary = session.summary.trimmedForNotificationCard
-        return summary == SessionPhase.completed.displayName ? "" : summary
+        return summary == SessionPhase.completed.displayName ? "" : textLocalizer.summary(summary)
     }
 
     private var commandLabel: String {
@@ -1892,7 +2415,7 @@ private struct IslandSessionRow: View {
         if let preview, !preview.isEmpty {
             return "$ \(preview)"
         }
-        return session.permissionRequest?.summary.trimmedForNotificationCard ?? session.summary.trimmedForNotificationCard
+        return textLocalizer.summary(session.permissionRequest?.summary.trimmedForNotificationCard ?? session.summary.trimmedForNotificationCard)
     }
 
     private var runningDetailText: String? {
@@ -1901,13 +2424,13 @@ private struct IslandSessionRow: View {
             return "$ \(preview)"
         }
 
-        if let activity = session.spotlightActivityLineText?.trimmedForNotificationCard,
+        if let activity = session.localizedActivityLineText(textLocalizer)?.trimmedForNotificationCard,
            !activity.isEmpty {
             return activity
         }
 
         let summary = session.summary.trimmedForNotificationCard
-        return summary.isEmpty ? nil : summary
+        return summary.isEmpty ? nil : textLocalizer.summary(summary)
     }
 
     private func subagentElapsed(since start: Date, at now: Date) -> String {
@@ -1948,15 +2471,14 @@ private struct IslandSessionRow: View {
         let tint = statusTint(for: presence)
         switch stateIndicator {
         case .animatedDot:
-            if let interval = stateIndicator.timelineInterval(presence: presence, isActionable: isActionable) {
-                TimelineView(.periodic(from: .now, by: interval)) { context in
-                    let pulse = (sin(context.date.timeIntervalSinceReferenceDate * 3.2) + 1) / 2
-                    statusDot(tint: tint, presence: presence, pulse: pulse)
-                }
-                .frame(width: 10, height: 24, alignment: .top)
+            animatedStatusDot(tint: tint, presence: presence)
+        case .pixel:
+            if session.phase == .completed {
+                PixelCheckmark(tint: tint)
+                    .padding(.top, 6)
+                    .frame(width: 10, height: 24, alignment: .topLeading)
             } else {
-                statusDot(tint: tint, presence: presence, pulse: 0)
-                    .frame(width: 10, height: 24, alignment: .top)
+                animatedStatusDot(tint: tint, presence: presence)
             }
         case .bar:
             RoundedRectangle(cornerRadius: 2.5, style: .continuous)
@@ -1977,12 +2499,26 @@ private struct IslandSessionRow: View {
         }
     }
 
+    @ViewBuilder
+    private func animatedStatusDot(tint: Color, presence: IslandSessionPresence) -> some View {
+        if let interval = stateIndicator.timelineInterval(presence: presence, isActionable: isActionable) {
+            TimelineView(.periodic(from: .now, by: interval)) { context in
+                let pulse = (sin(context.date.timeIntervalSinceReferenceDate * 3.2) + 1) / 2
+                statusDot(tint: tint, presence: presence, pulse: pulse)
+            }
+            .frame(width: 10, height: 24, alignment: .top)
+        } else {
+            statusDot(tint: tint, presence: presence, pulse: 0)
+                .frame(width: 10, height: 24, alignment: .top)
+        }
+    }
+
     private func statusDot(tint: Color, presence: IslandSessionPresence, pulse: Double) -> some View {
         Circle()
             .fill(tint)
             .frame(width: 9, height: 9)
             .scaleEffect(1 + (pulse * 0.18))
-            .shadow(color: tint.opacity(presence == .inactive ? 0 : 0.36 + (pulse * 0.26)), radius: 4 + (pulse * 3))
+            .shadow(color: tint.opacity(presence == .inactive ? 0 : 0.36 + (pulse * 0.26)), radius: 5.5)
             .padding(.top, 6)
     }
 
@@ -2023,7 +2559,7 @@ private struct IslandSessionRow: View {
     /// Prompt line for manually expanded inactive rows (bypasses time-based filter).
     private var expandedPromptLineText: String? {
         guard detailOverride == true, let prompt = session.spotlightPromptText else { return nil }
-        return "You: \(prompt)"
+        return textLocalizer.promptLine(prompt)
     }
 
     /// Activity line for manually expanded inactive rows (bypasses time-based filter).
@@ -2034,7 +2570,7 @@ private struct IslandSessionRow: View {
         if let assistantMessage = trimmed, !assistantMessage.isEmpty {
             return assistantMessage
         }
-        return session.jumpTarget != nil ? "Ready" : "Completed"
+        return textLocalizer.word(session.jumpTarget != nil ? .ready : .completed)
     }
 
     private func handlePrimaryTap() {
@@ -2100,13 +2636,13 @@ private struct IslandSessionRow: View {
     }
 
     private func statusTint(for presence: IslandSessionPresence) -> Color {
-        IslandDesignPalette.Status.tint(for: session.phase, presence: presence)
+        IslandDesignPalette.Status.tint(for: session.phase, presence: presence, tool: session.tool)
     }
 
     private func activityColor(for presence: IslandSessionPresence) -> Color {
         switch session.spotlightActivityTone {
         case .attention:
-            IslandDesignPalette.Status.tint(for: session.phase)
+            IslandDesignPalette.Status.tint(for: session.phase, tool: session.tool)
         case .live:
             statusTint(for: presence)
         case .idle:

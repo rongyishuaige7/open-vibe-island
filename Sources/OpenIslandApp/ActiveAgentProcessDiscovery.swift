@@ -2,8 +2,8 @@ import Foundation
 import OpenIslandCore
 
 struct ActiveAgentProcessDiscovery {
-    private static let processCommandTimeout: TimeInterval = 0.5
-    private static let lsofCommandTimeout: TimeInterval = 0.2
+    private static let processCommandTimeout: TimeInterval = 5.0
+    private static let lsofCommandTimeout: TimeInterval = 2.0
 
     private final class OutputBox: @unchecked Sendable {
         var data = Data()
@@ -18,6 +18,7 @@ struct ActiveAgentProcessDiscovery {
         var transcriptPath: String?
         var tmuxTarget: String?
         var tmuxSocketPath: String?
+        var paneTitle: String?
 
         init(
             tool: AgentTool,
@@ -27,7 +28,8 @@ struct ActiveAgentProcessDiscovery {
             terminalApp: String? = nil,
             transcriptPath: String? = nil,
             tmuxTarget: String? = nil,
-            tmuxSocketPath: String? = nil
+            tmuxSocketPath: String? = nil,
+            paneTitle: String? = nil
         ) {
             self.tool = tool
             self.sessionID = sessionID
@@ -37,6 +39,7 @@ struct ActiveAgentProcessDiscovery {
             self.transcriptPath = transcriptPath
             self.tmuxTarget = tmuxTarget
             self.tmuxSocketPath = tmuxSocketPath
+            self.paneTitle = paneTitle
         }
     }
 
@@ -63,10 +66,31 @@ struct ActiveAgentProcessDiscovery {
 
         let processesByPID = Dictionary(uniqueKeysWithValues: processes.map { ($0.pid, $0) })
 
+        // Pre-collect candidate agent PIDs to fetch all lsof details in a single batch.
+        var candidatePIDs: [String] = []
+        for rawProcess in processes {
+            var process = rawProcess
+            if process.terminalTTY == nil {
+                process.terminalTTY = effectiveTerminalTTY(for: process, processesByPID: processesByPID)
+            }
+            if process.terminalTTY == nil && !isOpenCodeProcess(command: process.command) {
+                continue
+            }
+            if isCandidateAgentProcess(command: process.command) {
+                candidatePIDs.append(process.pid)
+            }
+        }
+        let preloadedLsofs = candidatePIDs.isEmpty ? [:] : batchLsofOutputs(pids: candidatePIDs)
+
         var snapshots: [ProcessSnapshot] = []
         var claimedKeys: Set<String> = []
 
-        for process in processes {
+        for rawProcess in processes {
+            var process = rawProcess
+            if process.terminalTTY == nil {
+                process.terminalTTY = effectiveTerminalTTY(for: process, processesByPID: processesByPID)
+            }
+
             // Most agent detection requires a TTY (terminal-attached process).
             // OpenCode is an exception: it can run inside IDE integrated terminals
             // that don't expose a TTY in `ps` output. Let OpenCode processes
@@ -76,7 +100,7 @@ struct ActiveAgentProcessDiscovery {
             }
 
             if isCodexProcess(command: process.command) {
-                guard let snapshot = codexSnapshot(for: process, processesByPID: processesByPID) else {
+                guard let snapshot = codexSnapshot(for: process, processesByPID: processesByPID, preloadedLsofs: preloadedLsofs) else {
                     continue
                 }
 
@@ -90,7 +114,7 @@ struct ActiveAgentProcessDiscovery {
             }
 
             if isClaudeProcess(command: process.command) {
-                guard let snapshot = claudeSnapshot(for: process, processesByPID: processesByPID) else {
+                guard let snapshot = claudeSnapshot(for: process, processesByPID: processesByPID, preloadedLsofs: preloadedLsofs) else {
                     continue
                 }
 
@@ -104,7 +128,7 @@ struct ActiveAgentProcessDiscovery {
             }
 
             if isCursorAgentProcess(command: process.command) {
-                guard let snapshot = cursorSnapshot(for: process, processesByPID: processesByPID) else {
+                guard let snapshot = cursorSnapshot(for: process, processesByPID: processesByPID, preloadedLsofs: preloadedLsofs) else {
                     continue
                 }
 
@@ -130,7 +154,7 @@ struct ActiveAgentProcessDiscovery {
             }
 
             if isOpenCodeProcess(command: process.command) {
-                let lsofOutput = lsofOutput(pid: process.pid)
+                let lsofOutput = lsofOutput(pid: process.pid, preloaded: preloadedLsofs)
                 let cwd = lsofOutput.flatMap(workingDirectory(from:))
 
                 // Deduplicate by TTY and working directory instead of PID.
@@ -183,19 +207,43 @@ struct ActiveAgentProcessDiscovery {
             }
 
             if isGeminiProcess(command: process.command) {
-                let claimKey = "gemini:\(process.pid)"
+                let lsofOutput = lsofOutput(pid: process.pid, preloaded: preloadedLsofs)
+                let sessionID = agySessionID(in: lsofOutput, command: process.command)
+                let claimKey = "gemini:\(sessionID ?? process.pid)"
                 guard claimedKeys.insert(claimKey).inserted else {
                     continue
                 }
 
-                let lsofOutput = lsofOutput(pid: process.pid)
-                snapshots.append(ProcessSnapshot(
+                let transcriptPath = agyTranscriptPath(in: lsofOutput, sessionID: sessionID)
+
+                var snapshot = ProcessSnapshot(
                     tool: .geminiCLI,
-                    sessionID: nil,
+                    sessionID: sessionID,
                     workingDirectory: lsofOutput.flatMap(workingDirectory(from:)),
                     terminalTTY: process.terminalTTY,
-                    terminalApp: terminalApp(for: process, processesByPID: processesByPID)
-                ))
+                    terminalApp: terminalApp(for: process, processesByPID: processesByPID),
+                    transcriptPath: transcriptPath
+                )
+
+                if snapshot.terminalApp == nil, process.terminalTTY != nil {
+                    // `agy-danger` / `agy-suggest` wrappers hand `agy` its own
+                    // PTY, so the agent's TTY is not the tmux pane TTY. Walk
+                    // ancestors as fallback candidates instead of giving up and
+                    // defaulting the jump target to Antigravity.app.
+                    if let resolution = resolveTmuxInfo(
+                        agentTTYs: tmuxCandidateTTYs(for: process, processesByPID: processesByPID),
+                        processes: processesByPID.values.map { $0 },
+                        processesByPID: processesByPID
+                    ) {
+                        snapshot.terminalApp = resolution.hostTerminalApp
+                        snapshot.tmuxTarget = resolution.target
+                        snapshot.tmuxSocketPath = resolution.socketPath
+                        snapshot.terminalTTY = resolution.paneTTY
+                        snapshot.paneTitle = resolution.paneTitle
+                    }
+                }
+
+                snapshots.append(snapshot)
                 continue
             }
 
@@ -205,7 +253,7 @@ struct ActiveAgentProcessDiscovery {
                     continue
                 }
 
-                let lsofOutput = lsofOutput(pid: process.pid)
+                let lsofOutput = lsofOutput(pid: process.pid, preloaded: preloadedLsofs)
                 snapshots.append(ProcessSnapshot(
                     tool: .kimiCLI,
                     sessionID: nil,
@@ -222,7 +270,7 @@ struct ActiveAgentProcessDiscovery {
                     continue
                 }
 
-                let lsofOutput = lsofOutput(pid: process.pid)
+                let lsofOutput = lsofOutput(pid: process.pid, preloaded: preloadedLsofs)
                 snapshots.append(ProcessSnapshot(
                     tool: .grokBuild,
                     sessionID: nil,
@@ -239,7 +287,7 @@ struct ActiveAgentProcessDiscovery {
                     continue
                 }
 
-                let lsofOutput = lsofOutput(pid: process.pid)
+                let lsofOutput = lsofOutput(pid: process.pid, preloaded: preloadedLsofs)
                 snapshots.append(ProcessSnapshot(
                     tool: piAgent.tool,
                     sessionID: nil,
@@ -286,20 +334,31 @@ struct ActiveAgentProcessDiscovery {
 
     private func codexSnapshot(
         for process: RunningProcess,
-        processesByPID: [String: RunningProcess]
+        processesByPID: [String: RunningProcess],
+        preloadedLsofs: [String: String]? = nil
     ) -> ProcessSnapshot? {
-        guard let lsofOutput = lsofOutput(pid: process.pid),
-              let transcriptPath = bestCodexTranscriptPath(in: lsofOutput),
-              let sessionID = firstUUID(in: transcriptPath) else {
+        let lsofOutput = lsofOutput(pid: process.pid, preloaded: preloadedLsofs)
+        var transcriptPath = lsofOutput.flatMap(bestCodexTranscriptPath(in:))
+        var sessionID = transcriptPath.flatMap(firstUUID(in:))
+            ?? firstUUID(in: process.command)
+
+        if transcriptPath == nil, let currentID = sessionID {
+            transcriptPath = fallbackCodexTranscriptPath(sessionID: currentID)
+        } else if sessionID == nil, let transcriptPath {
+            sessionID = firstUUID(in: transcriptPath)
+        }
+
+        guard sessionID != nil || transcriptPath != nil else {
             return nil
         }
 
         var snapshot = ProcessSnapshot(
             tool: .codex,
             sessionID: sessionID,
-            workingDirectory: workingDirectory(from: lsofOutput),
+            workingDirectory: lsofOutput.flatMap(workingDirectory(from:)),
             terminalTTY: process.terminalTTY,
-            terminalApp: terminalApp(for: process, processesByPID: processesByPID)
+            terminalApp: terminalApp(for: process, processesByPID: processesByPID),
+            transcriptPath: transcriptPath
         )
 
         // If terminalApp is nil and we have a TTY, try to resolve tmux info
@@ -320,9 +379,10 @@ struct ActiveAgentProcessDiscovery {
 
     private func cursorSnapshot(
         for process: RunningProcess,
-        processesByPID: [String: RunningProcess]
+        processesByPID: [String: RunningProcess],
+        preloadedLsofs: [String: String]? = nil
     ) -> ProcessSnapshot? {
-        let lsofOutput = lsofOutput(pid: process.pid)
+        let lsofOutput = lsofOutput(pid: process.pid, preloaded: preloadedLsofs)
         let workingDirectory = lsofOutput.flatMap(workingDirectory(from:))
         let sessionID = lsofOutput.flatMap(cursorConversationID(in:))
 
@@ -354,7 +414,8 @@ struct ActiveAgentProcessDiscovery {
     }
 
     private func bestCodexTranscriptPath(in lsofOutput: String) -> String? {
-        let paths = allMatchingPaths(in: lsofOutput, containing: "/.codex/sessions/", suffix: ".jsonl")
+        // Match by layout so sessions from any CODEX_HOME keep their process liveness.
+        let paths = openFilePaths(in: lsofOutput).filter(CodexTranscriptPath.isRolloutTranscript)
         guard !paths.isEmpty else {
             return nil
         }
@@ -368,15 +429,39 @@ struct ActiveAgentProcessDiscovery {
         URL(fileURLWithPath: path).deletingPathExtension().lastPathComponent
     }
 
+    private func fallbackCodexTranscriptPath(sessionID: String) -> String? {
+        let fileManager = FileManager.default
+        let roots = CodexRolloutDiscovery.candidateSessionRoots(fileManager: fileManager)
+        for root in roots {
+            guard fileManager.fileExists(atPath: root.path),
+                  let enumerator = fileManager.enumerator(
+                    at: root,
+                    includingPropertiesForKeys: [.isRegularFileKey],
+                    options: [.skipsHiddenFiles]
+                  ) else {
+                continue
+            }
+            for case let fileURL as URL in enumerator {
+                let name = fileURL.lastPathComponent
+                if name.hasPrefix("rollout-") && name.hasSuffix(".jsonl") && name.contains(sessionID) {
+                    return fileURL.path
+                }
+            }
+        }
+        return nil
+    }
+
     private func isClaudeSubagentWorktree(_ path: String) -> Bool {
         path.contains("/.claude/worktrees/agent-")
+            || path.contains("/.claude-pro-hardened/worktrees/agent-")
     }
 
     private func claudeSnapshot(
         for process: RunningProcess,
-        processesByPID: [String: RunningProcess]
+        processesByPID: [String: RunningProcess],
+        preloadedLsofs: [String: String]? = nil
     ) -> ProcessSnapshot? {
-        let lsofOutput = lsofOutput(pid: process.pid)
+        let lsofOutput = lsofOutput(pid: process.pid, preloaded: preloadedLsofs)
         let workingDirectory = lsofOutput.flatMap(workingDirectory(from:))
 
         // Subagent processes run in .claude/worktrees/agent-*/ directories.
@@ -385,11 +470,21 @@ struct ActiveAgentProcessDiscovery {
             return nil
         }
 
-        let transcriptPath = lsofOutput.flatMap {
+        var transcriptPath = lsofOutput.flatMap {
             bestClaudeTranscriptPath(in: $0, workingDirectory: workingDirectory)
         }
-        let sessionID = transcriptPath.flatMap(firstUUID(in:))
+        var sessionID = transcriptPath.flatMap(firstUUID(in:))
             ?? claudeSessionID(from: process.command)
+
+        if transcriptPath == nil {
+            transcriptPath = fallbackClaudeTranscriptPath(
+                workingDirectory: workingDirectory,
+                sessionID: sessionID
+            )
+            if sessionID == nil {
+                sessionID = transcriptPath.flatMap(firstUUID(in:))
+            }
+        }
 
         guard workingDirectory != nil || sessionID != nil else {
             return nil
@@ -420,8 +515,19 @@ struct ActiveAgentProcessDiscovery {
         return snapshot
     }
 
+    private func candidateClaudeProjectsURLs() -> [URL] {
+        let fileManager = FileManager.default
+        let home = fileManager.homeDirectoryForCurrentUser
+        let paths = [
+            home.appendingPathComponent(".claude/projects", isDirectory: true),
+            home.appendingPathComponent(".claude-pro-hardened/projects", isDirectory: true),
+        ]
+        return paths.filter { fileManager.fileExists(atPath: $0.path) }
+    }
+
     private func bestClaudeTranscriptPath(in lsofOutput: String, workingDirectory: String?) -> String? {
         let paths = allMatchingPaths(in: lsofOutput, containing: "/.claude/projects/", suffix: ".jsonl")
+            + allMatchingPaths(in: lsofOutput, containing: "/.claude-pro-hardened/projects/", suffix: ".jsonl")
         guard !paths.isEmpty else {
             return nil
         }
@@ -438,6 +544,67 @@ struct ActiveAgentProcessDiscovery {
         }
 
         return paths.first
+    }
+
+    private func fallbackClaudeTranscriptPath(
+        workingDirectory: String?,
+        sessionID: String?
+    ) -> String? {
+        let fileManager = FileManager.default
+        let candidateRoots = candidateClaudeProjectsURLs()
+        guard !candidateRoots.isEmpty else { return nil }
+
+        for projectsURL in candidateRoots {
+            if let cwd = workingDirectory {
+                let slug = cwd.replacingOccurrences(of: "/", with: "-")
+                let projectDir = projectsURL.appendingPathComponent(slug, isDirectory: true)
+                if fileManager.fileExists(atPath: projectDir.path) {
+                    if let sessionID {
+                        let directPath = projectDir.appendingPathComponent("\(sessionID).jsonl").path
+                        if fileManager.fileExists(atPath: directPath) {
+                            return directPath
+                        }
+                    }
+                    if let items = try? fileManager.contentsOfDirectory(
+                        at: projectDir,
+                        includingPropertiesForKeys: [.contentModificationDateKey, .isRegularFileKey]
+                    ) {
+                        let jsonlFiles = items.filter { $0.pathExtension == "jsonl" }
+                        if let newest = jsonlFiles.max(by: { a, b in
+                            let dateA = (try? a.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate) ?? .distantPast
+                            let dateB = (try? b.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate) ?? .distantPast
+                            return dateA < dateB
+                        }) {
+                            return newest.path
+                        }
+                    }
+                }
+            }
+
+            if let sessionID {
+                if let subdirs = try? fileManager.contentsOfDirectory(
+                    at: projectsURL,
+                    includingPropertiesForKeys: [.isDirectoryKey]
+                ) {
+                    for subdir in subdirs {
+                        let candidate = subdir.appendingPathComponent("\(sessionID).jsonl").path
+                        if fileManager.fileExists(atPath: candidate) {
+                            return candidate
+                        }
+                    }
+                }
+            }
+        }
+
+        return nil
+    }
+
+    /// Every file path lsof reported (`n`-prefixed lines in `-F` output).
+    private func openFilePaths(in lsofOutput: String) -> [String] {
+        lsofOutput.split(whereSeparator: \.isNewline).compactMap { line in
+            guard line.first == "n" else { return nil }
+            return String(line.dropFirst()).trimmingCharacters(in: .whitespacesAndNewlines)
+        }
     }
 
     private func allMatchingPaths(in lsofOutput: String, containing fragment: String, suffix: String) -> [String] {
@@ -607,8 +774,50 @@ struct ActiveAgentProcessDiscovery {
         return nil
     }
 
-    private func lsofOutput(pid: String) -> String? {
-        commandRunner("/usr/sbin/lsof", ["-a", "-p", pid, "-Fn"])
+    private func lsofOutput(pid: String, preloaded: [String: String]? = nil) -> String? {
+        if let cached = preloaded?[pid] {
+            return cached
+        }
+        return commandRunner("/usr/sbin/lsof", ["-a", "-p", pid, "-Fn"])
+    }
+
+    private func batchLsofOutputs(pids: [String]) -> [String: String] {
+        guard !pids.isEmpty else { return [:] }
+        let pidArg = pids.joined(separator: ",")
+        guard let output = commandRunner("/usr/sbin/lsof", ["-a", "-p", pidArg, "-Fn"]) else {
+            return [:]
+        }
+        var results: [String: String] = [:]
+        var currentPID: String?
+        var currentLines: [String] = []
+
+        for line in output.split(whereSeparator: \.isNewline) {
+            let s = String(line)
+            if s.hasPrefix("p") {
+                if let pid = currentPID, !currentLines.isEmpty {
+                    results[pid] = currentLines.joined(separator: "\n")
+                }
+                currentPID = String(s.dropFirst())
+                currentLines = [s]
+            } else if currentPID != nil {
+                currentLines.append(s)
+            }
+        }
+        if let pid = currentPID, !currentLines.isEmpty {
+            results[pid] = currentLines.joined(separator: "\n")
+        }
+        return results
+    }
+
+    private func isCandidateAgentProcess(command: String) -> Bool {
+        isCodexProcess(command: command)
+            || isClaudeProcess(command: command)
+            || isCursorAgentProcess(command: command)
+            || isOpenCodeProcess(command: command)
+            || isGeminiProcess(command: command)
+            || isKimiProcess(command: command)
+            || isGrokProcess(command: command)
+            || piAgentVariant(command: command) != nil
     }
 
     private func workingDirectory(from lsofOutput: String) -> String? {
@@ -697,13 +906,45 @@ struct ActiveAgentProcessDiscovery {
         return "/dev/\(trimmed)"
     }
 
+    private func effectiveTerminalTTY(
+        for process: RunningProcess,
+        processesByPID: [String: RunningProcess]
+    ) -> String? {
+        if let tty = process.terminalTTY {
+            return tty
+        }
+
+        var currentParentPID = process.parentPID
+        var visited: Set<String> = []
+
+        while !currentParentPID.isEmpty,
+              currentParentPID != "0",
+              currentParentPID != "1",
+              visited.insert(currentParentPID).inserted,
+              let parent = processesByPID[currentParentPID] {
+            if let tty = parent.terminalTTY {
+                return tty
+            }
+            currentParentPID = parent.parentPID
+        }
+
+        return nil
+    }
+
     private func isCodexProcess(command: String) -> Bool {
         let lowered = command.lowercased()
         guard let firstToken = lowered.split(separator: " ").first.map(String.init) else {
             return false
         }
 
-        return firstToken == "codex"
+        let baseName = URL(fileURLWithPath: firstToken).lastPathComponent
+        return baseName == "codex"
+            || baseName.hasPrefix("codex-")
+            || baseName.hasPrefix("codex_")
+            || baseName.hasPrefix("codexplus")
+            || baseName.hasPrefix("codexpro")
+            || baseName.hasPrefix("codexyi")
+            || firstToken == "codex"
             || firstToken.hasSuffix("/codex")
             || lowered.contains("/codex/codex")
     }
@@ -791,12 +1032,83 @@ struct ActiveAgentProcessDiscovery {
         guard let firstToken = lowered.split(separator: " ").first.map(String.init) else {
             return false
         }
+        let binaryName = (firstToken as NSString).lastPathComponent
 
-        return firstToken == "gemini"
+        return binaryName == "gemini"
+            || binaryName == "agy"
+            || binaryName == "antigravity"
+            || binaryName == "antigravity-cli"
+            || firstToken == "gemini"
             || firstToken.hasSuffix("/gemini")
+            || firstToken == "agy"
+            || firstToken.hasSuffix("/agy")
             || lowered.contains("/bin/gemini")
             || lowered.contains("/google/gemini-cli")
             || lowered.contains("/@google/gemini-cli")
+    }
+
+    private func agySessionID(in lsofOutput: String?, command: String) -> String? {
+        if let lsofOutput {
+            for line in lsofOutput.split(whereSeparator: \.isNewline) {
+                guard line.first == "n" else { continue }
+                let path = String(line.dropFirst()).trimmingCharacters(in: .whitespacesAndNewlines)
+                if path.contains("/presence/") && path.hasSuffix(".lock"),
+                   let uuid = firstUUID(in: path) {
+                    return uuid
+                }
+                if path.contains("/conversations/") && (path.hasSuffix(".db") || path.hasSuffix(".db-wal") || path.hasSuffix(".db-shm")),
+                   let uuid = firstUUID(in: path) {
+                    return uuid
+                }
+                if path.contains("/brain/") && path.contains("/transcript"),
+                   let uuid = firstUUID(in: path) {
+                    return uuid
+                }
+            }
+        }
+        return agySessionID(from: command)
+    }
+
+    private func agySessionID(from command: String) -> String? {
+        let tokens = command.split(whereSeparator: \.isWhitespace).map(String.init)
+        for index in tokens.indices {
+            let token = tokens[index]
+            if token == "--conversation" || token == "-c" {
+                let nextIndex = tokens.index(after: index)
+                if tokens.indices.contains(nextIndex), let uuid = firstUUID(in: tokens[nextIndex]) {
+                    return uuid
+                }
+            }
+            if token.hasPrefix("--conversation=") {
+                let value = String(token.split(separator: "=", maxSplits: 1).last ?? "")
+                if let uuid = firstUUID(in: value) {
+                    return uuid
+                }
+            }
+        }
+        return nil
+    }
+
+    private func agyTranscriptPath(in lsofOutput: String?, sessionID: String?) -> String? {
+        guard let sessionID else { return nil }
+        if let lsofOutput {
+            for line in lsofOutput.split(whereSeparator: \.isNewline) {
+                guard line.first == "n" else { continue }
+                let path = String(line.dropFirst()).trimmingCharacters(in: .whitespacesAndNewlines)
+                if path.contains("/brain/\(sessionID)/") && path.hasSuffix("transcript.jsonl") {
+                    return path
+                }
+                if path.contains("/presence/\(sessionID).lock") || path.contains("/conversations/\(sessionID).db") {
+                    let pathComponents = (path as NSString).pathComponents
+                    if let pIndex = pathComponents.lastIndex(where: { $0 == "presence" || $0 == "conversations" }), pIndex > 0 {
+                        let appDataDir = NSString.path(withComponents: Array(pathComponents[..<pIndex]))
+                        let candidate = (appDataDir as NSString).appendingPathComponent("brain/\(sessionID)/.system_generated/logs/transcript.jsonl")
+                        return candidate
+                    }
+                }
+            }
+        }
+        return nil
     }
 
     /// Matches the `kimi` CLI (Moonshot) entry-point. `kimi-info` / `kimi-mcp` /
@@ -857,12 +1169,14 @@ struct ActiveAgentProcessDiscovery {
         return nil
     }
 
-    /// Returns `true` when the given `ps` command string belongs to a Claude Code process.
-    /// Matches the official `~/.local/bin/claude` path as well as any absolute path whose
-    /// last component is `claude` (e.g. `~/.codefuse/.../claude`).
+    /// Returns `true` when the given `ps` command string belongs to a Claude Code process,
+    /// including the isolated hardened `claude-pro` sandbox CLI and wrapper scripts.
     private func isClaudeProcess(command: String) -> Bool {
         let lowered = command.lowercased()
-        if lowered.contains("/.local/bin/claude") {
+        if lowered.contains("/.local/bin/claude")
+            || lowered.contains("/.local/bin/claude-pro")
+            || lowered.contains("/claude-pro-bin/claude-pro-exec")
+            || lowered.contains("claude-pro-hardening/guard.cjs run") {
             return true
         }
 
@@ -871,7 +1185,11 @@ struct ActiveAgentProcessDiscovery {
         }
 
         return firstToken == "claude"
+            || firstToken == "claude-pro"
+            || firstToken == "claude-pro-exec"
             || firstToken.hasSuffix("/claude")
+            || firstToken.hasSuffix("/claude-pro")
+            || firstToken.hasSuffix("/claude-pro-exec")
     }
 
     private static func commandOutput(executablePath: String, arguments: [String]) -> String? {
@@ -915,7 +1233,7 @@ struct ActiveAgentProcessDiscovery {
             return nil
         }
 
-        _ = outputGroup.wait(timeout: .now() + 0.1)
+        _ = outputGroup.wait(timeout: .now() + 0.5)
         guard let output = String(data: outputBox.data, encoding: .utf8)?
             .trimmingCharacters(in: .whitespacesAndNewlines),
               !output.isEmpty else {
@@ -947,24 +1265,52 @@ struct ActiveAgentProcessDiscovery {
         return path.isEmpty ? nil : path
     }
 
+    private struct TmuxResolution {
+        let target: String
+        let paneTTY: String
+        let paneTitle: String?
+        let hostTerminalApp: String?
+        let socketPath: String?
+    }
+
     private func resolveTmuxInfo(
         agentTTY: String,
         processes: [RunningProcess],
         processesByPID: [String: RunningProcess]
     ) -> (target: String, hostTerminalApp: String?, socketPath: String?)? {
+        guard let resolution = resolveTmuxInfo(
+            agentTTYs: [agentTTY],
+            processes: processes,
+            processesByPID: processesByPID
+        ) else {
+            return nil
+        }
+        return (resolution.target, resolution.hostTerminalApp, resolution.socketPath)
+    }
+
+    private func resolveTmuxInfo(
+        agentTTYs: [String],
+        processes: [RunningProcess],
+        processesByPID: [String: RunningProcess]
+    ) -> TmuxResolution? {
         guard let tmuxPath = resolveTmuxPath() else {
             return nil
         }
+        guard !agentTTYs.isEmpty else {
+            return nil
+        }
 
-        // Find tmux-server process to extract socket path if custom
-        var socketPath: String? = nil
+        // Find tmux-server process to extract a custom socket path, if any.
+        // The default server must be tried first: a custom server elsewhere in
+        // the process table must not hijack a pane that lives on the default
+        // server.
+        var customSocketPath: String? = nil
         for process in processes {
             if isTmuxServerProcess(command: process.command) {
-                // Extract socket path from tmux-server command line
                 let parts = process.command.split(separator: " ").map(String.init)
                 for (index, part) in parts.enumerated() {
                     if (part == "-S" || part == "-L"), parts.indices.contains(index + 1) {
-                        socketPath = String(parts[index + 1])
+                        customSocketPath = String(parts[index + 1])
                         break
                     }
                 }
@@ -972,21 +1318,72 @@ struct ActiveAgentProcessDiscovery {
             }
         }
 
-        // Query tmux list-panes to find the pane matching our TTY
-        guard let tmuxTarget = queryTmuxTarget(agentTTY: agentTTY, tmuxPath: tmuxPath, socketPath: socketPath) else {
-            return nil
+        let socketCandidates: [String?] = customSocketPath.map { [nil, $0] } ?? [nil]
+        let candidates = Set(agentTTYs)
+
+        for socketPath in socketCandidates {
+            guard let match = queryTmuxTarget(
+                agentTTYs: candidates,
+                tmuxPath: tmuxPath,
+                socketPath: socketPath
+            ) else {
+                continue
+            }
+
+            // Find the terminal app hosting the tmux client for this pane.
+            guard let hostTerminalApp = findTmuxClientTerminal(
+                tmuxPath: tmuxPath,
+                socketPath: socketPath,
+                processesByPID: processesByPID
+            ) else {
+                continue
+            }
+
+            return TmuxResolution(
+                target: match.target,
+                paneTTY: match.tty,
+                paneTitle: match.title,
+                hostTerminalApp: hostTerminalApp,
+                socketPath: socketPath
+            )
         }
 
-        // Find the terminal app hosting the tmux client connected to this pane
-        guard let hostTerminalApp = findTmuxClientTerminal(tmuxPath: tmuxPath, socketPath: socketPath, processesByPID: processesByPID) else {
-            return nil
-        }
-
-        return (tmuxTarget, hostTerminalApp, socketPath)
+        return nil
     }
 
-    private func queryTmuxTarget(agentTTY: String, tmuxPath: String, socketPath: String?) -> String? {
-        var args: [String] = ["list-panes", "-a", "-F", "#{pane_tty}\t#{session_name}:#{window_index}.#{pane_index}"]
+    /// TTYs to try when mapping a process to a tmux pane. Wrappers such as
+    /// `agy-suggest` allocate a child PTY for `agy`, so the agent's own TTY
+    /// may not belong to any pane; an ancestor's TTY usually does.
+    private func tmuxCandidateTTYs(
+        for process: RunningProcess,
+        processesByPID: [String: RunningProcess]
+    ) -> [String] {
+        var ttys: [String] = []
+        func append(_ tty: String?) {
+            guard let tty, !tty.isEmpty, !ttys.contains(tty) else { return }
+            ttys.append(tty)
+        }
+
+        append(process.terminalTTY)
+        var parentPID = process.parentPID
+        var visited: Set<String> = []
+        while !parentPID.isEmpty,
+              parentPID != "0",
+              parentPID != "1",
+              visited.insert(parentPID).inserted,
+              let parent = processesByPID[parentPID] {
+            append(parent.terminalTTY)
+            parentPID = parent.parentPID
+        }
+        return ttys
+    }
+
+    private func queryTmuxTarget(
+        agentTTYs: Set<String>,
+        tmuxPath: String,
+        socketPath: String?
+    ) -> (target: String, tty: String, title: String?)? {
+        var args: [String] = ["list-panes", "-a", "-F", "#{pane_tty}\t#{session_name}:#{window_index}.#{pane_index}\t#{pane_title}"]
 
         if let socketPath = socketPath {
             args = ["-S", socketPath] + args
@@ -997,16 +1394,19 @@ struct ActiveAgentProcessDiscovery {
         }
 
         for line in output.split(separator: "\n") {
-            let parts = line.split(separator: "\t", maxSplits: 1).map(String.init)
-            guard parts.count == 2 else {
+            let parts = line.split(separator: "\t", maxSplits: 2, omittingEmptySubsequences: false).map(String.init)
+            guard parts.count >= 2 else {
                 continue
             }
 
-            let ptrTTY = parts[0].trimmingCharacters(in: .whitespacesAndNewlines)
+            let paneTTY = parts[0].trimmingCharacters(in: .whitespacesAndNewlines)
             let target = parts[1].trimmingCharacters(in: .whitespacesAndNewlines)
+            let title = parts.count > 2
+                ? parts[2].trimmingCharacters(in: .whitespacesAndNewlines)
+                : ""
 
-            if ptrTTY == agentTTY {
-                return target
+            if agentTTYs.contains(paneTTY) {
+                return (target, paneTTY, title.isEmpty ? nil : title)
             }
         }
 

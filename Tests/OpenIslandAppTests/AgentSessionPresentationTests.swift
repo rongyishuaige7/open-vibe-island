@@ -98,6 +98,29 @@ struct AgentSessionPresentationTests {
         #expect(session.spotlightShowsDetailLines(at: referenceDate))
     }
 
+
+    @Test
+    func dshHeadlineShowsConversationTitleBeforeWorkspace() {
+        var session = AgentSession(
+            id: "dsh:session-1",
+            title: "DeepSeek Harness · repo",
+            tool: .deepSeekHarness,
+            phase: .running,
+            summary: "Working",
+            updatedAt: .now,
+            jumpTarget: JumpTarget(
+                terminalApp: "DeepSeek Harness",
+                workspaceName: "repo",
+                paneTitle: "Fix login",
+                workingDirectory: "/tmp/repo"
+            )
+        )
+        session.conversationTitle = "Fix login"
+
+        #expect(session.spotlightHeadlinePromptText == "Fix login")
+        #expect(session.spotlightHeadlineText == "Fix login · repo")
+    }
+
     @Test
     func completionReplyRecipientCoversEveryAgentTool() {
         let expectedNames: [(AgentTool, String)] = [
@@ -114,6 +137,7 @@ struct AgentSessionPresentationTests {
             (.grokBuild, "Grok"),
             (.pi, "Pi"),
             (.ohMyPi, "Oh My Pi"),
+            (.deepSeekHarness, "DeepSeek Harness"),
         ]
         #expect(expectedNames.map { $0.0.rawValue }.sorted() == AgentTool.allCases.map(\.rawValue).sorted())
 
@@ -212,7 +236,7 @@ struct AgentSessionPresentationTests {
         )
 
         // Headline uses initial prompt (session topic), prompt line uses latest
-        #expect(session.spotlightHeadlineText == "worktree · Start by fixing the island hover behavior.")
+        #expect(session.spotlightHeadlineText == "Start by fixing the island hover behavior. · worktree")
         #expect(session.spotlightPromptLineText == "You: Now make the overlay height fit the content.")
     }
 
@@ -259,7 +283,7 @@ struct AgentSessionPresentationTests {
             )
         )
 
-        #expect(session.spotlightHeadlineText == "worktree · Start by fixing the island hover behavior.")
+        #expect(session.spotlightHeadlineText == "Start by fixing the island hover behavior. · worktree")
         #expect(session.spotlightPromptLineText == "You: Now make the overlay height fit the content.")
     }
 
@@ -289,7 +313,7 @@ struct AgentSessionPresentationTests {
             )
         )
 
-        #expect(session.spotlightHeadlineText == "worktree · Commit the README change.")
+        #expect(session.spotlightHeadlineText == "Commit the README change. · worktree")
         #expect(session.spotlightPromptLineText == "You: Also confirm the worktree status.")
         #expect(session.notificationHeaderPromptLineText == nil)
     }

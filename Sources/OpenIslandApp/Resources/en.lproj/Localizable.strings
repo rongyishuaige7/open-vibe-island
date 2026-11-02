@@ -28,6 +28,23 @@
 "settings.general.hapticFeedback" = "Haptic feedback on hover";
 "settings.general.suppressFrontmostNotifications" = "Suppress notifications for focused sessions";
 "settings.general.showCodexUsage" = "Show Codex usage";
+"settings.general.showTodayTokenUsage" = "Show today's tokens";
+"settings.general.showTodayTokenUsage.caption" = "Agent totals from CC Switch, KEEPER and Claude Pro local logs, plus DeepSeek Harness from its local bridge. Cache included.";
+"usage.todayTokens.title" = "Today";
+"usage.todayTokens.help" = "Tokens since local midnight, cache included: Claude/Codex/AGY/Claude Pro from local usage stores, DSH from its local ledger";
+"usage.todayTokens.helpLine" = "%@: %@ tokens, %@ from cache reads, %@ requests";
+"usage.todayTokens.helpLineSessions" = "%@: %@ tokens, %@ from cache reads, %@ sessions";
+"usage.todayTokens.readFailed" = "Last refresh failed: %@";
+"usage.todayTokens.detailTitle" = "Today's Token Usage";
+"usage.todayTokens.totalLabel" = "Total Tokens Today";
+"usage.todayTokens.totalLine" = "Total Tokens Today: %@";
+"usage.todayTokens.dataSource" = "Sources: CC Switch, KEEPER, Claude Pro & DSH bridge";
+"usage.todayTokens.claudePro" = "Claude Pro";
+"usage.todayTokens.agyPool" = "AGY Pool";
+"usage.todayTokens.agyPro" = "AGY Pro";
+"usage.todayTokens.other" = "Other";
+"usage.todayTokens.subtext" = "%@ requests · cache %@";
+"usage.todayTokens.subtextSessions" = "%@ sessions · cache %@";
 "settings.general.completionReply" = "Reply from completion card";
 "settings.general.cliHooks" = "CLI Hooks";
 "settings.general.activated" = "Activated";
@@ -36,6 +53,7 @@
 "settings.general.uninstallConfirmTitle" = "Uninstall Hooks?";
 "settings.general.uninstallConfirmAction" = "Uninstall";
 "settings.general.uninstallConfirmMessage.claude" = "This will remove Open Island hooks from Claude Code. You can reinstall them at any time.";
+"settings.general.uninstallConfirmMessage.dsh" = "This removes the Open Island bridge from your DeepSeek Harness profiles. Restart DeepSeek Harness afterwards.";
 "settings.general.uninstallConfirmMessage.codex" = "This will remove Open Island hooks from Codex. You can reinstall them at any time.";
 "settings.general.uninstallConfirmMessage.claudeUsage" = "This will remove the Claude usage bridge. You can reinstall it at any time.";
 "settings.general.cancel" = "Cancel";
@@ -59,6 +77,7 @@
 "settings.appearance.rightSlot.note" = "What shows on the right of the closed island.";
 "settings.appearance.rightSlot.count" = "Count";
 "settings.appearance.rightSlot.agents" = "Agents";
+"settings.appearance.rightSlot.mascots" = "Mascots";
 "settings.appearance.rightSlot.none" = "None";
 "settings.appearance.centerLabel.title" = "02 · Center label";
 "settings.appearance.centerLabel.note" = "External displays only — the physical notch covers this space on MacBook.";
@@ -84,6 +103,7 @@
 "settings.appearance.stateIndicator.bar" = "Bar";
 "settings.appearance.stateIndicator.glyph" = "Glyph";
 "settings.appearance.stateIndicator.tint" = "Tint";
+"settings.appearance.stateIndicator.pixel" = "Pixel";
 "settings.appearance.sessionGroup.title" = "04 · Session grouping";
 "settings.appearance.sessionGroup.note" = "Optional sections for the expanded session list.";
 "settings.appearance.sessionGroup.none" = "None";
@@ -197,6 +217,7 @@
 "island.section.inProgress" = "In progress";
 "island.section.justDone" = "Just done";
 "island.section.idle" = "Idle";
+"island.mascot.waiting" = "needs you";
 "island.showAll" = "Show all %lld sessions";
 "island.collapseList" = "Collapse list";
 "island.usageWaiting" = "Usage waiting";
@@ -226,3 +247,49 @@
 
 /* Window Titles */
 "window.settings" = "Open Island Settings";
+
+/* Session rows: status words and Open Island's own summaries */
+"session.status.running" = "Running";
+"session.status.thinking" = "Thinking";
+"session.status.approvalNeeded" = "Approval needed";
+"session.status.answerNeeded" = "Answer needed";
+"session.status.ready" = "Ready";
+"session.status.completed" = "Completed";
+"session.promptLine" = "You: %@";
+"session.summary.started" = "Started %@ session in %@.";
+"session.summary.resumed" = "Resumed %@ session in %@.";
+"session.summary.clearedContext" = "Cleared %@ context in %@.";
+"session.summary.compactedContext" = "Compacted %@ context in %@.";
+"session.summary.endedIn" = "%@ session ended in %@.";
+"session.summary.ended" = "%@ session ended.";
+"session.summary.compacting" = "%@ is compacting the conversation.";
+"session.summary.detectedFrom" = "%@ session detected from %@.";
+"session.summary.detected" = "%@ session detected.";
+"session.summary.agentDetectedFrom" = "%@ agent detected from %@.";
+"session.summary.agentDetected" = "%@ agent detected.";
+"session.summary.codexPreparingBash" = "Codex is preparing a Bash command in %@.";
+"session.summary.codexWaitingPermissionIn" = "Codex is waiting for permission approval in %@.";
+"session.summary.codexBashResult" = "Codex reported a Bash result in %@.";
+"session.summary.codexNewPrompt" = "Codex received a new prompt in %@.";
+"session.summary.codexTurnCompletedIn" = "Codex completed a turn in %@.";
+"session.summary.codexWantsToUse" = "Codex wants to use %@.";
+"session.summary.codexRequestingPermission" = "Codex is requesting permission.";
+"session.summary.codexWantsShell" = "Codex wants to run a shell command.";
+"session.summary.codexWaitingApproval" = "Codex is waiting for approval.";
+"session.summary.codexWaitingInput" = "Codex is waiting for input.";
+"session.summary.codexWorking" = "Codex is working…";
+"session.summary.codexSession" = "Codex session.";
+"session.summary.idle" = "Idle.";
+"session.summary.turnFailed" = "Turn failed.";
+"session.summary.turnStalled" = "Turn stalled.";
+"session.summary.turnInterrupted" = "Codex turn was interrupted.";
+"session.summary.threadClosed" = "Codex thread closed.";
+"session.summary.threadArchived" = "Codex thread archived.";
+"session.summary.rateLimited" = "Rate limit reached.";
+"session.summary.runningTool" = "Running %@.";
+"session.summary.thinking" = "Thinking.";
+"session.summary.prompt" = "Prompt: %@";
+"session.summary.permissionInactive" = "Permission request is no longer active.";
+"session.summary.approvalHandledElsewhere" = "Approval was handled outside Open Island.";
+"session.summary.hookDisconnected" = "Hook process disconnected.";
+"session.summary.claudeExitPlan" = "Claude wants to exit plan mode and start implementation.";

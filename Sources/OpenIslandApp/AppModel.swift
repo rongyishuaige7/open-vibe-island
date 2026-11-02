@@ -2,6 +2,7 @@ import AppKit
 import Foundation
 import Observation
 import OpenIslandCore
+import os
 import SwiftUI
 
 extension Notification.Name {
@@ -24,6 +25,7 @@ final class AppModel {
     private static let islandRightSlotDefaultsKey = "appearance.island.v6.rightSlot"
     private static let islandCenterLabelDefaultsKey = "appearance.island.v6.centerLabel"
     private static let showCodexUsageDefaultsKey = "app.showCodexUsage"
+    private static let showTodayTokenUsageDefaultsKey = "app.showTodayTokenUsage"
     private static let completionReplyEnabledDefaultsKey = "feature.completionReply.enabled"
     private static let suppressFrontmostNotificationsDefaultsKey = "app.suppressFrontmostNotifications"
     private static let legacyIslandSessionStateIndicatorDefaultsKey = "appearance.island.v8.stateIndicator"
@@ -51,9 +53,18 @@ final class AppModel {
         didSet {
             _cachedSessionBuckets = nil
             pruneAgentsGridObservationTicketsIfNeeded()
-            bridgeServer.updateStateSnapshot(state)
+            bridgeServer.updateStateSnapshot(state, appliedObserverEvents: appliedBridgeEventCount)
+            let sessionCount = state.sessions.count
+            sessionCountSnapshot.withLock { $0 = sessionCount }
+            watchRelay?.endpoint.updateActiveSessionCount(sessionCount)
         }
     }
+    /// `state.sessions.count`, readable off the main actor. The Watch HTTP
+    /// endpoint asks for it on its network queue.
+    private let sessionCountSnapshot = OSAllocatedUnfairLock(initialState: 0)
+    /// Events applied from the current bridge observer connection. Every
+    /// snapshot carries it so the bridge can replay the events still in flight.
+    @ObservationIgnored private var appliedBridgeEventCount = 0
     @ObservationIgnored private var _cachedSessionBuckets: (primary: [AgentSession], overflow: [AgentSession])?
 
     /// Monotonic ticket assigned the first time a session ID shows up in the
@@ -71,6 +82,7 @@ final class AppModel {
     let monitoring = ProcessMonitoringCoordinator()
     let codexAppServer = CodexAppServerCoordinator()
     let updateChecker = UpdateChecker()
+    let todayTokenUsageMonitor = TodayTokenUsageMonitor()
 
     var notchStatus: NotchStatus {
         get { overlay.notchStatus }
@@ -110,6 +122,9 @@ final class AppModel {
     var isFactoryHookSetupBusy: Bool { hooks.isFactoryHookSetupBusy }
     var isCodebuddyHookSetupBusy: Bool { hooks.isCodebuddyHookSetupBusy }
     var openCodePluginInstalled: Bool { hooks.openCodePluginInstalled }
+    var dshIntegrationInstalled: Bool { hooks.dshIntegrationInstalled }
+    var dshIntegrationStatus: DSHIntegrationStatus? { hooks.dshIntegrationStatus }
+    var isDSHSetupBusy: Bool { hooks.isDSHSetupBusy }
     var claudeUsageInstalled: Bool { hooks.claudeUsageInstalled }
     var claudeHookStatusTitle: String { hooks.claudeHookStatusTitle }
     var claudeHookStatusSummary: String { hooks.claudeHookStatusSummary }
@@ -174,6 +189,7 @@ final class AppModel {
             || hooks.factoryHooksInstalled
             || hooks.codebuddyHooksInstalled
             || hooks.openCodePluginInstalled
+            || hooks.dshIntegrationInstalled
             || hooks.geminiHooksInstalled
             || hooks.kimiHooksInstalled
             || hooks.grokHooksInstalled
@@ -217,6 +233,11 @@ final class AppModel {
     func uninstallPiExtension() { hooks.uninstallPiExtension() }
     func installOhMyPiExtension() { hooks.installOhMyPiExtension() }
     func uninstallOhMyPiExtension() { hooks.uninstallOhMyPiExtension() }
+    func installDSHIntegration() {
+        showTodayTokenUsage = true
+        hooks.installDSHIntegration()
+    }
+    func uninstallDSHIntegration() { hooks.uninstallDSHIntegration() }
     func installClaudeUsageBridge() { hooks.installClaudeUsageBridge() }
     func uninstallClaudeUsageBridge() { hooks.uninstallClaudeUsageBridge() }
     func updateClaudeConfigDirectory(to newDirectory: URL?) { hooks.updateClaudeConfigDirectory(to: newDirectory) }
@@ -285,6 +306,19 @@ final class AppModel {
         didSet {
             guard hasFinishedInit, showCodexUsage != oldValue else { return }
             UserDefaults.standard.set(showCodexUsage, forKey: Self.showCodexUsageDefaultsKey)
+        }
+    }
+    /// Shows today's Claude/Codex/AGY/Claude Pro totals from the local usage
+    /// stores plus DSH totals from the host plugin's ledger.
+    var showTodayTokenUsage: Bool = false {
+        didSet {
+            guard hasFinishedInit, showTodayTokenUsage != oldValue else { return }
+            UserDefaults.standard.set(showTodayTokenUsage, forKey: Self.showTodayTokenUsageDefaultsKey)
+            if showTodayTokenUsage {
+                todayTokenUsageMonitor.start()
+            } else {
+                todayTokenUsageMonitor.stop()
+            }
         }
     }
     var completionReplyEnabled: Bool = false {
@@ -488,16 +522,20 @@ final class AppModel {
     }
 
     /// Number of currently connected iPhone SSE clients.
-    var watchConnectedDevices: Int {
-        // Placeholder — endpoint doesn't expose count yet
-        0
-    }
+    private(set) var watchConnectedDevices = 0
 
     private func startWatchRelay() {
         guard watchRelay == nil else { return }
         let relay = WatchNotificationRelay()
         setupWatchRelayCallbacks(relay)
+        relay.endpoint.onConnectionCountChanged = { [weak self] count in
+            Task { @MainActor [weak self] in
+                self?.watchConnectedDevices = count
+            }
+        }
+        watchConnectedDevices = 0
         relay.start()
+        relay.endpoint.updateActiveSessionCount(state.sessions.count)
         self.watchRelay = relay
     }
 
@@ -518,18 +556,19 @@ final class AppModel {
             }
         }
 
-        relay.endpoint.activeSessionCountProvider = { [weak self] in
-            // Safe to call from any queue — reads a snapshot count.
-            guard let self else { return 0 }
-            return MainActor.assumeIsolated {
-                self.state.sessions.count
-            }
-        }
+        relay.endpoint.activeSessionCountProvider = activeSessionCountProvider
+    }
+
+    /// Safe to call from any queue; reads the count mirrored by `state`'s didSet.
+    nonisolated var activeSessionCountProvider: WatchActiveSessionCountProvider {
+        let snapshot = sessionCountSnapshot
+        return { snapshot.withLock { $0 } }
     }
 
     private func stopWatchRelay() {
         watchRelay?.stop()
         watchRelay = nil
+        watchConnectedDevices = 0
     }
 
     var ignoresPointerExitDuringHarness = false
@@ -570,6 +609,9 @@ final class AppModel {
 
     @ObservationIgnored
     private var notificationPresentationTask: Task<Void, Never>?
+
+    @ObservationIgnored
+    private var lastHookRepairAttemptDate: Date?
 
     private static func appearanceDefaultsKey(_ profile: IslandAppearanceDisplayProfile, _ name: String) -> String {
         "appearance.island.v8.\(profile.rawValue).\(name)"
@@ -641,9 +683,22 @@ final class AppModel {
         if UserDefaults.standard.object(forKey: Self.showCodexUsageDefaultsKey) != nil {
             showCodexUsage = UserDefaults.standard.bool(forKey: Self.showCodexUsageDefaultsKey)
         } else {
-            showCodexUsage = FileManager.default.fileExists(
-                atPath: CodexRolloutDiscovery.defaultRootURL.path
-            )
+            showCodexUsage = CodexRolloutDiscovery.candidateSessionRoots().contains {
+                FileManager.default.fileExists(atPath: $0.path)
+            }
+        }
+        if UserDefaults.standard.object(forKey: Self.showTodayTokenUsageDefaultsKey) != nil {
+            showTodayTokenUsage = UserDefaults.standard.bool(forKey: Self.showTodayTokenUsageDefaultsKey)
+        } else {
+            showTodayTokenUsage = FileManager.default.fileExists(
+                atPath: CCSwitchUsageReader.defaultDatabaseURL.path
+            ) || FileManager.default.fileExists(
+                atPath: KeeperUsageReader.defaultDatabaseURL.path
+            ) || FileManager.default.fileExists(
+                atPath: ClaudeProUsageReader.defaultProjectsDirectoryURL.path
+            ) || FileManager.default.fileExists(
+                atPath: ClaudeProUsageReader.defaultSessionsDirectoryURL.path
+            ) || DSHIntegrationManager().status().isInstalled
         }
         completionReplyEnabled = UserDefaults.standard.bool(forKey: Self.completionReplyEnabledDefaultsKey)
         launchAtLoginEnabled = LaunchAtLoginService.shared.isEnabled
@@ -721,6 +776,17 @@ final class AppModel {
         monitoring.onSessionsReconciled = { [weak self] in
             self?.synchronizeSelection()
             self?.refreshOverlayPlacementIfVisible()
+            // Reconcile can add live Codex sessions; start watching their rollouts.
+            self?.discovery.refreshCodexRolloutTracking()
+            if let self, self.state.sessions.contains(where: { self.monitoring.isSyntheticClaudeSession($0) }) {
+                let now = Date.now
+                if self.lastHookRepairAttemptDate == nil || now.timeIntervalSince(self.lastHookRepairAttemptDate!) > 30 {
+                    self.lastHookRepairAttemptDate = now
+                    Task { @MainActor [weak self] in
+                        _ = await self?.hooks.repairHooksIfNeeded()
+                    }
+                }
+            }
         }
         monitoring.onPersistenceNeeded = { [weak self] in
             self?.discovery.scheduleCodexSessionPersistence()
@@ -739,6 +805,12 @@ final class AppModel {
         }
         monitoring.onCodexAppMaintenanceTick = { [weak self] in
             self?.discovery.maintainCodexAppSessionsIfNeeded()
+        }
+        todayTokenUsageMonitor.onDatabaseChanged = { [weak self] in
+            guard let self else { return }
+            if self.showCodexUsage {
+                self.hooks.refreshCodexRateLimitsFromKeeper()
+            }
         }
         refreshOverlayDisplayConfiguration()
         hasFinishedInit = true
@@ -826,7 +898,21 @@ final class AppModel {
     private func sortIslandSessions(_ sessions: [AgentSession]) -> [AgentSession] {
         switch islandSessionSort {
         case .attention:
-            return sessions
+            let now = Date.now
+            return sessions.sorted { lhs, rhs in
+                let lhsScore = displayPriority(for: lhs, now: now)
+                let rhsScore = displayPriority(for: rhs, now: now)
+
+                if lhsScore == rhsScore {
+                    if lhs.islandActivityDate == rhs.islandActivityDate {
+                        return lhs.title.localizedStandardCompare(rhs.title) == .orderedAscending
+                    }
+
+                    return lhs.islandActivityDate > rhs.islandActivityDate
+                }
+
+                return lhsScore > rhsScore
+            }
         case .lastUpdate:
             return sessions.sorted { lhs, rhs in
                 if lhs.islandActivityDate == rhs.islandActivityDate {
@@ -952,6 +1038,9 @@ final class AppModel {
                 cells.append(.overflow(ordered.count - 7))
             }
             return cells.isEmpty ? nil : .agents(cells)
+        case .mascots:
+            let slots = Self.mascotSlots(for: sessions)
+            return slots.isEmpty ? nil : .mascots(slots)
         }
     }
 
@@ -988,15 +1077,37 @@ final class AppModel {
 
     private static func agentsGridCell(for session: AgentSession) -> AgentGridCell {
         let color = Color(hex: session.tool.brandColorHex) ?? .gray
-        let state: AgentGridCellState
+        return .session(color: color, state: agentsGridState(for: session))
+    }
+
+    private static func agentsGridState(for session: AgentSession) -> AgentGridCellState {
         if session.phase.requiresAttention {
-            state = .waiting
-        } else if session.phase == .running {
-            state = .running
-        } else {
-            state = .idle
+            return .waiting
         }
-        return .session(color: color, state: state)
+        return session.phase == .running ? .running : .idle
+    }
+
+    /// One mascot per agent tool, carrying the most urgent state among its
+    /// sessions. At most three, in `AgentTool` order reversed so Claude sits
+    /// outermost: on a MacBook the slot's inner edge runs under the notch.
+    static func mascotSlots(for sessions: [AgentSession]) -> [PixelMascotSlot] {
+        func rank(_ state: AgentGridCellState) -> Int {
+            switch state {
+            case .waiting: 2
+            case .running: 1
+            case .idle: 0
+            }
+        }
+        var states: [AgentTool: AgentGridCellState] = [:]
+        for session in sessions {
+            let state = agentsGridState(for: session)
+            if let current = states[session.tool], rank(current) >= rank(state) { continue }
+            states[session.tool] = state
+        }
+        let present = AgentTool.allCases.compactMap { tool in
+            states[tool].map { PixelMascotSlot(tool: tool, state: $0) }
+        }
+        return Array(present.prefix(3).reversed())
     }
 
     var shouldShowSessionBootstrapPlaceholder: Bool {
@@ -1121,19 +1232,17 @@ final class AppModel {
                 }
             }
 
-            // These are already async or lightweight — safe to start immediately.
-            hooks.refreshCodexHookStatus()
-            hooks.refreshClaudeHookStatus()
-            hooks.refreshCCForkHookStatuses()
-            hooks.refreshOpenCodePluginStatus()
-            hooks.refreshPiExtensionStatuses()
+            // Cursor is not covered by refreshAllHookStatusAndWait below, so
+            // refresh it here. Everything else is read once, after startup
+            // discovery has applied, instead of being read twice.
             hooks.refreshCursorHookStatus()
-            hooks.refreshGrokHookStatus()
-            hooks.refreshClaudeUsageState()
             hooks.startClaudeUsageMonitoringIfNeeded()
             if showCodexUsage {
                 hooks.refreshCodexUsageState()
                 hooks.startCodexUsageMonitoringIfNeeded()
+            }
+            if showTodayTokenUsage {
+                todayTokenUsageMonitor.start()
             }
             updateChecker.startIfNeeded()
 
@@ -1160,7 +1269,11 @@ final class AppModel {
             connectBridgeObserver()
         } catch {
             isBridgeReady = false
-            lastActionMessage = "Failed to start local bridge: \(error.localizedDescription)"
+            if case let .bridgeAlreadyRunning(path)? = error as? BridgeTransportError {
+                lastActionMessage = "Another Open Island instance is already running on \(path). Quit it before launching this build."
+            } else {
+                lastActionMessage = "Failed to start local bridge: \(error.localizedDescription)"
+            }
             harnessRuntimeMonitor?.recordMilestone("bridgeStartFailed", message: lastActionMessage)
         }
     }
@@ -1182,6 +1295,7 @@ final class AppModel {
         // have to worry about stale file-descriptor state.
         let client = LocalBridgeClient()
         bridgeClient = client
+        appliedBridgeEventCount = 0
 
         let stream: AsyncThrowingStream<AgentEvent, Error>
         do {
@@ -1217,6 +1331,11 @@ final class AppModel {
 
             do {
                 for try await event in stream {
+                    // A reconnect has already reset the count for its new client.
+                    guard self.bridgeClient === client else { break }
+                    // Count first: applying the event pushes a snapshot that
+                    // already includes it.
+                    self.appliedBridgeEventCount += 1
                     self.applyTrackedEvent(event)
                 }
             } catch {}
@@ -1416,17 +1535,24 @@ final class AppModel {
         }
 
         let resolution = permissionResolution(for: approved)
-        dismissNotificationSurfaceIfPresent(for: sessionID)
-        state.resolvePermission(sessionID: session.id, resolution: resolution)
-        synchronizeSelection()
-        refreshOverlayPlacementIfVisible()
+        let message = approved
+            ? "Approving permission for \(session.title)."
+            : "Denying permission for \(session.title)."
 
-        send(
-            .resolvePermission(sessionID: session.id, resolution: resolution),
-            userMessage: approved
-                ? "Approving permission for \(session.title)."
-                : "Denying permission for \(session.title)."
-        )
+        Task { @MainActor [weak self] in
+            guard let self else { return }
+            guard await self.sendBridgeCommand(
+                .resolvePermission(sessionID: sessionID, resolution: resolution),
+                userMessage: message
+            ) else {
+                return
+            }
+
+            self.dismissNotificationSurfaceIfPresent(for: sessionID)
+            self.state.resolvePermission(sessionID: sessionID, resolution: resolution)
+            self.synchronizeSelection()
+            self.refreshOverlayPlacementIfVisible()
+        }
     }
 
     func approvePermission(for sessionID: String, action: ApprovalAction) {
@@ -1449,15 +1575,20 @@ final class AppModel {
             message = "Always allowing for \(session.title)."
         }
 
-        dismissNotificationSurfaceIfPresent(for: sessionID)
-        state.resolvePermission(sessionID: session.id, resolution: resolution)
-        synchronizeSelection()
-        refreshOverlayPlacementIfVisible()
+        Task { @MainActor [weak self] in
+            guard let self else { return }
+            guard await self.sendBridgeCommand(
+                .resolvePermission(sessionID: sessionID, resolution: resolution),
+                userMessage: message
+            ) else {
+                return
+            }
 
-        send(
-            .resolvePermission(sessionID: session.id, resolution: resolution),
-            userMessage: message
-        )
+            self.dismissNotificationSurfaceIfPresent(for: sessionID)
+            self.state.resolvePermission(sessionID: sessionID, resolution: resolution)
+            self.synchronizeSelection()
+            self.refreshOverlayPlacementIfVisible()
+        }
     }
 
     func dismissSession(_ sessionID: String) {
@@ -1471,15 +1602,20 @@ final class AppModel {
             return
         }
 
-        dismissNotificationSurfaceIfPresent(for: sessionID)
-        state.answerQuestion(sessionID: session.id, response: answer)
-        synchronizeSelection()
-        refreshOverlayPlacementIfVisible()
+        Task { @MainActor [weak self] in
+            guard let self else { return }
+            guard await self.sendBridgeCommand(
+                .answerQuestion(sessionID: sessionID, response: answer),
+                userMessage: "Sending answer for \(session.title)."
+            ) else {
+                return
+            }
 
-        send(
-            .answerQuestion(sessionID: session.id, response: answer),
-            userMessage: "Sending answer for \(session.title)."
-        )
+            self.dismissNotificationSurfaceIfPresent(for: sessionID)
+            self.state.answerQuestion(sessionID: sessionID, response: answer)
+            self.synchronizeSelection()
+            self.refreshOverlayPlacementIfVisible()
+        }
     }
 
     func replyToSession(_ session: AgentSession, text: String) {
@@ -1517,6 +1653,21 @@ final class AppModel {
         }
     }
 
+    /// Sends a decision to the bridge and reports whether it was delivered.
+    /// Permission and question state is only cleared after a successful send,
+    /// so a disconnected bridge cannot hide a still-pending request.
+    private func sendBridgeCommand(_ command: BridgeCommand, userMessage: String) async -> Bool {
+        lastActionMessage = userMessage
+
+        do {
+            try await bridgeClient.send(command)
+            return true
+        } catch {
+            lastActionMessage = "Failed to send bridge command: \(error.localizedDescription). The request is still pending."
+            return false
+        }
+    }
+
     private func permissionResolution(for approved: Bool) -> PermissionResolution {
         if approved {
             return .allowOnce()
@@ -1530,6 +1681,11 @@ final class AppModel {
         updateLastActionMessage: Bool = true,
         ingress: TrackedEventIngress = .bridge
     ) {
+        if case let .dshTodayTokensUpdated(payload) = event {
+            todayTokenUsageMonitor.updateDSHTotals(payload.usage, at: payload.timestamp)
+            return
+        }
+
         if case .sessionHeartbeat = event {
             state.apply(event)
             return
@@ -1544,14 +1700,18 @@ final class AppModel {
             return state.session(id: payload.sessionID)?.phase == .completed
         }()
 
-        // Guard: don't let rollout events downgrade a session from completed
-        // back to running. The bridge's sessionCompleted is authoritative; the
-        // rollout watcher may have read the JSONL before task_complete was
-        // flushed, producing a stale activityUpdated(phase: .running).
+        // Guard: don't let stale rollout events downgrade a Codex.app session from
+        // completed back to running. The bridge's sessionCompleted is authoritative
+        // for Codex.app sessions; the rollout watcher may have read the JSONL before
+        // task_complete was flushed, producing a stale activityUpdated(phase: .running).
+        // For CLI sessions (which have no bridge connection), rollout is the authoritative
+        // event source and must transition the session to running when a new turn begins.
         if ingress == .rollout,
            case let .activityUpdated(payload) = event,
            payload.phase == .running,
-           state.session(id: payload.sessionID)?.phase == .completed {
+           let session = state.session(id: payload.sessionID),
+           session.phase == .completed,
+           session.isCodexAppSession {
             return
         }
 
@@ -1588,6 +1748,7 @@ final class AppModel {
                 case let .piSessionMetadataUpdated(p): return p.sessionID
                 case let .sessionHeartbeat(p): return p.sessionID
                 case let .actionableStateResolved(p): return p.sessionID
+                case .dshTodayTokensUpdated: return nil
                 }
             }()
             let session = eventSessionID.flatMap { state.session(id: $0) }
@@ -1727,9 +1888,9 @@ final class AppModel {
             await self.hooks.repairHooksIfNeeded()
         }
 
-        // Reconcile attachments and start monitoring (requires sessions to be loaded).
-        monitoring.reconcileSessionAttachments()
+        // Start monitoring in background (requires sessions to be loaded).
         monitoring.startMonitoringIfNeeded()
+        discovery.startConversationTitleRefreshIfNeeded()
     }
 
 
@@ -1782,39 +1943,41 @@ final class AppModel {
     private func displayPriority(for session: AgentSession, now: Date) -> Int {
         var score = 0
 
-        let presence = session.islandPresence(at: now)
-
-        if session.isProcessAlive {
-            score += presence == .inactive ? 3_000 : 12_000
-        } else if session.isDemoSession || session.phase.requiresAttention {
-            score += 6_000
-        }
-
-        if session.phase.requiresAttention {
+        // Strict attention tier hierarchy:
+        // Tier 1: Actionable (Requires user attention: approval / question prompt)
+        // Tier 2: Running (Turn actively executing, thinking, running tools, breathing light)
+        // Tier 3: Completed (Turn finished, idle)
+        switch session.phase {
+        case .waitingForApproval:
+            score += 100_000
+        case .waitingForAnswer:
+            score += 90_000
+        case .running:
+            score += 50_000
+        case .completed:
             score += 10_000
         }
 
-        if session.currentToolName?.isEmpty == false {
-            score += 6_000
+        let presence = session.islandPresence(at: now)
+
+        if session.isProcessAlive {
+            score += presence == .inactive ? 500 : 2_000
+        } else if session.isDemoSession {
+            score += 1_000
         }
 
-        if session.jumpTarget != nil {
-            score += 4_000
-        }
-
-        switch session.phase {
-        case .running:
+        // Active tool execution bonus (only meaningful while actively running)
+        if session.phase == .running, session.currentToolName?.isEmpty == false {
             score += 2_000
-        case .waitingForApproval:
-            score += 1_500
-        case .waitingForAnswer:
-            score += 1_200
-        case .completed:
-            score += 600
+        }
+
+        // Interactive jump target available
+        if session.jumpTarget != nil {
+            score += 1_000
         }
 
         if session.isStaleCompletedForIsland(at: now, threshold: completedStaleThreshold.seconds) {
-            score -= 900
+            score -= 2_000
         }
 
         let age = now.timeIntervalSince(session.islandActivityDate)
@@ -1883,6 +2046,8 @@ final class AppModel {
             return "Heartbeat received for session \(payload.sessionID)."
         case let .actionableStateResolved(payload):
             return "Actionable state resolved for session \(payload.sessionID)."
+        case let .dshTodayTokensUpdated(payload):
+            return "DSH today tokens updated: \(payload.usage.totalTokens)."
         }
     }
 

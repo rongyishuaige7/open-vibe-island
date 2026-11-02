@@ -75,6 +75,7 @@ public struct SessionState: Equatable, Sendable {
                 cursorMetadata: payload.cursorMetadata?.isEmpty == true ? nil : payload.cursorMetadata,
                 piMetadata: payload.piMetadata?.isEmpty == true ? nil : payload.piMetadata
             )
+            session.conversationTitle = payload.conversationTitle
             session.isRemote = payload.isRemote
             session.isHookManaged = payload.origin == .live
             // Codex.app sessions use app-level liveness (NSRunningApplication)
@@ -83,7 +84,9 @@ public struct SessionState: Equatable, Sendable {
             Self.refreshCodexAppClassification(for: &session)
             session.isSessionEnded = false
             session.isProcessAlive = true
-            if payload.tool == .pi || payload.tool == .ohMyPi {
+            if payload.tool == .pi
+                || payload.tool == .ohMyPi
+                || payload.tool == .deepSeekHarness {
                 session.lastHeartbeatAt = payload.timestamp
                 session.heartbeatReconnectStartedAt = nil
             }
@@ -171,7 +174,13 @@ public struct SessionState: Equatable, Sendable {
                 return
             }
 
-            session.codexMetadata = payload.codexMetadata.isEmpty ? nil : payload.codexMetadata
+            var codexMetadata = payload.codexMetadata
+            // Tail-only rollout watchers may not have seen a `turn_context` yet;
+            // keep the model we already know instead of blanking it.
+            if codexMetadata.model == nil {
+                codexMetadata.model = session.codexMetadata?.model
+            }
+            session.codexMetadata = codexMetadata.isEmpty ? nil : codexMetadata
             session.updatedAt = payload.timestamp
             upsert(session)
 
@@ -229,7 +238,7 @@ public struct SessionState: Equatable, Sendable {
 
         case let .sessionHeartbeat(payload):
             guard var session = sessionsByID[payload.sessionID],
-                  (session.tool == .pi || session.tool == .ohMyPi),
+                  (session.tool == .pi || session.tool == .ohMyPi || session.tool == .deepSeekHarness),
                   !session.isSessionEnded else {
                 return
             }
@@ -240,6 +249,9 @@ public struct SessionState: Equatable, Sendable {
             session.lastHeartbeatAt = payload.timestamp
             session.heartbeatReconnectStartedAt = nil
             upsert(session)
+
+        case .dshTodayTokensUpdated:
+            return
 
         case let .actionableStateResolved(payload):
             guard var session = sessionsByID[payload.sessionID] else {
@@ -332,6 +344,22 @@ public struct SessionState: Equatable, Sendable {
     }
 
     @discardableResult
+    /// Sets the agent-recorded conversation title. Sessions missing from
+    /// `titles` keep theirs, so a failed read never blanks a row.
+    public mutating func reconcileConversationTitles(_ titles: [String: String]) -> Bool {
+        var changed = false
+        for (sessionID, title) in titles {
+            guard var session = sessionsByID[sessionID],
+                  session.conversationTitle != title else {
+                continue
+            }
+            session.conversationTitle = title
+            upsert(session)
+            changed = true
+        }
+        return changed
+    }
+
     public mutating func reconcileJumpTargets(_ updates: [String: JumpTarget]) -> Bool {
         var changed = false
 
@@ -372,7 +400,10 @@ public struct SessionState: Equatable, Sendable {
     ) {
         guard var session = sessionsByID[sessionID] else { return }
 
-        if session.tool == .pi || session.tool == .ohMyPi {
+        let isHeartbeatManaged = session.tool == .pi
+            || session.tool == .ohMyPi
+            || session.tool == .deepSeekHarness
+        if isHeartbeatManaged {
             guard !session.isSessionEnded else { return }
             session.isHookManaged = true
             session.lastHeartbeatAt = timestamp
@@ -381,8 +412,7 @@ public struct SessionState: Equatable, Sendable {
 
         guard !session.isProcessAlive
             || session.processNotSeenCount != 0
-            || session.tool == .pi
-            || session.tool == .ohMyPi else {
+            || isHeartbeatManaged else {
             return
         }
         session.isProcessAlive = true
@@ -431,9 +461,11 @@ public struct SessionState: Equatable, Sendable {
                     continue
                 }
 
-                // Pi and Oh My Pi have no reliable process-to-session mapping.
-                // Their extension heartbeat owns liveness and expiry.
-                if session.tool == .pi || session.tool == .ohMyPi {
+                // Pi, Oh My Pi and DSH have no reliable process-to-session
+                // mapping. Their host heartbeat owns liveness and expiry.
+                if session.tool == .pi
+                    || session.tool == .ohMyPi
+                    || session.tool == .deepSeekHarness {
                     continue
                 }
 
@@ -478,14 +510,16 @@ public struct SessionState: Equatable, Sendable {
         return changed
     }
 
-    /// Ends heartbeat-managed Pi sessions whose extension stopped reporting.
+    /// Ends heartbeat-managed Pi/OMP/DSH sessions whose host stopped reporting.
     /// Returns the IDs that transitioned to ended.
     @discardableResult
-    public mutating func expireStalePiHeartbeats(before deadline: Date) -> Set<String> {
+    public mutating func expireStaleHeartbeatSessions(before deadline: Date) -> Set<String> {
         var expired: Set<String> = []
 
         for (id, var session) in sessionsByID {
-            guard session.tool == .pi || session.tool == .ohMyPi,
+            guard session.tool == .pi
+                    || session.tool == .ohMyPi
+                    || session.tool == .deepSeekHarness,
                   session.isHookManaged,
                   !session.isSessionEnded else {
                 continue
@@ -533,7 +567,7 @@ public struct SessionState: Equatable, Sendable {
         return sessionsByID.count != before
     }
 
-    private mutating func upsert(_ session: AgentSession) {
+    public mutating func upsert(_ session: AgentSession) {
         sessionsByID[session.id] = session
     }
 }

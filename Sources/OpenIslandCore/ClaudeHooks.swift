@@ -294,6 +294,49 @@ public struct ClaudeSessionMetadata: Equatable, Codable, Sendable {
         self.activeTasks = activeTasks
     }
 
+    private enum CodingKeys: String, CodingKey {
+        case transcriptPath
+        case initialUserPrompt
+        case lastUserPrompt
+        case lastAssistantMessage
+        case currentTool
+        case currentToolInputPreview
+        case model
+        case startupSource
+        case permissionMode
+        case agentID
+        case agentType
+        case worktreeBranch
+        case activeSubagents
+        case activeTasks
+    }
+
+    /// Persisted metadata is decoded leniently so an older registry written
+    /// before a field existed (or with an unknown enum value) still restores
+    /// the session instead of failing the whole registry load.
+    public init(from decoder: any Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+
+        func value<T: Decodable>(_ type: T.Type, _ key: CodingKeys) -> T? {
+            (try? container.decodeIfPresent(type, forKey: key)) ?? nil
+        }
+
+        transcriptPath = value(String.self, .transcriptPath)
+        initialUserPrompt = value(String.self, .initialUserPrompt)
+        lastUserPrompt = value(String.self, .lastUserPrompt)
+        lastAssistantMessage = value(String.self, .lastAssistantMessage)
+        currentTool = value(String.self, .currentTool)
+        currentToolInputPreview = value(String.self, .currentToolInputPreview)
+        model = value(String.self, .model)
+        startupSource = value(ClaudeSessionStartSource.self, .startupSource)
+        permissionMode = value(ClaudePermissionMode.self, .permissionMode)
+        agentID = value(String.self, .agentID)
+        agentType = value(String.self, .agentType)
+        worktreeBranch = value(String.self, .worktreeBranch)
+        activeSubagents = value([ClaudeSubagentInfo].self, .activeSubagents) ?? []
+        activeTasks = value([ClaudeTaskInfo].self, .activeTasks) ?? []
+    }
+
     public var isEmpty: Bool {
         transcriptPath == nil
             && initialUserPrompt == nil
@@ -1385,33 +1428,16 @@ public extension ClaudeHookPayload {
     }
 
     private func commandOutput(executablePath: String, arguments: [String]) -> String? {
-        let process = Process()
-        process.executableURL = URL(fileURLWithPath: executablePath)
-        process.arguments = arguments
-
-        let outputPipe = Pipe()
-        process.standardOutput = outputPipe
-        process.standardError = Pipe()
-
-        do {
-            try process.run()
-            process.waitUntilExit()
-        } catch {
+        guard let result = SubprocessRunner.run(
+            executableURL: URL(fileURLWithPath: executablePath),
+            arguments: arguments,
+            timeout: 1.5
+        ), result.terminationStatus == 0 else {
             return nil
         }
 
-        guard process.terminationStatus == 0 else {
-            return nil
-        }
-
-        let data = outputPipe.fileHandleForReading.readDataToEndOfFile()
-        guard let output = String(data: data, encoding: .utf8)?
-            .trimmingCharacters(in: .whitespacesAndNewlines),
-              !output.isEmpty else {
-            return nil
-        }
-
-        return output
+        let output = result.stdout.trimmingCharacters(in: .whitespacesAndNewlines)
+        return output.isEmpty ? nil : output
     }
 }
 

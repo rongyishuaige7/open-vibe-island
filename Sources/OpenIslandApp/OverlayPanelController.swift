@@ -22,7 +22,7 @@ final class OverlayPanelController {
     private static let openedContentVerticalInsets: CGFloat = 84
     private static let notificationMeasuredContentPadding: CGFloat = 8
     private static let notificationEstimatedVerticalInsets: CGFloat = 36
-    private static let openedEmptyStateHeight: CGFloat = 108
+    private static let openedEmptyStateHeight: CGFloat = 180
     private static let questionCardBaseHeight: CGFloat = 110
     private static let questionCardMaxHeight: CGFloat = 420
     // Completion card chrome breakdown (everything except the scrollable text):
@@ -54,20 +54,22 @@ final class OverlayPanelController {
         OverlayDisplayResolver.availableDisplayOptions()
     }
 
-    func ensurePanel(model: AppModel, preferredScreenID: String?) {
+    @discardableResult
+    func ensurePanel(model: AppModel, preferredScreenID: String?) -> OverlayPlacementDiagnostics? {
         self.model = model
-        let panel = self.panel ?? makePanel(model: model)
+        let panel = self.panel ?? makePanel(model: model, preferredScreenID: preferredScreenID)
         self.panel = panel
-        positionPanel(panel, preferredScreenID: preferredScreenID, animated: false)
+        let diagnostics = positionPanel(panel, preferredScreenID: preferredScreenID, animated: false)
         panel.orderFrontRegardless()
         panel.ignoresMouseEvents = true
         panel.acceptsMouseMovedEvents = false
         startEventMonitoring()
+        return diagnostics
     }
 
     func show(model: AppModel, preferredScreenID: String?) -> OverlayPlacementDiagnostics? {
         self.model = model
-        let panel = self.panel ?? makePanel(model: model)
+        let panel = self.panel ?? makePanel(model: model, preferredScreenID: preferredScreenID)
         self.panel = panel
         let diagnostics = positionPanel(panel, preferredScreenID: preferredScreenID, animated: true)
         presentPanel(panel, activates: Self.shouldActivatePanel(for: model.notchOpenReason))
@@ -92,6 +94,8 @@ final class OverlayPanelController {
 
         if interactive {
             presentPanel(panel, activates: Self.shouldActivatePanel(for: model?.notchOpenReason))
+        } else if !panel.isVisible {
+            panel.orderFrontRegardless()
         }
     }
 
@@ -110,8 +114,8 @@ final class OverlayPanelController {
 
     // MARK: - Panel creation
 
-    private func makePanel(model: AppModel) -> NotchPanel {
-        let screen = resolveTargetScreen() ?? NSScreen.main
+    private func makePanel(model: AppModel, preferredScreenID: String? = nil) -> NotchPanel {
+        let screen = resolveTargetScreen(preferredScreenID: preferredScreenID) ?? NSScreen.main
         let windowFrame = screen.map { panelFrame(for: model, on: $0) } ?? .zero
 
         let panel = NotchPanel(
@@ -147,7 +151,7 @@ final class OverlayPanelController {
         panel.contentView = hostingView
         panel.notchController = self
 
-        computeNotchRect(screen: resolveTargetScreen())
+        computeNotchRect(screen: screen)
         return panel
     }
 
@@ -214,8 +218,9 @@ final class OverlayPanelController {
         let screens = NSScreen.screens
         guard !screens.isEmpty else { return nil }
 
-        if let preferredScreenID,
-           let screen = screens.first(where: { OverlayDisplayResolver.screenID(for: $0) == preferredScreenID }) {
+        let targetID = preferredScreenID ?? model?.overlayPlacementDiagnostics?.targetScreenID
+        if let targetID,
+           let screen = screens.first(where: { OverlayDisplayResolver.screenID(for: $0) == targetID }) {
             return screen
         }
 
@@ -594,7 +599,8 @@ final class OverlayPanelController {
     private func completionBodyHeight(for session: AgentSession, model: AppModel) -> CGFloat {
         let headerHeight: CGFloat = 44
 
-        let text = (session.completionAssistantMessageText ?? session.summary)
+        let text = (session.completionAssistantMessageText
+            ?? SessionTextLocalizer.current(model.lang).summary(session.summary))
             .trimmingCharacters(in: .whitespacesAndNewlines)
 
         guard !text.isEmpty else {
@@ -663,7 +669,8 @@ final class OverlayPanelController {
             return Self.completionCardMinHeight
         }
 
-        let text = (session.completionAssistantMessageText ?? session.summary)
+        let text = (session.completionAssistantMessageText
+            ?? SessionTextLocalizer.current(model.lang).summary(session.summary))
             .trimmingCharacters(in: .whitespacesAndNewlines)
 
         // Estimate text height using NSString measurement with the actual font.
@@ -897,12 +904,27 @@ final class NotchEventMonitors {
 
         nonisolated(unsafe) var sharedLastMove: TimeInterval = 0
 
+        let dispatchMove: @Sendable (NSPoint) -> Void = { location in
+            if Thread.isMainThread {
+                MainActor.assumeIsolated { mouseMoveHandler(location) }
+            } else {
+                Task { @MainActor in mouseMoveHandler(location) }
+            }
+        }
+        let dispatchClick: @Sendable (NSPoint, Bool) -> Void = { location, isLocal in
+            if Thread.isMainThread {
+                MainActor.assumeIsolated { mouseDownHandler(location, isLocal) }
+            } else {
+                Task { @MainActor in mouseDownHandler(location, isLocal) }
+            }
+        }
+
         globalMoveMonitor = NSEvent.addGlobalMonitorForEvents(matching: .mouseMoved) { event in
             let now = ProcessInfo.processInfo.systemUptime
             guard now - sharedLastMove >= throttleInterval else { return }
             sharedLastMove = now
             let location = NSEvent.mouseLocation
-            Task { @MainActor in mouseMoveHandler(location) }
+            dispatchMove(location)
         }
 
         localMoveMonitor = NSEvent.addLocalMonitorForEvents(matching: .mouseMoved) { event in
@@ -910,18 +932,18 @@ final class NotchEventMonitors {
             guard now - sharedLastMove >= throttleInterval else { return event }
             sharedLastMove = now
             let location = NSEvent.mouseLocation
-            Task { @MainActor in mouseMoveHandler(location) }
+            dispatchMove(location)
             return event
         }
 
         globalClickMonitor = NSEvent.addGlobalMonitorForEvents(matching: .leftMouseDown) { event in
             let location = NSEvent.mouseLocation
-            Task { @MainActor in mouseDownHandler(location, false) }
+            dispatchClick(location, false)
         }
 
         localClickMonitor = NSEvent.addLocalMonitorForEvents(matching: .leftMouseDown) { event in
             let location = NSEvent.mouseLocation
-            Task { @MainActor in mouseDownHandler(location, true) }
+            dispatchClick(location, true)
             return event
         }
     }

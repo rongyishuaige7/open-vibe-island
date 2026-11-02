@@ -79,6 +79,11 @@ struct TerminalJumpService {
             aliases: ["codex.app"]
         ),
         TerminalAppDescriptor(
+            displayName: "DeepSeek Harness",
+            bundleIdentifier: "com.deepseek.dsh",
+            aliases: ["deepseek harness", "dsh"]
+        ),
+        TerminalAppDescriptor(
             displayName: "Claude.app",
             bundleIdentifier: "com.anthropic.claudefordesktop",
             aliases: ["claude.app"]
@@ -87,6 +92,11 @@ struct TerminalJumpService {
             displayName: "Kaku",
             bundleIdentifier: "fun.tw93.kaku",
             aliases: ["kaku"]
+        ),
+        TerminalAppDescriptor(
+            displayName: "Antigravity",
+            bundleIdentifier: "com.google.antigravity",
+            aliases: ["antigravity", "agy"]
         ),
         TerminalAppDescriptor(
             displayName: "Cursor",
@@ -365,6 +375,11 @@ struct TerminalJumpService {
                 // per-session deep link, so just bring the app forward.
                 try openAction(["-b", "com.anthropic.claudefordesktop"])
                 return "Activated Claude."
+            case "com.deepseek.dsh":
+                // DSH hosts all sessions in one Electron window. There is no
+                // stable per-session URL scheme, so activate the app.
+                try openAction(["-b", "com.deepseek.dsh"])
+                return "Activated DeepSeek Harness."
             case "com.conductor.app":
                 // No per-session deep link; bring the app forward, like Claude.app.
                 try openAction(["-b", "com.conductor.app"])
@@ -481,6 +496,7 @@ struct TerminalJumpService {
     private static let vscodeFamilyCLI: [String: String] = [
         "com.microsoft.VSCode": "code",
         "com.microsoft.VSCodeInsiders": "code-insiders",
+        "com.google.antigravity": "agy",
         "com.todesktop.230313mzl4w4u92": "cursor",
         "com.exafunction.windsurf": "windsurf",
         "com.trae.app": "trae",
@@ -661,27 +677,17 @@ struct TerminalJumpService {
     }
 
     /// Run a tmux command and return its stdout (nil on failure).
-    /// Uses the same direct-exec pattern as ActiveAgentProcessDiscovery.commandOutput.
+    /// Uses the same bounded subprocess pattern as the hook enrichment path.
     private func runTmuxCommand(tmuxPath: String, socketArgs: [String], args: [String]) -> String? {
-        let process = Process()
-        process.executableURL = URL(fileURLWithPath: tmuxPath)
-        process.arguments = socketArgs + args
-
-        let outPipe = Pipe()
-        process.standardOutput = outPipe
-        process.standardError = FileHandle.nullDevice
-
-        do {
-            try process.run()
-            process.waitUntilExit()
-
-            guard process.terminationStatus == 0 else { return nil }
-
-            return String(data: outPipe.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8)?
-                .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-        } catch {
+        guard let result = SubprocessRunner.run(
+            executableURL: URL(fileURLWithPath: tmuxPath),
+            arguments: socketArgs + args,
+            timeout: 3
+        ), result.terminationStatus == 0 else {
             return nil
         }
+
+        return result.stdout.trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
     private func resolveTmuxPath() -> String? {
@@ -696,17 +702,15 @@ struct TerminalJumpService {
         }
 
         // Fallback to 'which'
-        let whichTask = Process()
-        whichTask.executableURL = URL(fileURLWithPath: "/usr/bin/which")
-        whichTask.arguments = ["tmux"]
-        let pipe = Pipe()
-        whichTask.standardOutput = pipe
-        whichTask.standardError = FileHandle.nullDevice
-        guard (try? whichTask.run()) != nil else { return nil }
-        whichTask.waitUntilExit()
-        guard whichTask.terminationStatus == 0 else { return nil }
-        let path = String(data: pipe.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8)?
-            .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        guard let result = SubprocessRunner.run(
+            executableURL: URL(fileURLWithPath: "/usr/bin/which"),
+            arguments: ["tmux"],
+            timeout: 1
+        ), result.terminationStatus == 0 else {
+            return nil
+        }
+
+        let path = result.stdout.trimmingCharacters(in: .whitespacesAndNewlines)
         return path.isEmpty ? nil : path
     }
 
@@ -835,6 +839,26 @@ struct TerminalJumpService {
         let workingDirectory = escapeAppleScript(target.workingDirectory)
         let paneTitle = escapeAppleScript(target.paneTitle)
 
+        let paneTitleToken: String
+        let tokens = target.paneTitle.split(separator: " ").map(String.init)
+        if tokens.count >= 2, let last = tokens.last, last.count >= 6 {
+            paneTitleToken = escapeAppleScript(last)
+        } else {
+            paneTitleToken = ""
+        }
+
+        let lowerTitle = target.paneTitle.lowercased()
+        let exclusionCondition: String
+        if lowerTitle.contains("agy") || lowerTitle.contains("gemini") {
+            exclusionCondition = " and not (currentTitle contains \"✳\" or currentTitle contains \"claude\" or currentTitle contains \"codex\")"
+        } else if lowerTitle.contains("claude") || lowerTitle.contains("✳") {
+            exclusionCondition = " and not (currentTitle contains \"agy\" or currentTitle contains \"gemini\" or currentTitle contains \"codex\")"
+        } else if lowerTitle.contains("codex") {
+            exclusionCondition = " and not (currentTitle contains \"agy\" or currentTitle contains \"gemini\" or currentTitle contains \"✳\" or currentTitle contains \"claude\")"
+        } else {
+            exclusionCondition = ""
+        }
+
         return """
         tell application "Ghostty"
             if not (it is running) then return ""
@@ -865,11 +889,11 @@ struct TerminalJumpService {
                 end if
             end repeat
 
-            if targetTerminal is missing value and "\(workingDirectory)" is not "" then
+            if targetTerminal is missing value and "\(paneTitleToken)" is not "" then
                 repeat with aWindow in windows
                     repeat with aTab in tabs of aWindow
                         repeat with aTerminal in terminals of aTab
-                            if (working directory of aTerminal as text) is "\(workingDirectory)" then
+                            if (name of aTerminal as text) contains "\(paneTitleToken)" then
                                 set targetWindow to aWindow
                                 set targetTab to aTab
                                 set targetTerminal to aTerminal
@@ -893,6 +917,30 @@ struct TerminalJumpService {
                     repeat with aTab in tabs of aWindow
                         repeat with aTerminal in terminals of aTab
                             if (name of aTerminal as text) contains "\(paneTitle)" then
+                                set targetWindow to aWindow
+                                set targetTab to aTab
+                                set targetTerminal to aTerminal
+                                exit repeat
+                            end if
+                        end repeat
+
+                        if targetTerminal is not missing value then
+                            exit repeat
+                        end if
+                    end repeat
+
+                    if targetTerminal is not missing value then
+                        exit repeat
+                    end if
+                end repeat
+            end if
+
+            if targetTerminal is missing value and "\(workingDirectory)" is not "" then
+                repeat with aWindow in windows
+                    repeat with aTab in tabs of aWindow
+                        repeat with aTerminal in terminals of aTab
+                            set currentTitle to (name of aTerminal as text)
+                            if (working directory of aTerminal as text) is "\(workingDirectory)"\(exclusionCondition) then
                                 set targetWindow to aWindow
                                 set targetTab to aTab
                                 set targetTerminal to aTerminal
@@ -1006,22 +1054,16 @@ struct TerminalJumpService {
         }
 
         // Fallback: try PATH via /usr/bin/which.
-        let whichTask = Process()
-        whichTask.executableURL = URL(fileURLWithPath: "/usr/bin/which")
-        whichTask.arguments = [cliName]
-        let pipe = Pipe()
-        whichTask.standardOutput = pipe
-        whichTask.standardError = FileHandle.nullDevice
-        if let _ = try? whichTask.run() {
-            whichTask.waitUntilExit()
-            if whichTask.terminationStatus == 0 {
-                let path = String(data: pipe.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8)?
-                    .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-                if !path.isEmpty { return path }
-            }
+        guard let result = SubprocessRunner.run(
+            executableURL: URL(fileURLWithPath: "/usr/bin/which"),
+            arguments: [cliName],
+            timeout: 1
+        ), result.terminationStatus == 0 else {
+            return nil
         }
 
-        return nil
+        let path = result.stdout.trimmingCharacters(in: .whitespacesAndNewlines)
+        return path.isEmpty ? nil : path
     }
 
     /// Strip `file://` scheme and percent-encoding from a WezTerm/Kaku cwd URL.
@@ -1109,41 +1151,23 @@ struct TerminalJumpService {
     }
 
     private func weztermFamilyListPanes(cliPath: String) -> [WeztermFamilyPane]? {
-        let task = Process()
-        task.executableURL = URL(fileURLWithPath: cliPath)
-        task.arguments = ["cli", "list", "--format", "json"]
-
-        let outputPipe = Pipe()
-        task.standardOutput = outputPipe
-        task.standardError = FileHandle.nullDevice
-
-        do {
-            try task.run()
-            task.waitUntilExit()
-        } catch {
+        guard let result = SubprocessRunner.run(
+            executableURL: URL(fileURLWithPath: cliPath),
+            arguments: ["cli", "list", "--format", "json"],
+            timeout: 3
+        ), result.terminationStatus == 0 else {
             return nil
         }
 
-        guard task.terminationStatus == 0 else { return nil }
-
-        let data = outputPipe.fileHandleForReading.readDataToEndOfFile()
-        return try? JSONDecoder().decode([WeztermFamilyPane].self, from: data)
+        return try? JSONDecoder().decode([WeztermFamilyPane].self, from: Data(result.stdout.utf8))
     }
 
     private func weztermFamilyActivatePane(cliPath: String, paneID: Int) -> Bool {
-        let task = Process()
-        task.executableURL = URL(fileURLWithPath: cliPath)
-        task.arguments = ["cli", "activate-pane", "--pane-id", "\(paneID)"]
-        task.standardOutput = FileHandle.nullDevice
-        task.standardError = FileHandle.nullDevice
-
-        do {
-            try task.run()
-            task.waitUntilExit()
-            return task.terminationStatus == 0
-        } catch {
-            return false
-        }
+        SubprocessRunner.run(
+            executableURL: URL(fileURLWithPath: cliPath),
+            arguments: ["cli", "activate-pane", "--pane-id", "\(paneID)"],
+            timeout: 3
+        )?.terminationStatus == 0
     }
 
     private func jumpToWarpPane(_ target: JumpTarget) throws -> String {
@@ -1274,37 +1298,30 @@ struct TerminalJumpService {
     }
 
     private static func defaultOpenAction(arguments: [String]) throws {
-        let task = Process()
-        task.executableURL = URL(fileURLWithPath: "/usr/bin/open")
-        task.arguments = arguments
+        let result = SubprocessRunner.run(
+            executableURL: URL(fileURLWithPath: "/usr/bin/open"),
+            arguments: arguments,
+            timeout: 5
+        )
 
-        try task.run()
-        task.waitUntilExit()
-
-        guard task.terminationStatus == 0 else {
+        guard result?.terminationStatus == 0 else {
             throw TerminalJumpError.openFailed(arguments)
         }
     }
 
     private static func defaultAppleScriptRunner(script: String) throws -> String {
-        let task = Process()
-        task.executableURL = URL(fileURLWithPath: "/usr/bin/osascript")
-        task.arguments = ["-e", script]
+        guard let result = SubprocessRunner.run(
+            executableURL: URL(fileURLWithPath: "/usr/bin/osascript"),
+            arguments: ["-e", script],
+            timeout: 3
+        ) else {
+            throw TerminalJumpError.appleScriptFailed("AppleScript timed out.")
+        }
 
-        let outputPipe = Pipe()
-        let errorPipe = Pipe()
-        task.standardOutput = outputPipe
-        task.standardError = errorPipe
+        let output = result.stdout.trimmingCharacters(in: .whitespacesAndNewlines)
 
-        try task.run()
-        task.waitUntilExit()
-
-        let output = String(data: outputPipe.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8)?
-            .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-
-        guard task.terminationStatus == 0 else {
-            let stderr = String(data: errorPipe.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8)?
-                .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        guard result.terminationStatus == 0 else {
+            let stderr = result.stderr.trimmingCharacters(in: .whitespacesAndNewlines)
             throw TerminalJumpError.appleScriptFailed(stderr.isEmpty ? script : stderr)
         }
 
@@ -1312,19 +1329,11 @@ struct TerminalJumpService {
     }
 
     private static func defaultProcessRunner(executable: String, arguments: [String]) -> Bool {
-        let process = Process()
-        process.executableURL = URL(fileURLWithPath: "/usr/bin/env")
-        process.arguments = [executable] + arguments
-        process.standardOutput = FileHandle.nullDevice
-        process.standardError = FileHandle.nullDevice
-
-        do {
-            try process.run()
-            process.waitUntilExit()
-            return process.terminationStatus == 0
-        } catch {
-            return false
-        }
+        SubprocessRunner.run(
+            executableURL: URL(fileURLWithPath: "/usr/bin/env"),
+            arguments: [executable] + arguments,
+            timeout: 10
+        )?.terminationStatus == 0
     }
 
     private func escapeAppleScript(_ value: String?) -> String {

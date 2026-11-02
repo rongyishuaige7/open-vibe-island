@@ -8,6 +8,8 @@ public struct CodexSessionMetadata: Equatable, Codable, Sendable {
     public var lastAssistantMessage: String?
     public var currentTool: String?
     public var currentCommandPreview: String?
+    /// Latest model reported by the hook payload or the rollout's `turn_context`.
+    public var model: String?
 
     public init(
         transcriptPath: String? = nil,
@@ -15,7 +17,8 @@ public struct CodexSessionMetadata: Equatable, Codable, Sendable {
         lastUserPrompt: String? = nil,
         lastAssistantMessage: String? = nil,
         currentTool: String? = nil,
-        currentCommandPreview: String? = nil
+        currentCommandPreview: String? = nil,
+        model: String? = nil
     ) {
         self.transcriptPath = transcriptPath
         self.initialUserPrompt = initialUserPrompt
@@ -23,6 +26,7 @@ public struct CodexSessionMetadata: Equatable, Codable, Sendable {
         self.lastAssistantMessage = lastAssistantMessage
         self.currentTool = currentTool
         self.currentCommandPreview = currentCommandPreview
+        self.model = model
     }
 
     public var isEmpty: Bool {
@@ -32,6 +36,7 @@ public struct CodexSessionMetadata: Equatable, Codable, Sendable {
             && lastAssistantMessage == nil
             && currentTool == nil
             && currentCommandPreview == nil
+            && model == nil
     }
 }
 
@@ -145,6 +150,9 @@ public extension CodexTrackedSessionRecord {
     var restorableSession: AgentSession {
         var session = session
         session.attachmentState = .stale
+        if session.phase == .running {
+            session.phase = .completed
+        }
         return session
     }
 
@@ -334,7 +342,7 @@ public enum CodexAppSessionReconciler {
             return false
         }
 
-        return transcriptPath.contains("/.codex/archived_sessions/")
+        return CodexTranscriptPath.isArchivedRolloutTranscript(transcriptPath)
     }
 }
 
@@ -388,7 +396,57 @@ public final class CodexRolloutDiscovery: @unchecked Sendable {
             .appendingPathComponent(".codex/sessions", isDirectory: true)
     }
 
-    private let rootURL: URL
+    /// Discovers candidate session roots across all CODEX_HOME locations,
+    /// including ~/.codex/sessions and any custom ~/.codex*/sessions (e.g. .codex-plus, .codex-pro, .codex-yi).
+    public static func candidateSessionRoots(fileManager: FileManager = .default) -> [URL] {
+        var roots: [URL] = []
+        var seenPaths: Set<String> = []
+
+        func addRoot(_ url: URL) {
+            let path = (url.path as NSString).standardizingPath
+            guard seenPaths.insert(path).inserted else { return }
+            roots.append(URL(fileURLWithPath: path, isDirectory: true))
+        }
+
+        // 1. If CODEX_HOME is in environment
+        if let envHome = ProcessInfo.processInfo.environment["CODEX_HOME"], !envHome.isEmpty {
+            let envURL = URL(fileURLWithPath: envHome, isDirectory: true)
+                .appendingPathComponent("sessions", isDirectory: true)
+            if fileManager.fileExists(atPath: envURL.path) {
+                addRoot(envURL)
+            }
+        }
+
+        // 2. Default ~/.codex/sessions
+        let defaultSessions = defaultRootURL
+        if fileManager.fileExists(atPath: defaultSessions.path) {
+            addRoot(defaultSessions)
+        }
+
+        // 3. Scan ~/.codex*/sessions (e.g. .codex-plus, .codex-pro, .codex-yi, etc.)
+        let home = fileManager.homeDirectoryForCurrentUser
+        if let homeContents = try? fileManager.contentsOfDirectory(
+            at: home,
+            includingPropertiesForKeys: [.isDirectoryKey],
+            options: [.skipsPackageDescendants]
+        ) {
+            for item in homeContents {
+                let name = item.lastPathComponent
+                guard name.hasPrefix(".codex"), name != ".codex" else { continue }
+                let sessionsDir = item.appendingPathComponent("sessions", isDirectory: true)
+                if fileManager.fileExists(atPath: sessionsDir.path) {
+                    addRoot(sessionsDir)
+                }
+            }
+        }
+
+        return roots.isEmpty ? [defaultSessions] : roots
+    }
+
+    public let rootURLs: [URL]
+    public var rootURL: URL {
+        rootURLs.first ?? Self.defaultRootURL
+    }
     private let fileManager: FileManager
     private let maxAge: TimeInterval
     private let maxFiles: Int
@@ -403,15 +461,23 @@ public final class CodexRolloutDiscovery: @unchecked Sendable {
     }
 
     public init(
-        rootURL: URL = CodexRolloutDiscovery.defaultRootURL,
+        rootURL: URL? = nil,
+        rootURLs: [URL]? = nil,
         fileManager: FileManager = .default,
         maxAge: TimeInterval = 86_400,
         maxFiles: Int = 40
     ) {
-        self.rootURL = rootURL
         self.fileManager = fileManager
         self.maxAge = maxAge
         self.maxFiles = maxFiles
+
+        if let rootURLs {
+            self.rootURLs = rootURLs
+        } else if let rootURL {
+            self.rootURLs = [rootURL]
+        } else {
+            self.rootURLs = Self.candidateSessionRoots(fileManager: fileManager)
+        }
     }
 
     public func discoverRecentSessions(now: Date = .now) -> [CodexTrackedSessionRecord] {
@@ -433,41 +499,43 @@ public final class CodexRolloutDiscovery: @unchecked Sendable {
             }
         }
 
-        guard fileManager.fileExists(atPath: rootURL.path),
-              let enumerator = fileManager.enumerator(
-                at: rootURL,
-                includingPropertiesForKeys: [.contentModificationDateKey, .isRegularFileKey, .fileSizeKey],
-                options: [.skipsHiddenFiles]
-              ) else {
-            return []
-        }
-
         let cutoff = now.addingTimeInterval(-maxAge)
         var candidates: [Candidate] = []
 
-        for case let fileURL as URL in enumerator {
-            guard fileURL.lastPathComponent.hasPrefix("rollout-"),
-                  fileURL.pathExtension == "jsonl" else {
+        for root in rootURLs {
+            guard fileManager.fileExists(atPath: root.path),
+                  let enumerator = fileManager.enumerator(
+                    at: root,
+                    includingPropertiesForKeys: [.contentModificationDateKey, .isRegularFileKey, .fileSizeKey],
+                    options: [.skipsHiddenFiles]
+                  ) else {
                 continue
             }
 
-            guard let resourceValues = try? fileURL.resourceValues(
-                forKeys: [.contentModificationDateKey, .isRegularFileKey, .fileSizeKey]
-            ),
-            resourceValues.isRegularFile == true else {
-                continue
-            }
+            for case let fileURL as URL in enumerator {
+                guard fileURL.lastPathComponent.hasPrefix("rollout-"),
+                      fileURL.pathExtension == "jsonl" else {
+                    continue
+                }
 
-            let modifiedAt = resourceValues.contentModificationDate ?? .distantPast
-            guard modifiedAt >= cutoff else {
-                continue
-            }
+                guard let resourceValues = try? fileURL.resourceValues(
+                    forKeys: [.contentModificationDateKey, .isRegularFileKey, .fileSizeKey]
+                ),
+                resourceValues.isRegularFile == true else {
+                    continue
+                }
 
-            candidates.append(Candidate(
-                fileURL: fileURL,
-                modifiedAt: modifiedAt,
-                fileSize: resourceValues.fileSize ?? 0
-            ))
+                let modifiedAt = resourceValues.contentModificationDate ?? .distantPast
+                guard modifiedAt >= cutoff else {
+                    continue
+                }
+
+                candidates.append(Candidate(
+                    fileURL: fileURL,
+                    modifiedAt: modifiedAt,
+                    fileSize: resourceValues.fileSize ?? 0
+                ))
+            }
         }
 
         let recentCandidates = candidates
@@ -639,7 +707,8 @@ public final class CodexRolloutDiscovery: @unchecked Sendable {
             lastUserPrompt: snapshot.lastUserPrompt,
             lastAssistantMessage: snapshot.lastAssistantMessage,
             currentTool: snapshot.currentTool,
-            currentCommandPreview: snapshot.currentCommandPreview
+            currentCommandPreview: snapshot.currentCommandPreview,
+            model: snapshot.model
         )
 
         return CodexTrackedSessionRecord(
@@ -652,6 +721,83 @@ public final class CodexRolloutDiscovery: @unchecked Sendable {
             updatedAt: updatedAt,
             codexMetadata: metadata
         )
+    }
+
+    /// Record for a transcript that a live Codex process holds open, whatever
+    /// its age or CODEX_HOME. Reads at most `headLimit` bytes from the start
+    /// (session_meta, first prompt) and `tailLimit` from the end (current
+    /// state), so a multi-GB rollout is never folded in full. Nothing is
+    /// cached: callers use it once per session and leave ongoing tracking to
+    /// `CodexRolloutWatcher`.
+    public func liveSessionRecord(
+        transcriptPath: String,
+        headLimit: Int = 4 * 1_024 * 1_024,
+        tailLimit: Int = 4 * 1_024 * 1_024
+    ) -> CodexTrackedSessionRecord? {
+        let fileURL = URL(fileURLWithPath: transcriptPath)
+        guard let values = try? fileURL.resourceValues(
+                forKeys: [.contentModificationDateKey, .isRegularFileKey, .fileSizeKey]
+              ),
+              values.isRegularFile == true,
+              let fileHandle = try? FileHandle(forReadingFrom: fileURL) else {
+            return nil
+        }
+        defer { try? fileHandle.close() }
+        let fileSize = values.fileSize ?? 0
+        let modifiedAt = values.contentModificationDate ?? .distantPast
+
+        var headSnapshot = CodexRolloutSnapshot()
+        var sessionMeta: SessionMeta?
+        var buffer = Data()
+        var headRead = 0
+        while headRead < headLimit,
+              sessionMeta == nil || headSnapshot.initialUserPrompt == nil,
+              let chunk = try? fileHandle.read(upToCount: min(Self.streamingChunkSize, headLimit - headRead)),
+              !chunk.isEmpty {
+            buffer.append(chunk)
+            headRead += chunk.count
+            for line in extractCompleteLines(from: &buffer) {
+                CodexRolloutReducer.apply(line: line, to: &headSnapshot)
+                if sessionMeta == nil {
+                    sessionMeta = parseSessionMeta(fromLine: line)
+                }
+            }
+        }
+        guard let sessionMeta else { return nil }
+
+        // Continue from the head's line boundary when the file is small enough;
+        // otherwise start a fresh fold at the tail window's first full line.
+        let lineBoundary = headRead - buffer.count
+        let tailStart = max(lineBoundary, fileSize - tailLimit)
+        var tail = Data()
+        if (try? fileHandle.seek(toOffset: UInt64(tailStart))) != nil {
+            tail = (try? fileHandle.readToEnd()) ?? Data()
+        }
+        if tailStart > lineBoundary {
+            if let newline = tail.firstIndex(of: UInt8(ascii: "\n")) {
+                tail.removeSubrange(...newline)
+            } else {
+                tail.removeAll()
+            }
+        }
+
+        // A fresh tail fold is seeded with the head's prompts (as the watcher's
+        // bootstrap does) so the first prompt found in the tail window is not
+        // mistaken for the session's initial prompt.
+        var snapshot = tailStart == lineBoundary
+            ? headSnapshot
+            : CodexRolloutSnapshot(
+                initialUserPrompt: headSnapshot.initialUserPrompt,
+                lastUserPrompt: headSnapshot.lastUserPrompt ?? headSnapshot.initialUserPrompt
+            )
+        for line in extractCompleteLines(from: &tail) {
+            CodexRolloutReducer.apply(line: line, to: &snapshot)
+        }
+        if !tail.isEmpty {
+            CodexRolloutReducer.apply(line: String(decoding: tail, as: UTF8.self), to: &snapshot)
+        }
+
+        return makeRecord(fileURL: fileURL, modifiedAt: modifiedAt, snapshot: snapshot, sessionMeta: sessionMeta)
     }
 
     private static let streamingChunkSize = 64 * 1_024
@@ -711,6 +857,7 @@ public struct CodexRolloutSnapshot: Equatable, Sendable {
     public var lastAssistantMessage: String?
     public var currentTool: String?
     public var currentCommandPreview: String?
+    public var model: String?
     public var isCompleted: Bool
     public var isInterrupted: Bool
 
@@ -723,6 +870,7 @@ public struct CodexRolloutSnapshot: Equatable, Sendable {
         lastAssistantMessage: String? = nil,
         currentTool: String? = nil,
         currentCommandPreview: String? = nil,
+        model: String? = nil,
         isCompleted: Bool = false,
         isInterrupted: Bool = false
     ) {
@@ -734,6 +882,7 @@ public struct CodexRolloutSnapshot: Equatable, Sendable {
         self.lastAssistantMessage = lastAssistantMessage
         self.currentTool = currentTool
         self.currentCommandPreview = currentCommandPreview
+        self.model = model
         self.isCompleted = isCompleted
         self.isInterrupted = isInterrupted
     }
@@ -744,7 +893,8 @@ public struct CodexRolloutSnapshot: Equatable, Sendable {
             lastUserPrompt: lastUserPrompt,
             lastAssistantMessage: lastAssistantMessage,
             currentTool: currentTool,
-            currentCommandPreview: currentCommandPreview
+            currentCommandPreview: currentCommandPreview,
+            model: model
         )
     }
 }
@@ -769,6 +919,12 @@ public enum CodexRolloutReducer {
             applyEventMessage(payload, timestamp: timestamp, to: &snapshot)
         case "response_item":
             applyResponseItem(payload, timestamp: timestamp, to: &snapshot)
+        case "turn_context":
+            // Each turn records the model it runs on, so `/model` switches show up.
+            if let model = (payload["model"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines),
+               !model.isEmpty {
+                snapshot.model = model
+            }
         default:
             break
         }
@@ -789,7 +945,8 @@ public enum CodexRolloutReducer {
                 lastUserPrompt: $0.lastUserPrompt,
                 lastAssistantMessage: $0.lastAssistantMessage,
                 currentTool: $0.currentTool,
-                currentCommandPreview: $0.currentCommandPreview
+                currentCommandPreview: $0.currentCommandPreview,
+                model: $0.model
             )
         }
         let newMetadata = CodexSessionMetadata(
@@ -798,7 +955,8 @@ public enum CodexRolloutReducer {
             lastUserPrompt: newSnapshot.lastUserPrompt,
             lastAssistantMessage: newSnapshot.lastAssistantMessage,
             currentTool: newSnapshot.currentTool,
-            currentCommandPreview: newSnapshot.currentCommandPreview
+            currentCommandPreview: newSnapshot.currentCommandPreview,
+            model: newSnapshot.model
         )
 
         if oldMetadata != newMetadata {

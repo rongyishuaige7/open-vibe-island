@@ -47,6 +47,19 @@ public struct OpenCodePluginInstallerManifest: Equatable, Codable, Sendable {
     }
 }
 
+public enum OpenCodePluginInstallationError: Error, LocalizedError, Equatable {
+    /// The existing `config.json` cannot be edited without risking unrelated
+    /// user settings.
+    case unsafeConfig(String)
+
+    public var errorDescription: String? {
+        switch self {
+        case let .unsafeConfig(detail):
+            "OpenCode config.json was left unchanged because it could not be edited safely: \(detail)"
+        }
+    }
+}
+
 public final class OpenCodePluginInstallationManager: @unchecked Sendable {
     public static let pluginFileName = "open-island.js"
 
@@ -97,6 +110,12 @@ public final class OpenCodePluginInstallationManager: @unchecked Sendable {
 
     @discardableResult
     public func install(pluginSourceData: Data) throws -> OpenCodePluginInstallationStatus {
+        // Validate the existing config before writing anything. A malformed or
+        // unexpectedly shaped config must fail the install instead of being
+        // replaced with a fresh object (which would drop user settings and
+        // unrelated plugins).
+        try validateConfigForInstall()
+
         try fileManager.createDirectory(at: pluginsDirectory, withIntermediateDirectories: true)
 
         // Write the JS plugin file
@@ -153,15 +172,8 @@ public final class OpenCodePluginInstallationManager: @unchecked Sendable {
     private func registerPluginInConfig() throws {
         let ref = pluginFileReference()
 
-        var json: [String: Any]
-        if let data = try? Data(contentsOf: configURL),
-           let existing = try? JSONSerialization.jsonObject(with: data) as? [String: Any] {
-            json = existing
-        } else {
-            json = [:]
-        }
-
-        var plugins = (json["plugin"] as? [String]) ?? []
+        var json = try loadConfigObject()
+        var plugins = try decodedPlugins(from: json)
 
         // Remove any existing Open Island plugin references
         plugins.removeAll { $0 == ref || $0.hasSuffix("/\(Self.pluginFileName)") }
@@ -178,6 +190,56 @@ public final class OpenCodePluginInstallationManager: @unchecked Sendable {
             options: [.prettyPrinted, .sortedKeys]
         )
         try outputData.write(to: configURL, options: .atomic)
+    }
+
+    /// Rejects configs that a string-only plugin mutation cannot round-trip.
+    private func validateConfigForInstall() throws {
+        let json = try loadConfigObject()
+        _ = try decodedPlugins(from: json)
+    }
+
+    private func loadConfigObject() throws -> [String: Any] {
+        guard fileManager.fileExists(atPath: configURL.path) else {
+            return [:]
+        }
+
+        let data = try Data(contentsOf: configURL)
+
+        // An empty file is equivalent to an absent config.
+        if data.isEmpty {
+            return [:]
+        }
+        if let raw = String(data: data, encoding: .utf8),
+           raw.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            return [:]
+        }
+
+        let object: Any
+        do {
+            object = try JSONSerialization.jsonObject(with: data)
+        } catch {
+            throw OpenCodePluginInstallationError.unsafeConfig("config.json is not valid JSON")
+        }
+
+        guard let json = object as? [String: Any] else {
+            throw OpenCodePluginInstallationError.unsafeConfig("config.json is not a JSON object")
+        }
+
+        return json
+    }
+
+    private func decodedPlugins(from json: [String: Any]) throws -> [String] {
+        guard let rawPlugins = json["plugin"] else {
+            return []
+        }
+
+        guard let plugins = rawPlugins as? [String] else {
+            throw OpenCodePluginInstallationError.unsafeConfig(
+                "the \"plugin\" value must be an array of strings"
+            )
+        }
+
+        return plugins
     }
 
     private func unregisterPluginFromConfig() throws {

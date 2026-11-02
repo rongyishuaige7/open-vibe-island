@@ -68,36 +68,49 @@ public enum CodexUsageLoader {
     }
 
     public static func load(
-        fromRootURL rootURL: URL = defaultRootURL,
+        fromRootURL rootURL: URL? = nil,
+        fromRootURLs rootURLs: [URL]? = nil,
+        keeperDatabaseURL: URL? = nil,
         fileManager: FileManager = .default
     ) throws -> CodexUsageSnapshot? {
-        guard fileManager.fileExists(atPath: rootURL.path),
-              let enumerator = fileManager.enumerator(
-                at: rootURL,
-                includingPropertiesForKeys: [.contentModificationDateKey, .isRegularFileKey],
-                options: [.skipsHiddenFiles]
-              ) else {
-            return nil
+        let roots: [URL]
+        if let rootURLs {
+            roots = rootURLs
+        } else if let rootURL {
+            roots = [rootURL]
+        } else {
+            roots = CodexRolloutDiscovery.candidateSessionRoots(fileManager: fileManager)
         }
 
         var candidates: [Candidate] = []
 
-        for case let fileURL as URL in enumerator {
-            guard fileURL.lastPathComponent.hasPrefix("rollout-"),
-                  fileURL.pathExtension == "jsonl",
-                  let resourceValues = try? fileURL.resourceValues(
-                    forKeys: [.contentModificationDateKey, .isRegularFileKey]
-                  ),
-                  resourceValues.isRegularFile == true else {
+        for root in roots {
+            guard fileManager.fileExists(atPath: root.path),
+                  let enumerator = fileManager.enumerator(
+                    at: root,
+                    includingPropertiesForKeys: [.contentModificationDateKey, .isRegularFileKey],
+                    options: [.skipsHiddenFiles]
+                  ) else {
                 continue
             }
 
-            candidates.append(
-                Candidate(
-                    fileURL: fileURL,
-                    modifiedAt: resourceValues.contentModificationDate ?? .distantPast
+            for case let fileURL as URL in enumerator {
+                guard fileURL.lastPathComponent.hasPrefix("rollout-"),
+                      fileURL.pathExtension == "jsonl",
+                      let resourceValues = try? fileURL.resourceValues(
+                        forKeys: [.contentModificationDateKey, .isRegularFileKey]
+                      ),
+                      resourceValues.isRegularFile == true else {
+                    continue
+                }
+
+                candidates.append(
+                    Candidate(
+                        fileURL: fileURL,
+                        modifiedAt: resourceValues.contentModificationDate ?? .distantPast
+                    )
                 )
-            )
+            }
         }
 
         let sortedCandidates = candidates.sorted { lhs, rhs in
@@ -108,16 +121,36 @@ public enum CodexUsageLoader {
             return lhs.modifiedAt > rhs.modifiedAt
         }
 
+        var rolloutSnapshot: CodexUsageSnapshot?
         for candidate in sortedCandidates {
             if let snapshot = loadLatestSnapshot(
                 from: candidate.fileURL,
                 modifiedAt: candidate.modifiedAt
             ) {
-                return snapshot
+                rolloutSnapshot = snapshot
+                break
             }
         }
 
-        return nil
+        let keeperSnapshot: CodexUsageSnapshot?
+        if let keeperDatabaseURL {
+            keeperSnapshot = try? KeeperUsageReader.loadCodexRateLimits(databaseURL: keeperDatabaseURL)
+        } else if rootURL == nil && rootURLs == nil {
+            keeperSnapshot = try? KeeperUsageReader.loadCodexRateLimits()
+        } else {
+            keeperSnapshot = nil
+        }
+
+        if let keeper = keeperSnapshot, !keeper.isEmpty {
+            if let rollout = rolloutSnapshot, !rollout.isEmpty {
+                let rolloutTime = rollout.capturedAt ?? .distantPast
+                let keeperTime = keeper.capturedAt ?? .distantPast
+                return keeperTime >= rolloutTime ? keeper : rollout
+            }
+            return keeper
+        }
+
+        return rolloutSnapshot
     }
 
     private static func loadLatestSnapshot(from fileURL: URL, modifiedAt: Date) -> CodexUsageSnapshot? {

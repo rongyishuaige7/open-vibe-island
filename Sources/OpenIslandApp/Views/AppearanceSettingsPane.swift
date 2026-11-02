@@ -263,6 +263,11 @@ struct AppearanceSettingsPane: View {
                           title: lang.t("settings.appearance.rightSlot.count"))
             rightSlotCard(.agents, icon: { AgentsMiniGridPreview() },
                           title: lang.t("settings.appearance.rightSlot.agents"))
+            rightSlotCard(.mascots, icon: { PixelMascotRow(slots: [
+                                          PixelMascotSlot(tool: .codex, state: .running),
+                                          PixelMascotSlot(tool: .claudeCode, state: .running),
+                                      ]) },
+                          title: lang.t("settings.appearance.rightSlot.mascots"))
             rightSlotCard(.none,   icon: { Text("—")
                                       .font(.system(size: 14, weight: .semibold, design: .monospaced))
                                       .foregroundStyle(V6Palette.paper.opacity(0.5)) },
@@ -400,11 +405,17 @@ struct AppearanceSettingsPane: View {
             note: lang.t("settings.appearance.stateIndicator.note")
         )
 
-        HStack(spacing: 12) {
+        // Adaptive so the fifth card wraps instead of squeezing the previews.
+        LazyVGrid(
+            columns: [GridItem(.adaptive(minimum: 120), spacing: 12)],
+            alignment: .leading,
+            spacing: 12
+        ) {
             stateIndicatorCard(.animatedDot)
             stateIndicatorCard(.bar)
             stateIndicatorCard(.glyph)
             stateIndicatorCard(.tint)
+            stateIndicatorCard(.pixel)
         }
     }
 
@@ -586,6 +597,7 @@ struct AppearanceSettingsPane: View {
         case .bar:         lang.t("settings.appearance.stateIndicator.bar")
         case .glyph:       lang.t("settings.appearance.stateIndicator.glyph")
         case .tint:        lang.t("settings.appearance.stateIndicator.tint")
+        case .pixel:       lang.t("settings.appearance.stateIndicator.pixel")
         }
     }
 
@@ -653,6 +665,17 @@ struct AppearanceSettingsPane: View {
         case .count: return .count(3)
         case .agents:
             return .agents(previewAgentCells)
+        case .mascots:
+            return .mascots(previewMascotSlots)
+        }
+    }
+
+    /// Claude walks beside an idle Codex; Codex waits in the waiting preview.
+    private var previewMascotSlots: [PixelMascotSlot] {
+        switch previewMode {
+        case .idle: [PixelMascotSlot(tool: .codex, state: .idle), PixelMascotSlot(tool: .claudeCode, state: .idle)]
+        case .running: [PixelMascotSlot(tool: .codex, state: .idle), PixelMascotSlot(tool: .claudeCode, state: .running)]
+        case .waiting: [PixelMascotSlot(tool: .codex, state: .waiting), PixelMascotSlot(tool: .claudeCode, state: .running)]
         }
     }
 
@@ -1285,6 +1308,17 @@ private struct SessionListLivePreviewRow: View {
                 .frame(width: 20, height: 20)
         case .tint:
             EmptyView()
+        case .pixel:
+            if item.phase == .done {
+                PixelCheckmark(tint: tint)
+                    .frame(width: 20, height: 20)
+            } else {
+                Circle()
+                    .fill(tint)
+                    .frame(width: 9, height: 9)
+                    .shadow(color: tint.opacity(item.phase == .idle ? 0 : 0.44), radius: 5)
+                    .frame(width: 20, height: 20)
+            }
         }
     }
 
@@ -1323,7 +1357,7 @@ private struct SessionListLivePreviewRow: View {
         switch indicator {
         case .bar: max(28, sideInset)
         case .tint: sideInset
-        case .animatedDot, .glyph: sideInset
+        case .animatedDot, .glyph, .pixel: sideInset
         }
     }
 
@@ -1331,7 +1365,7 @@ private struct SessionListLivePreviewRow: View {
         switch indicator {
         case .bar: max(28, sideInset)
         case .tint: sideInset
-        case .animatedDot, .glyph: sideInset + 30
+        case .animatedDot, .glyph, .pixel: sideInset + 30
         }
     }
 }
@@ -1414,6 +1448,8 @@ private struct StateIndicatorPreview: View {
             Circle()
                 .fill(V6Palette.paper.opacity(0.72))
                 .frame(width: 10, height: 10)
+        case .pixel:
+            PixelCheckmark(tint: IslandDesignPalette.Status.completed)
         }
     }
 }

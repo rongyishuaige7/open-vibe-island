@@ -36,6 +36,13 @@ final class ProcessMonitoringCoordinator {
     @ObservationIgnored
     let activeAgentProcessDiscovery = ActiveAgentProcessDiscovery()
 
+    /// Reads bounded records for live Codex transcripts no other source reported.
+    @ObservationIgnored
+    private let liveCodexTranscriptReader = CodexRolloutDiscovery()
+
+    @ObservationIgnored
+    private let claudeTranscriptDiscovery = ClaudeTranscriptDiscovery()
+
     @ObservationIgnored
     private let terminalSessionAttachmentProbe = TerminalSessionAttachmentProbe()
 
@@ -56,7 +63,7 @@ final class ProcessMonitoringCoordinator {
     private static let codexAppStalenessTimeout: TimeInterval = 600  // 10 minutes
     private static let claudeDesktopStalenessTimeout: TimeInterval = 600  // 10 minutes
     private static let conductorStalenessTimeout: TimeInterval = 600  // 10 minutes
-    private static let piHeartbeatTimeout: TimeInterval = 45
+    private static let heartbeatTimeout: TimeInterval = 45
 
     static func monitoringPollInterval(
         isResolvingInitialLiveSessions: Bool,
@@ -134,31 +141,62 @@ final class ProcessMonitoringCoordinator {
                     let probe = self.terminalSessionAttachmentProbe
                     let resolver = self.terminalJumpTargetResolver
                     let shouldResolveTerminals = hasTrackedLiveSessions
-                    let (snapshots, ghosttyAvail, terminalAvail, jumpTargets) = await Task.detached(priority: .utility) {
+                    let liveCodexReader = self.liveCodexTranscriptReader
+                    let claudeDiscovery = self.claudeTranscriptDiscovery
+                    let knownCodexIDs = Set(self.state.sessions.filter { $0.tool == .codex }.map(\.id))
+                    let currentSessions = self.state.sessions
+                    let (snapshots, ghosttyAvail, terminalAvail, itermAvail, jumpTargets, liveCodexRecords, preloadedClaude, preloadedAgy, preloadedCodex) = await Task.detached(priority: .utility) {
                         let s = discovery.discover()
+                        let c = Self.untrackedLiveCodexRecords(
+                            activeProcesses: s,
+                            knownSessionIDs: knownCodexIDs,
+                            reader: liveCodexReader
+                        )
                         let g: TerminalSessionAttachmentProbe.SnapshotAvailability<TerminalSessionAttachmentProbe.GhosttyTerminalSnapshot>
                         let t: TerminalSessionAttachmentProbe.SnapshotAvailability<TerminalSessionAttachmentProbe.TerminalTabSnapshot>
+                        let i: TerminalSessionAttachmentProbe.SnapshotAvailability<TerminalSessionAttachmentProbe.ITermSessionSnapshot>
                         let j: [String: JumpTarget]
 
                         if shouldResolveTerminals {
                             g = probe.ghosttySnapshotAvailability()
                             t = probe.terminalSnapshotAvailability()
+                            i = probe.itermSnapshotAvailability()
                             j = resolver.resolveJumpTargets(for: liveSessions, activeProcesses: s)
                         } else {
                             g = .available([], appIsRunning: false)
                             t = .available([], appIsRunning: false)
+                            i = .available([], appIsRunning: false)
                             j = [:]
                         }
 
-                        return (s, g, t, j)
+                        let claude = Self.preloadClaudeTranscripts(
+                            activeProcesses: s,
+                            sessions: currentSessions,
+                            discovery: claudeDiscovery
+                        )
+                        let agy = Self.preloadAgyRecords(
+                            activeProcesses: s,
+                            sessions: currentSessions
+                        )
+                        let codex = Self.preloadCodexLiveRecords(
+                            sessions: currentSessions,
+                            reader: liveCodexReader
+                        )
+
+                        return (s, g, t, i, j, c, claude, agy, codex)
                     }.value
                     let isCodexAppRunning = Self.isCodexDesktopAppRunning()
                     self.reconcileSessionAttachments(
                         activeProcesses: snapshots,
                         ghosttyAvailability: ghosttyAvail,
                         terminalAvailability: terminalAvail,
+                        itermAvailability: itermAvail,
                         preResolvedJumpTargets: jumpTargets,
-                        observedCodexAppRunning: isCodexAppRunning
+                        observedCodexAppRunning: isCodexAppRunning,
+                        liveCodexRecords: liveCodexRecords,
+                        preloadedClaudeSessions: preloadedClaude,
+                        preloadedAgyRecords: preloadedAgy,
+                        preloadedCodexLiveRecords: preloadedCodex
                     )
                     if isCodexAppRunning {
                         self.onCodexAppMaintenanceTick?()
@@ -178,7 +216,7 @@ final class ProcessMonitoringCoordinator {
                     hadTrackedLiveSessions = hasTrackedLiveSessions
                 }
 
-                self.expireStalePiHeartbeatSessions()
+                self.expireStaleHeartbeatSessions()
 
                 let wakeInterval = Self.monitoringWakeInterval(
                     isResolvingInitialLiveSessions: self.isResolvingInitialLiveSessions,
@@ -205,8 +243,13 @@ final class ProcessMonitoringCoordinator {
         activeProcesses: [ActiveProcessSnapshot]? = nil,
         ghosttyAvailability: TerminalSessionAttachmentProbe.SnapshotAvailability<TerminalSessionAttachmentProbe.GhosttyTerminalSnapshot>? = nil,
         terminalAvailability: TerminalSessionAttachmentProbe.SnapshotAvailability<TerminalSessionAttachmentProbe.TerminalTabSnapshot>? = nil,
+        itermAvailability: TerminalSessionAttachmentProbe.SnapshotAvailability<TerminalSessionAttachmentProbe.ITermSessionSnapshot>? = nil,
         preResolvedJumpTargets: [String: JumpTarget]? = nil,
-        observedCodexAppRunning: Bool? = nil
+        observedCodexAppRunning: Bool? = nil,
+        liveCodexRecords: [CodexTrackedSessionRecord] = [],
+        preloadedClaudeSessions: PreloadedReads<AgentSession>? = nil,
+        preloadedAgyRecords: PreloadedReads<AgySessionRecord>? = nil,
+        preloadedCodexLiveRecords: PreloadedReads<CodexTrackedSessionRecord>? = nil
     ) {
         let activeProcesses = activeProcesses ?? activeAgentProcessDiscovery.discover()
 
@@ -222,11 +265,22 @@ final class ProcessMonitoringCoordinator {
 
         let mergedClaudeSessions = mergedWithSyntheticClaudeSessions(
             existingSessions: local.sessions,
-            activeProcesses: activeProcesses
+            activeProcesses: activeProcesses,
+            preloadedClaudeSessions: preloadedClaudeSessions
         )
-        let mergedSessions = mergedWithSyntheticCursorSessions(
+        let mergedCursorSessions = mergedWithSyntheticCursorSessions(
             existingSessions: mergedClaudeSessions,
             activeProcesses: activeProcesses
+        )
+        let mergedCodexSessions = mergedWithLiveCodexSessions(
+            existingSessions: mergedCursorSessions,
+            liveRecords: liveCodexRecords,
+            activeProcesses: activeProcesses
+        )
+        let mergedSessions = mergedWithLiveAgySessions(
+            existingSessions: mergedCodexSessions,
+            activeProcesses: activeProcesses,
+            preloadedAgyRecords: preloadedAgyRecords
         )
         if mergedSessions != local.sessions {
             local = SessionState(sessions: mergedSessions)
@@ -257,6 +311,7 @@ final class ProcessMonitoringCoordinator {
                 for: sessions,
                 ghosttyAvailability: ghosttyAvailability,
                 terminalAvailability: terminalAvailability,
+                itermAvailability: itermAvailability ?? .available([], appIsRunning: false),
                 activeProcesses: activeProcesses,
                 allowRecentAttachmentGrace: !isResolvingInitialLiveSessions
             )
@@ -281,7 +336,8 @@ final class ProcessMonitoringCoordinator {
         // Phase 1: populate isProcessAlive in parallel with existing system.
         let aliveIDs = sessionIDsWithAliveProcesses(
             activeProcesses: activeProcesses,
-            isCodexAppRunning: isCodexAppRunning
+            isCodexAppRunning: isCodexAppRunning,
+            sessions: local.sessions
         )
         _ = local.markProcessLiveness(
             aliveSessionIDs: aliveIDs,
@@ -298,6 +354,92 @@ final class ProcessMonitoringCoordinator {
             )
         if !resolverJumpTargets.isEmpty {
             _ = local.reconcileJumpTargets(resolverJumpTargets)
+        }
+
+        // Reconcile running states:
+        // 1. Dead CLI processes cannot be actively running.
+        // 2. Claude sessions whose transcript indicates phase change (running <-> completed).
+        // 3. Codex CLI sessions whose rollout indicates phase change (running <-> completed).
+        // 4. AGY sessions whose database indicates phase change (running <-> completed).
+        for session in local.sessions {
+            if session.origin == .demo || session.isRemote { continue }
+
+            if session.phase == .running {
+                if session.attachmentState == .detached && !aliveIDs.contains(session.id) {
+                    var updated = session
+                    updated.phase = .completed
+                    local.upsert(updated)
+                    continue
+                }
+
+                if !session.isProcessAlive {
+                    var updated = session
+                    updated.phase = .completed
+                    local.upsert(updated)
+                    continue
+                }
+            }
+
+            guard session.isProcessAlive else { continue }
+
+            if session.tool == .claudeCode,
+               let transcriptPath = session.claudeMetadata?.transcriptPath,
+               !transcriptPath.isEmpty {
+                let parsed = Self.preloadedValue(preloadedClaudeSessions, for: transcriptPath) {
+                    claudeTranscriptDiscovery.parseSession(at: URL(fileURLWithPath: transcriptPath))
+                }
+                if let parsed {
+                    if parsed.phase != session.phase || (parsed.phase == .running && parsed.claudeMetadata?.currentTool != session.claudeMetadata?.currentTool) {
+                        var updated = session
+                        updated.phase = parsed.phase
+                        updated.summary = parsed.summary
+                        if let metadata = parsed.claudeMetadata {
+                            updated.claudeMetadata = metadata
+                        }
+                        local.upsert(updated)
+                    }
+                }
+            }
+
+            if session.tool == .codex,
+               !session.isCodexAppSession,
+               let transcriptPath = session.codexMetadata?.transcriptPath,
+               !transcriptPath.isEmpty {
+                let parsed = Self.preloadedValue(preloadedCodexLiveRecords, for: transcriptPath) {
+                    liveCodexTranscriptReader.liveSessionRecord(transcriptPath: transcriptPath)
+                }
+                if let parsed {
+                    if parsed.phase != session.phase || (parsed.phase == .running && parsed.codexMetadata?.currentTool != session.codexMetadata?.currentTool) {
+                        var updated = session
+                        updated.phase = parsed.phase
+                        updated.summary = parsed.summary
+                        if let metadata = parsed.codexMetadata {
+                            updated.codexMetadata = metadata
+                        }
+                        local.upsert(updated)
+                    }
+                }
+            }
+
+            if session.tool == .geminiCLI {
+                let record = Self.preloadedValue(preloadedAgyRecords, for: session.id) {
+                    AgySessionReader.fetchRecord(
+                        sessionID: session.id,
+                        transcriptPath: session.geminiMetadata?.transcriptPath
+                    )
+                }
+                if let record {
+                    let targetPhase: SessionPhase = record.isRunning ? .running : .completed
+                    if session.phase != targetPhase {
+                        var updated = session
+                        updated.phase = targetPhase
+                        if !record.preview.isEmpty {
+                            updated.summary = record.preview
+                        }
+                        local.upsert(updated)
+                    }
+                }
+            }
         }
 
         // Phase 4: remove sessions that are no longer visible.
@@ -327,10 +469,10 @@ final class ProcessMonitoringCoordinator {
         onPersistenceNeeded?()
     }
 
-    private func expireStalePiHeartbeatSessions(now: Date = .now) {
+    private func expireStaleHeartbeatSessions(now: Date = .now) {
         var local = state
-        let expired = local.expireStalePiHeartbeats(
-            before: now.addingTimeInterval(-Self.piHeartbeatTimeout)
+        let expired = local.expireStaleHeartbeatSessions(
+            before: now.addingTimeInterval(-Self.heartbeatTimeout)
         )
         guard !expired.isEmpty else { return }
 
@@ -388,6 +530,8 @@ final class ProcessMonitoringCoordinator {
             payload.sessionID
         case let .actionableStateResolved(payload):
             payload.sessionID
+        case .dshTodayTokensUpdated:
+            nil
         }
     }
 
@@ -399,10 +543,11 @@ final class ProcessMonitoringCoordinator {
     /// Codex/Claude/Gemini).
     func sessionIDsWithAliveProcesses(
         activeProcesses: [ActiveProcessSnapshot],
-        isCodexAppRunning: Bool
+        isCodexAppRunning: Bool,
+        sessions: [AgentSession]? = nil
     ) -> Set<String> {
         var aliveIDs: Set<String> = []
-        let sessions = state.sessions
+        let sessions = sessions ?? state.sessions
 
         // Codex CLI sessions: match by session ID directly.
         let codexProcessIDs = Set(
@@ -426,41 +571,15 @@ final class ProcessMonitoringCoordinator {
             }
         }
 
-        // Claude sessions: reuse the multi-pass matching from representedClaudeProcessKeys.
+        // Claude sessions: share the one-to-one matching used for synthetic rows,
+        // so each live process keeps at most one session alive.
         let claudeProcesses = activeProcesses.filter { $0.tool == .claudeCode }
         let trackedClaudeSessions = sessions.filter { $0.tool == .claudeCode && !isSyntheticClaudeSession($0) }
-        var claimedSessionIDs: Set<String> = []
-
-        // Pass 1: exact session ID match.
-        for process in claudeProcesses {
-            guard let processSessionID = process.sessionID,
-                  let matched = trackedClaudeSessions.first(where: {
-                      !claimedSessionIDs.contains($0.id) && $0.id == processSessionID
-                  }) else { continue }
-            aliveIDs.insert(matched.id)
-            claimedSessionIDs.insert(matched.id)
-        }
-
-        // Pass 2: transcript path match.
-        for process in claudeProcesses {
-            guard let transcriptPath = process.transcriptPath,
-                  let matched = trackedClaudeSessions.first(where: {
-                      !claimedSessionIDs.contains($0.id)
-                          && $0.claudeMetadata?.transcriptPath == transcriptPath
-                  }) else { continue }
-            aliveIDs.insert(matched.id)
-            claimedSessionIDs.insert(matched.id)
-        }
-
-        // Pass 3: TTY + CWD fallback match.
-        for process in claudeProcesses {
-            guard let matched = uniqueTrackedClaudeSession(
-                for: process,
-                sessions: trackedClaudeSessions,
-                claimedSessionIDs: claimedSessionIDs
-            ) else { continue }
-            aliveIDs.insert(matched.id)
-            claimedSessionIDs.insert(matched.id)
+        for match in claudeProcessSessionMatches(
+            sessions: trackedClaudeSessions,
+            activeProcesses: claudeProcesses
+        ) {
+            aliveIDs.insert(match.session.id)
         }
 
         // OpenCode sessions are hook-managed, but OpenCode does not expose a stable
@@ -507,6 +626,13 @@ final class ProcessMonitoringCoordinator {
         let trackedGeminiSessions = sessions.filter { $0.tool == .geminiCLI && !$0.isDemoSession }
         var claimedGeminiSessionIDs: Set<String> = []
         for process in geminiProcesses {
+            let sessionID = process.sessionID ?? agySyntheticSessionID(for: process)
+            if let directMatch = trackedGeminiSessions.first(where: { $0.id == sessionID && !claimedGeminiSessionIDs.contains($0.id) }) {
+                aliveIDs.insert(directMatch.id)
+                claimedGeminiSessionIDs.insert(directMatch.id)
+                continue
+            }
+
             guard let matched = uniqueTrackedGeminiSession(
                 for: process,
                 sessions: trackedGeminiSessions,
@@ -823,12 +949,14 @@ final class ProcessMonitoringCoordinator {
     func mergedWithSyntheticClaudeSessions(
         existingSessions: [AgentSession],
         activeProcesses: [ActiveProcessSnapshot],
+        preloadedClaudeSessions: PreloadedReads<AgentSession>? = nil,
         now: Date = .now
     ) -> [AgentSession] {
         let baseSessions = existingSessions.filter { !isSyntheticClaudeSession($0) }
         let syntheticSessions = syntheticClaudeSessions(
             existingSessions: baseSessions,
             activeProcesses: activeProcesses,
+            preloadedClaudeSessions: preloadedClaudeSessions,
             now: now
         )
 
@@ -838,6 +966,7 @@ final class ProcessMonitoringCoordinator {
     private func syntheticClaudeSessions(
         existingSessions: [AgentSession],
         activeProcesses: [ActiveProcessSnapshot],
+        preloadedClaudeSessions: PreloadedReads<AgentSession>? = nil,
         now: Date
     ) -> [AgentSession] {
         let activeClaudeProcesses = activeProcesses.filter { process in
@@ -853,19 +982,20 @@ final class ProcessMonitoringCoordinator {
         )
 
         return activeClaudeProcesses
-            .filter { !representedProcessKeys.contains(processIdentityKey($0)) }
-            .sorted { processIdentityKey($0) < processIdentityKey($1) }
-            .map { syntheticClaudeSession(for: $0, now: now) }
+            .filter { !representedProcessKeys.contains(Self.processIdentityKey($0)) }
+            .sorted { Self.processIdentityKey($0) < Self.processIdentityKey($1) }
+            .map { syntheticClaudeSession(for: $0, preloadedClaudeSessions: preloadedClaudeSessions, now: now) }
     }
 
     private func syntheticClaudeSession(
         for process: ActiveProcessSnapshot,
+        preloadedClaudeSessions: PreloadedReads<AgentSession>? = nil,
         now: Date
     ) -> AgentSession {
         let workingDirectory = process.workingDirectory
         let workspaceName = workingDirectory.map { WorkspaceNameResolver.workspaceName(for: $0) } ?? "Workspace"
-        let terminalApp = supportedTerminalApp(for: process.terminalApp) ?? "Unknown"
-        let identity = processIdentityKey(process)
+        let terminalApp = Self.supportedTerminalApp(for: process.terminalApp) ?? "Unknown"
+        let identity = Self.processIdentityKey(process)
 
         var session = AgentSession(
             id: "\(syntheticClaudeSessionPrefix)\(identity)",
@@ -874,7 +1004,7 @@ final class ProcessMonitoringCoordinator {
             origin: .live,
             attachmentState: .attached,
             phase: .completed,
-            summary: "Claude session detected from \(terminalApp).",
+            summary: Self.syntheticDetectedSummary(subject: "Claude session", terminalApp: terminalApp),
             updatedAt: now,
             jumpTarget: JumpTarget(
                 terminalApp: terminalApp,
@@ -887,11 +1017,178 @@ final class ProcessMonitoringCoordinator {
             )
         )
         session.isProcessAlive = true
+
+        if let transcriptPath = process.transcriptPath, !transcriptPath.isEmpty {
+            session.claudeMetadata = ClaudeSessionMetadata(transcriptPath: transcriptPath)
+            let parsed = Self.preloadedValue(preloadedClaudeSessions, for: transcriptPath) {
+                claudeTranscriptDiscovery.parseSession(at: URL(fileURLWithPath: transcriptPath))
+            }
+            if let parsed {
+                session.phase = parsed.phase
+                session.summary = parsed.summary
+                if let meta = parsed.claudeMetadata {
+                    session.claudeMetadata = meta
+                }
+                session.updatedAt = parsed.updatedAt
+            }
+        }
+
         return session
     }
 
     func isSyntheticClaudeSession(_ session: AgentSession) -> Bool {
         session.tool == .claudeCode && session.id.hasPrefix(syntheticClaudeSessionPrefix)
+    }
+
+    // MARK: - Live Codex sessions
+
+    /// Records for Codex CLI processes whose open transcript no hook or
+    /// rollout scan has reported: sessions started before hooks were
+    /// installed, older than the 24h scan window, or under a CODEX_HOME the
+    /// scan does not cover. Only unknown session IDs are read, so each
+    /// transcript is parsed once. Runs off the main actor.
+    nonisolated static func untrackedLiveCodexRecords(
+        activeProcesses: [ActiveProcessSnapshot],
+        knownSessionIDs: Set<String>,
+        reader: CodexRolloutDiscovery
+    ) -> [CodexTrackedSessionRecord] {
+        var seen = knownSessionIDs
+        var records: [CodexTrackedSessionRecord] = []
+        for process in activeProcesses where process.tool == .codex {
+            guard let sessionID = process.sessionID,
+                  let transcriptPath = process.transcriptPath,
+                  seen.insert(sessionID).inserted,
+                  let record = reader.liveSessionRecord(transcriptPath: transcriptPath),
+                  // Liveness matches CLI sessions by ID, so keep only records whose
+                  // session_meta ID is the one the process snapshot reports.
+                  record.sessionID == sessionID else {
+                continue
+            }
+            records.append(record)
+        }
+        return records
+    }
+
+    /// Background preload results keyed by transcript path or session ID. A
+    /// key mapped to `nil` was read and found nothing; only keys missing
+    /// entirely (sessions that appeared after the preload started) are read
+    /// again on the main actor.
+    typealias PreloadedReads<Value> = [String: Value?]
+
+    nonisolated static func preloadedValue<Value>(
+        _ reads: PreloadedReads<Value>?,
+        for key: String,
+        orLoad load: () -> Value?
+    ) -> Value? {
+        if let reads, let entry = reads[key] {
+            return entry
+        }
+        return load()
+    }
+
+    /// Only sessions whose process is alive are read: the reconcile loop
+    /// skips the rest, so parsing their transcripts would be wasted I/O.
+    nonisolated static func preloadClaudeTranscripts(
+        activeProcesses: [ActiveProcessSnapshot],
+        sessions: [AgentSession],
+        discovery: ClaudeTranscriptDiscovery
+    ) -> PreloadedReads<AgentSession> {
+        var paths = Set<String>()
+        for process in activeProcesses where process.tool == .claudeCode {
+            if let path = process.transcriptPath, !path.isEmpty {
+                paths.insert(path)
+            }
+        }
+        for session in sessions where session.tool == .claudeCode && session.isProcessAlive {
+            if let path = session.claudeMetadata?.transcriptPath, !path.isEmpty {
+                paths.insert(path)
+            }
+        }
+        var result: PreloadedReads<AgentSession> = [:]
+        for path in paths {
+            result.updateValue(discovery.parseSession(at: URL(fileURLWithPath: path)), forKey: path)
+        }
+        return result
+    }
+
+    nonisolated static func preloadAgyRecords(
+        activeProcesses: [ActiveProcessSnapshot],
+        sessions: [AgentSession]
+    ) -> PreloadedReads<AgySessionRecord> {
+        var targets: [(id: String, path: String?)] = []
+        for process in activeProcesses where process.tool == .geminiCLI {
+            let sessionID = process.sessionID ?? agySyntheticSessionID(for: process)
+            targets.append((sessionID, process.transcriptPath))
+        }
+        for session in sessions where session.tool == .geminiCLI && session.isProcessAlive {
+            targets.append((session.id, session.geminiMetadata?.transcriptPath))
+        }
+        var result: PreloadedReads<AgySessionRecord> = [:]
+        // fetchRecord already falls back to every candidate database, so one
+        // attempt per ID is final even when it finds nothing.
+        for target in targets where result.index(forKey: target.id) == nil {
+            result.updateValue(
+                AgySessionReader.fetchRecord(sessionID: target.id, transcriptPath: target.path),
+                forKey: target.id
+            )
+        }
+        return result
+    }
+
+    nonisolated static func preloadCodexLiveRecords(
+        sessions: [AgentSession],
+        reader: CodexRolloutDiscovery
+    ) -> PreloadedReads<CodexTrackedSessionRecord> {
+        var result: PreloadedReads<CodexTrackedSessionRecord> = [:]
+        for session in sessions
+        where session.tool == .codex && !session.isCodexAppSession && session.isProcessAlive {
+            if let path = session.codexMetadata?.transcriptPath, !path.isEmpty {
+                result.updateValue(reader.liveSessionRecord(transcriptPath: path), forKey: path)
+            }
+        }
+        return result
+    }
+
+    func mergedWithLiveCodexSessions(
+        existingSessions: [AgentSession],
+        liveRecords: [CodexTrackedSessionRecord],
+        activeProcesses: [ActiveProcessSnapshot]
+    ) -> [AgentSession] {
+        guard !liveRecords.isEmpty else {
+            return existingSessions
+        }
+
+        let existingIDs = Set(existingSessions.map(\.id))
+        let processesBySessionID = Dictionary(
+            activeProcesses.compactMap { process in
+                process.tool == .codex ? process.sessionID.map { ($0, process) } : nil
+            },
+            uniquingKeysWith: { first, _ in first }
+        )
+
+        var added: [AgentSession] = []
+        for record in liveRecords where !existingIDs.contains(record.sessionID) {
+            let process = processesBySessionID[record.sessionID]
+            var record = record
+            if record.jumpTarget == nil {
+                let workingDirectory = process?.workingDirectory
+                let workspaceName = workingDirectory.map { WorkspaceNameResolver.workspaceName(for: $0) } ?? "Workspace"
+                record.jumpTarget = JumpTarget(
+                    terminalApp: supportedTerminalApp(for: process?.terminalApp) ?? "Unknown",
+                    workspaceName: workspaceName,
+                    paneTitle: "Codex \(workspaceName)",
+                    workingDirectory: workingDirectory,
+                    terminalTTY: process?.terminalTTY,
+                    tmuxTarget: process?.tmuxTarget,
+                    tmuxSocketPath: process?.tmuxSocketPath
+                )
+            }
+            var session = record.session
+            session.isProcessAlive = true
+            added.append(session)
+        }
+
+        return existingSessions + added
     }
 
     // MARK: - Synthetic Cursor sessions
@@ -951,7 +1248,7 @@ final class ProcessMonitoringCoordinator {
             origin: .live,
             attachmentState: .attached,
             phase: .running,
-            summary: "Cursor agent detected from \(terminalApp).",
+            summary: Self.syntheticDetectedSummary(subject: "Cursor agent", terminalApp: terminalApp),
             updatedAt: now,
             jumpTarget: JumpTarget(
                 terminalApp: terminalApp,
@@ -969,6 +1266,141 @@ final class ProcessMonitoringCoordinator {
         )
         session.isProcessAlive = true
         return session
+    }
+
+    // MARK: - Live Antigravity / Gemini sessions
+
+    func mergedWithLiveAgySessions(
+        existingSessions: [AgentSession],
+        activeProcesses: [ActiveProcessSnapshot],
+        preloadedAgyRecords: PreloadedReads<AgySessionRecord>? = nil,
+        now: Date = .now
+    ) -> [AgentSession] {
+        let activeAgyProcesses = activeProcesses.filter { $0.tool == .geminiCLI }
+        guard !activeAgyProcesses.isEmpty else {
+            return existingSessions
+        }
+
+        var sessionsByID = Dictionary(uniqueKeysWithValues: existingSessions.map { ($0.id, $0) })
+
+        // Remove synthetic placeholder sessions if a real session ID is now available
+        for process in activeAgyProcesses {
+            if let realSessionID = process.sessionID {
+                let syntheticID = Self.agySyntheticSessionID(for: process)
+                if syntheticID != realSessionID {
+                    sessionsByID.removeValue(forKey: syntheticID)
+                }
+            }
+        }
+
+        for process in activeAgyProcesses {
+            let sessionID = process.sessionID ?? Self.agySyntheticSessionID(for: process)
+            let workingDirectory = process.workingDirectory
+            let workspaceName = workingDirectory.map { WorkspaceNameResolver.workspaceName(for: $0) } ?? "Workspace"
+            let terminalApp = Self.supportedTerminalApp(for: process.terminalApp)
+                ?? process.terminalApp?.trimmingCharacters(in: .whitespacesAndNewlines)
+                ?? "Antigravity"
+
+            let record = Self.preloadedValue(preloadedAgyRecords, for: sessionID) {
+                AgySessionReader.fetchRecord(
+                    sessionID: sessionID,
+                    transcriptPath: process.transcriptPath
+                )
+            }
+
+            let isRunning = record?.isRunning ?? false
+            let phase: SessionPhase = isRunning ? .running : .completed
+            let rawTitle = record?.title
+            let effectiveTitle = (rawTitle != nil && !rawTitle!.isEmpty) ? rawTitle! : "新会话"
+            let title = "\(effectiveTitle) · \(workspaceName)"
+            let preview = (record?.preview != nil && !record!.preview.isEmpty) ? record!.preview : "Antigravity session in \(workspaceName)"
+
+            let jumpTarget = JumpTarget(
+                terminalApp: terminalApp,
+                workspaceName: workspaceName,
+                paneTitle: process.paneTitle ?? "agy \(sessionID.prefix(8))",
+                workingDirectory: workingDirectory,
+                terminalTTY: process.terminalTTY,
+                tmuxTarget: process.tmuxTarget,
+                tmuxSocketPath: process.tmuxSocketPath
+            )
+
+            if var existing = sessionsByID[sessionID] {
+                existing.isProcessAlive = true
+                existing.processNotSeenCount = 0
+                existing.attachmentState = .attached
+                if var target = existing.jumpTarget {
+                    if let tty = process.terminalTTY {
+                        target.terminalTTY = tty
+                    }
+                    target.terminalApp = terminalApp
+                    if let tmuxTarget = process.tmuxTarget {
+                        target.tmuxTarget = tmuxTarget
+                    }
+                    if let tmuxSocketPath = process.tmuxSocketPath {
+                        target.tmuxSocketPath = tmuxSocketPath
+                    }
+                    if let paneTitle = process.paneTitle, !paneTitle.isEmpty {
+                        target.paneTitle = paneTitle
+                    }
+                    if target.workingDirectory == nil {
+                        target.workingDirectory = workingDirectory
+                    }
+                    existing.jumpTarget = target
+                } else {
+                    existing.jumpTarget = jumpTarget
+                }
+                existing.conversationTitle = effectiveTitle
+                existing.phase = phase
+                if existing.geminiMetadata == nil {
+                    existing.geminiMetadata = GeminiSessionMetadata(
+                        transcriptPath: process.transcriptPath,
+                        initialUserPrompt: preview,
+                        lastUserPrompt: preview,
+                        model: record?.model
+                    )
+                } else {
+                    if existing.geminiMetadata?.transcriptPath == nil {
+                        existing.geminiMetadata?.transcriptPath = process.transcriptPath
+                    }
+                    if let model = record?.model {
+                        existing.geminiMetadata?.model = model
+                    }
+                }
+                sessionsByID[sessionID] = existing
+            } else {
+                var newSession = AgentSession(
+                    id: sessionID,
+                    title: title,
+                    tool: .geminiCLI,
+                    origin: .live,
+                    attachmentState: .attached,
+                    phase: phase,
+                    summary: preview,
+                    updatedAt: record?.lastModifiedTime ?? now,
+                    jumpTarget: jumpTarget,
+                    geminiMetadata: GeminiSessionMetadata(
+                        transcriptPath: process.transcriptPath,
+                        initialUserPrompt: preview,
+                        lastUserPrompt: preview,
+                        model: record?.model
+                    )
+                )
+                newSession.isProcessAlive = true
+                newSession.processNotSeenCount = 0
+                newSession.conversationTitle = effectiveTitle
+                sessionsByID[sessionID] = newSession
+            }
+        }
+
+        return Array(sessionsByID.values)
+    }
+
+    nonisolated static func agySyntheticSessionID(for process: ActiveProcessSnapshot) -> String {
+        if let sessionID = process.sessionID {
+            return sessionID
+        }
+        return "gemini-process:\(processIdentityKey(process))"
     }
 
     // MARK: - Process matching
@@ -1071,52 +1503,86 @@ final class ProcessMonitoringCoordinator {
             session.tool == .claudeCode && !isSyntheticClaudeSession(session)
         }
 
-        var representedProcessKeys: Set<String> = []
+        return Set(
+            claudeProcessSessionMatches(
+                sessions: trackedClaudeSessions,
+                activeProcesses: activeProcesses.filter { $0.tool == .claudeCode }
+            )
+            .map { processIdentityKey($0.process) }
+        )
+    }
+
+    /// Pairs live Claude processes with tracked sessions, one to one.
+    ///
+    /// A process's `sessionID` comes from its `--resume` / `--session-id`
+    /// launch argument, which goes stale after an in-process `/resume` or
+    /// `/clear`. An ID match is therefore ignored when the session's TTY is
+    /// held by another live process; the session then falls through to the
+    /// TTY/CWD passes like any other.
+    private func claudeProcessSessionMatches(
+        sessions: [AgentSession],
+        activeProcesses: [ActiveProcessSnapshot]
+    ) -> [(process: ActiveProcessSnapshot, session: AgentSession)] {
+        var matches: [(process: ActiveProcessSnapshot, session: AgentSession)] = []
+        var claimedProcessIndices: Set<Int> = []
         var claimedSessionIDs: Set<String> = []
 
-        for process in activeProcesses {
-            guard let processSessionID = process.sessionID,
-                  let matchedSession = trackedClaudeSessions.first(where: {
-                      !claimedSessionIDs.contains($0.id) && $0.id == processSessionID
-                  }) else {
-                continue
-            }
-
-            representedProcessKeys.insert(processIdentityKey(process))
-            claimedSessionIDs.insert(matchedSession.id)
+        func claim(_ index: Int, _ session: AgentSession) {
+            matches.append((activeProcesses[index], session))
+            claimedProcessIndices.insert(index)
+            claimedSessionIDs.insert(session.id)
         }
 
-        for process in activeProcesses {
-            let processKey = processIdentityKey(process)
-            guard !representedProcessKeys.contains(processKey),
-                  let transcriptPath = process.transcriptPath,
-                  let matchedSession = trackedClaudeSessions.first(where: {
+        // Pass 1: exact session ID match.
+        for (index, process) in activeProcesses.enumerated() {
+            guard let processSessionID = process.sessionID,
+                  let matched = sessions.first(where: {
+                      !claimedSessionIDs.contains($0.id)
+                          && $0.id == processSessionID
+                          && !isHeldByAnotherProcess($0, excluding: process, in: activeProcesses)
+                  }) else { continue }
+            claim(index, matched)
+        }
+
+        // Pass 2: transcript path match.
+        for (index, process) in activeProcesses.enumerated() where !claimedProcessIndices.contains(index) {
+            guard let transcriptPath = process.transcriptPath,
+                  let matched = sessions.first(where: {
                       !claimedSessionIDs.contains($0.id)
                           && $0.claudeMetadata?.transcriptPath == transcriptPath
-                  }) else {
-                continue
-            }
-
-            representedProcessKeys.insert(processKey)
-            claimedSessionIDs.insert(matchedSession.id)
+                  }) else { continue }
+            claim(index, matched)
         }
 
-        for process in activeProcesses {
-            let processKey = processIdentityKey(process)
-            guard !representedProcessKeys.contains(processKey),
-                  let matchedSession = uniqueTrackedClaudeSession(
-                      for: process,
-                      sessions: trackedClaudeSessions,
-                      claimedSessionIDs: claimedSessionIDs
-                  ) else {
-                continue
-            }
-
-            representedProcessKeys.insert(processKey)
-            claimedSessionIDs.insert(matchedSession.id)
+        // Pass 3: TTY + CWD fallback match.
+        for (index, process) in activeProcesses.enumerated() where !claimedProcessIndices.contains(index) {
+            guard let matched = uniqueTrackedClaudeSession(
+                for: process,
+                sessions: sessions,
+                claimedSessionIDs: claimedSessionIDs
+            ) else { continue }
+            claim(index, matched)
         }
 
-        return representedProcessKeys
+        return matches
+    }
+
+    /// True when the session's known TTY differs from `process` and another
+    /// live Claude process sits on that TTY, i.e. the session still lives in
+    /// its own tab and `process` only carries a stale launch argument. A TTY
+    /// with no process left is not a conflict: the session was resumed in a
+    /// new tab.
+    private func isHeldByAnotherProcess(
+        _ session: AgentSession,
+        excluding process: ActiveProcessSnapshot,
+        in processes: [ActiveProcessSnapshot]
+    ) -> Bool {
+        guard let sessionTTY = normalizedTTYForMatching(session.jumpTarget?.terminalTTY),
+              let processTTY = normalizedTTYForMatching(process.terminalTTY),
+              sessionTTY != processTTY else {
+            return false
+        }
+        return processes.contains { normalizedTTYForMatching($0.terminalTTY) == sessionTTY }
     }
 
     private func uniqueTrackedClaudeSession(
@@ -1231,6 +1697,18 @@ final class ProcessMonitoringCoordinator {
                     continue
                 }
 
+                // A shared cwd alone may only fill in a missing TTY. Replacing a
+                // known TTY needs the process to identify this very session;
+                // otherwise a new process in the same folder would take over an
+                // old session's row and keep it alive.
+                let processIdentifiesSession = process.sessionID == session.id
+                    || (process.transcriptPath != nil
+                        && process.transcriptPath == session.claudeMetadata?.transcriptPath)
+                guard processIdentifiesSession
+                        || normalizedTTYForMatching(jumpTarget.terminalTTY) == nil else {
+                    continue
+                }
+
                 // Only adopt if no other session already owns this TTY.
                 let ttyAlreadyClaimed = sessions.contains { other in
                     other.id != session.id
@@ -1247,9 +1725,11 @@ final class ProcessMonitoringCoordinator {
                 }
                 guard !sessionOwnedByOtherProcess else { continue }
 
+                // Leave updatedAt alone: adopting a TTY is not session activity,
+                // and a fresh timestamp would win the cwd-only tie-break in
+                // uniqueTrackedClaudeSession.
                 sessions[index].jumpTarget?.terminalTTY = processTTY
                 sessions[index].attachmentState = .attached
-                sessions[index].updatedAt = .now
                 changed = true
                 break
             }
@@ -1439,7 +1919,27 @@ final class ProcessMonitoringCoordinator {
         }
     }
 
-    private func processIdentityKey(_ process: ActiveProcessSnapshot) -> String {
+    func normalizedPathForMatching(_ value: String?) -> String? {
+        Self.normalizedPathForMatching(value)
+    }
+
+    func normalizedTTYForMatching(_ value: String?) -> String? {
+        Self.normalizedTTYForMatching(value)
+    }
+
+    func supportedTerminalApp(for value: String?) -> String? {
+        Self.supportedTerminalApp(for: value)
+    }
+
+    func processIdentityKey(_ process: ActiveProcessSnapshot) -> String {
+        Self.processIdentityKey(process)
+    }
+
+    func agySyntheticSessionID(for process: ActiveProcessSnapshot) -> String {
+        Self.agySyntheticSessionID(for: process)
+    }
+
+    nonisolated static func processIdentityKey(_ process: ActiveProcessSnapshot) -> String {
         [
             process.sessionID,
             normalizedTTYForMatching(process.terminalTTY),
@@ -1451,11 +1951,11 @@ final class ProcessMonitoringCoordinator {
     }
 
     private func syntheticClaudeGroupKey(for process: ActiveProcessSnapshot) -> String? {
-        if let workingDirectory = normalizedPathForMatching(process.workingDirectory) {
+        if let workingDirectory = Self.normalizedPathForMatching(process.workingDirectory) {
             return "cwd:\(workingDirectory)"
         }
 
-        if let terminalTTY = normalizedTTYForMatching(process.terminalTTY) {
+        if let terminalTTY = Self.normalizedTTYForMatching(process.terminalTTY) {
             return "tty:\(terminalTTY)"
         }
 
@@ -1463,18 +1963,18 @@ final class ProcessMonitoringCoordinator {
     }
 
     private func syntheticClaudeGroupKey(for session: AgentSession) -> String? {
-        if let workingDirectory = normalizedPathForMatching(session.jumpTarget?.workingDirectory) {
+        if let workingDirectory = Self.normalizedPathForMatching(session.jumpTarget?.workingDirectory) {
             return "cwd:\(workingDirectory)"
         }
 
-        if let terminalTTY = normalizedTTYForMatching(session.jumpTarget?.terminalTTY) {
+        if let terminalTTY = Self.normalizedTTYForMatching(session.jumpTarget?.terminalTTY) {
             return "tty:\(terminalTTY)"
         }
 
         return nil
     }
 
-    func normalizedPathForMatching(_ value: String?) -> String? {
+    nonisolated static func normalizedPathForMatching(_ value: String?) -> String? {
         guard let value = value?.trimmingCharacters(in: .whitespacesAndNewlines),
               !value.isEmpty else {
             return nil
@@ -1483,7 +1983,7 @@ final class ProcessMonitoringCoordinator {
         return URL(fileURLWithPath: value).standardizedFileURL.path.lowercased()
     }
 
-    func normalizedTTYForMatching(_ value: String?) -> String? {
+    nonisolated static func normalizedTTYForMatching(_ value: String?) -> String? {
         guard let value = value?.trimmingCharacters(in: .whitespacesAndNewlines),
               !value.isEmpty else {
             return nil
@@ -1492,7 +1992,17 @@ final class ProcessMonitoringCoordinator {
         return value.hasPrefix("/dev/") ? value : "/dev/\(value)"
     }
 
-    func supportedTerminalApp(for value: String?) -> String? {
+    /// Summary for a session synthesized from a live process. Omits the
+    /// terminal when it is unknown instead of printing "from Unknown".
+    nonisolated static func syntheticDetectedSummary(subject: String, terminalApp: String) -> String {
+        let trimmed = terminalApp.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty, trimmed.lowercased() != "unknown" else {
+            return "\(subject) detected."
+        }
+        return "\(subject) detected from \(trimmed)."
+    }
+
+    nonisolated static func supportedTerminalApp(for value: String?) -> String? {
         guard let normalized = value?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() else {
             return nil
         }
@@ -1560,8 +2070,24 @@ final class ProcessMonitoringCoordinator {
             return .codex
         }
 
-        if normalized.contains("claude") {
+        if normalized.contains("✳") || normalized.contains("claude") {
             return .claudeCode
+        }
+
+        if normalized.contains("agy") || normalized.contains("gemini") || normalized.contains("antigravity") {
+            return .geminiCLI
+        }
+
+        if normalized.contains("opencode") {
+            return .openCode
+        }
+
+        if normalized.contains("qoder") {
+            return .qoder
+        }
+
+        if normalized.contains("cursor") {
+            return .cursor
         }
 
         return nil
@@ -1574,7 +2100,7 @@ final class ProcessMonitoringCoordinator {
         case .claudeCode:
             return "Claude \(session.id.prefix(8))"
         case .geminiCLI:
-            return "Gemini \(session.id.prefix(8))"
+            return "agy \(session.id.prefix(8))"
         case .openCode:
             return "OpenCode \(session.id.prefix(8))"
         case .qoder:
@@ -1595,6 +2121,8 @@ final class ProcessMonitoringCoordinator {
             return "Pi \(session.id.prefix(8))"
         case .ohMyPi:
             return "Oh My Pi \(session.id.prefix(8))"
+        case .deepSeekHarness:
+            return "DSH \(session.id.prefix(8))"
         }
     }
 }

@@ -9,6 +9,16 @@ final class OpenIslandAppDelegate: NSObject, NSApplicationDelegate {
     private lazy var harnessRuntimeMonitor = HarnessRuntimeMonitor(launchedAt: launchedAt)
 
     func applicationDidFinishLaunching(_ notification: Notification) {
+        // Prevent a second packaged instance from competing over the bridge
+        // socket, hook installers, and persisted session registries. Harness
+        // runs are exempt so smoke tests can launch alongside a dev app.
+        if harnessLaunchConfiguration.scenario == nil,
+           let otherInstance = Self.otherRunningInstance() {
+            _ = otherInstance.activate(options: [])
+            NSApp.terminate(nil)
+            return
+        }
+
         ProcessInfo.processInfo.disableAutomaticTermination(
             "Open Island should remain active while monitoring local agent sessions."
         )
@@ -38,8 +48,11 @@ final class OpenIslandAppDelegate: NSObject, NSApplicationDelegate {
                 )
             }
 
-            // Hide all windows on launch — settings opens on demand only.
+            // Hide all standard application windows on launch — settings opens on demand only.
             OpenIslandAppDelegate.hideAllAppWindows()
+
+            // Ensure the overlay panel is ordered front and properly positioned on launch.
+            model.ensureOverlayPanel()
 
             harnessRuntimeMonitor.recordMilestone("bootstrapCompleted")
 
@@ -72,12 +85,25 @@ final class OpenIslandAppDelegate: NSObject, NSApplicationDelegate {
         }
     }
 
+    private static func otherRunningInstance() -> NSRunningApplication? {
+        guard let bundleIdentifier = Bundle.main.bundleIdentifier else {
+            return nil
+        }
+
+        let currentProcessID = ProcessInfo.processInfo.processIdentifier
+        return NSRunningApplication
+            .runningApplications(withBundleIdentifier: bundleIdentifier)
+            .first { $0.processIdentifier != currentProcessID }
+    }
+
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool {
         false
     }
 
     private static func hideAllAppWindows() {
         for window in NSApp.windows {
+            // Never hide NSPanel instances (such as NotchPanel or floating overlay panels)
+            guard !(window is NSPanel) else { continue }
             window.orderOut(nil)
         }
     }

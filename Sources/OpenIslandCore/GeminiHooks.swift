@@ -92,19 +92,22 @@ public struct GeminiSessionMetadata: Equatable, Codable, Sendable {
     public var lastUserPrompt: String?
     public var lastAssistantMessage: String?
     public var lastAssistantMessageBody: String?
+    public var model: String?
 
     public init(
         transcriptPath: String? = nil,
         initialUserPrompt: String? = nil,
         lastUserPrompt: String? = nil,
         lastAssistantMessage: String? = nil,
-        lastAssistantMessageBody: String? = nil
+        lastAssistantMessageBody: String? = nil,
+        model: String? = nil
     ) {
         self.transcriptPath = transcriptPath
         self.initialUserPrompt = initialUserPrompt
         self.lastUserPrompt = lastUserPrompt
         self.lastAssistantMessage = lastAssistantMessage
         self.lastAssistantMessageBody = lastAssistantMessageBody
+        self.model = model
     }
 
     public var isEmpty: Bool {
@@ -113,6 +116,7 @@ public struct GeminiSessionMetadata: Equatable, Codable, Sendable {
             && lastUserPrompt == nil
             && lastAssistantMessage == nil
             && lastAssistantMessageBody == nil
+            && model == nil
     }
 }
 
@@ -502,28 +506,16 @@ public extension GeminiHookPayload {
     }
 
     private func commandOutput(executablePath: String, arguments: [String]) -> String? {
-        let process = Process()
-        process.executableURL = URL(fileURLWithPath: executablePath)
-        process.arguments = arguments
-
-        let outputPipe = Pipe()
-        process.standardOutput = outputPipe
-        process.standardError = Pipe()
-
-        do {
-            try process.run()
-            process.waitUntilExit()
-        } catch {
+        guard let result = SubprocessRunner.run(
+            executableURL: URL(fileURLWithPath: executablePath),
+            arguments: arguments,
+            timeout: 1.5
+        ), result.terminationStatus == 0 else {
             return nil
         }
 
-        let data = outputPipe.fileHandleForReading.readDataToEndOfFile()
-        guard !data.isEmpty else {
-            return nil
-        }
-
-        return String(data: data, encoding: .utf8)?
-            .trimmingCharacters(in: .whitespacesAndNewlines)
+        let output = result.stdout.trimmingCharacters(in: .whitespacesAndNewlines)
+        return output.isEmpty ? nil : output
     }
 }
 

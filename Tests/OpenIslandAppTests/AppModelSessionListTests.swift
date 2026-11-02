@@ -1029,6 +1029,7 @@ struct AppModelSessionListTests {
         #expect(merged.count == 1)
         #expect(merged.first?.id.hasPrefix("claude-process:") == true)
         #expect(merged.first?.attachmentState == .attached)
+        #expect(merged.first?.phase == .completed)
         #expect(merged.first?.jumpTarget?.terminalApp == "Ghostty")
         #expect(merged.first?.jumpTarget?.terminalTTY == "/dev/ttys002")
     }
@@ -1052,6 +1053,62 @@ struct AppModelSessionListTests {
                 paneTitle: "codex ~/p/open-island",
                 workingDirectory: "/tmp/open-island",
                 terminalSessionID: "ghostty-codex"
+            )
+        )
+
+        let sanitized = model.monitoring.sanitizeCrossToolGhosttyJumpTargets(in: [misboundClaudeSession])
+
+        #expect(sanitized.first?.jumpTarget?.terminalSessionID == nil)
+        #expect(sanitized.first?.jumpTarget?.paneTitle == "Claude e45d5e87")
+    }
+
+    @Test
+    func sanitizeCrossToolGhosttyJumpTargetsClearsGeminiMisbindingToClaude() {
+        let now = Date(timeIntervalSince1970: 2_000)
+        let model = AppModel()
+        let misboundGeminiSession = AgentSession(
+            id: "5066c5cf-1332-4747-8b3a-cdf92fa6125e",
+            title: "Gemini · Desktop",
+            tool: .geminiCLI,
+            origin: .live,
+            attachmentState: .attached,
+            phase: .running,
+            summary: "Running",
+            updatedAt: now,
+            jumpTarget: JumpTarget(
+                terminalApp: "Ghostty",
+                workspaceName: "Desktop",
+                paneTitle: "✳ 服务器环境调查",
+                workingDirectory: "/Users/rongyi/Desktop",
+                terminalSessionID: "ghostty-claude-tab"
+            )
+        )
+
+        let sanitized = model.monitoring.sanitizeCrossToolGhosttyJumpTargets(in: [misboundGeminiSession])
+
+        #expect(sanitized.first?.jumpTarget?.terminalSessionID == nil)
+        #expect(sanitized.first?.jumpTarget?.paneTitle == "agy 5066c5cf")
+    }
+
+    @Test
+    func sanitizeCrossToolGhosttyJumpTargetsClearsClaudeMisbindingToGemini() {
+        let now = Date(timeIntervalSince1970: 2_000)
+        let model = AppModel()
+        let misboundClaudeSession = AgentSession(
+            id: "e45d5e87-66d0-4f67-8399-6ebc02f3d453",
+            title: "Claude · Desktop",
+            tool: .claudeCode,
+            origin: .live,
+            attachmentState: .attached,
+            phase: .running,
+            summary: "Running",
+            updatedAt: now,
+            jumpTarget: JumpTarget(
+                terminalApp: "Ghostty",
+                workspaceName: "Desktop",
+                paneTitle: "agy-danger",
+                workingDirectory: "/Users/rongyi/Desktop",
+                terminalSessionID: "ghostty-gemini-tab"
             )
         )
 
@@ -1490,6 +1547,55 @@ struct AppModelSessionListTests {
         #expect(claudeSessions.count == 2)
     }
 
+    @Test
+    func cliCodexSessionTransitionsFromCompletedToRunningOnNewTurnRolloutEvent() {
+        let model = AppModel()
+        let sessionID = "cli-codex-turn-test"
+        var cliSession = listSession(id: sessionID, phase: .completed, updatedAt: Date(timeIntervalSince1970: 1_000))
+        cliSession.isCodexAppSession = false
+        model.state = SessionState(sessions: [cliSession])
+
+        #expect(model.state.session(id: sessionID)?.phase == .completed)
+
+        model.applyTrackedEvent(
+            .activityUpdated(SessionActivityUpdated(
+                sessionID: sessionID,
+                summary: "Running exec.",
+                phase: .running,
+                timestamp: Date(timeIntervalSince1970: 1_050)
+            )),
+            updateLastActionMessage: false,
+            ingress: .rollout
+        )
+
+        #expect(model.state.session(id: sessionID)?.phase == .running)
+        #expect(model.state.session(id: sessionID)?.summary == "Running exec.")
+    }
+
+    @Test
+    func codexAppSessionSuppressesStaleRolloutRunningEventWhenCompleted() {
+        let model = AppModel()
+        let sessionID = "codex-app-turn-test"
+        var appSession = listSession(id: sessionID, phase: .completed, updatedAt: Date(timeIntervalSince1970: 1_000))
+        appSession.isCodexAppSession = true
+        model.state = SessionState(sessions: [appSession])
+
+        #expect(model.state.session(id: sessionID)?.phase == .completed)
+
+        model.applyTrackedEvent(
+            .activityUpdated(SessionActivityUpdated(
+                sessionID: sessionID,
+                summary: "Running exec.",
+                phase: .running,
+                timestamp: Date(timeIntervalSince1970: 1_050)
+            )),
+            updateLastActionMessage: false,
+            ingress: .rollout
+        )
+
+        #expect(model.state.session(id: sessionID)?.phase == .completed)
+    }
+
     private func listSession(id: String, phase: SessionPhase, updatedAt: Date) -> AgentSession {
         AgentSession(
             id: id,
@@ -1508,6 +1614,33 @@ struct AppModelSessionListTests {
                 terminalSessionID: "ghostty-\(id)"
             )
         )
+    }
+
+    @Test
+    func runningSessionRanksAboveCompletedSessionsInAttentionSort() {
+        let now = Date()
+        let model = AppModel()
+
+        var completedWithJumpTarget = listSession(id: "completed-with-jump", phase: .completed, updatedAt: now.addingTimeInterval(-10))
+        completedWithJumpTarget.isProcessAlive = true
+
+        var runningSessionNoJumpTarget = AgentSession(
+            id: "running-no-jump",
+            title: "Codex · running",
+            tool: .codex,
+            origin: .live,
+            attachmentState: .attached,
+            phase: .running,
+            summary: "Thinking.",
+            updatedAt: now.addingTimeInterval(-60)
+        )
+        runningSessionNoJumpTarget.isProcessAlive = true
+
+        model.state = SessionState(sessions: [completedWithJumpTarget, runningSessionNoJumpTarget])
+        model.overlayPlacementDiagnostics = placementDiagnostics(mode: .topBar)
+
+        #expect(model.islandListSessions.first?.id == "running-no-jump")
+        #expect(model.islandClosedSpotlight?.id == "running-no-jump")
     }
 
     private func placementDiagnostics(mode: OverlayPlacementMode) -> OverlayPlacementDiagnostics {

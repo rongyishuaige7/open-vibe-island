@@ -1218,6 +1218,48 @@ struct CodexSessionTrackingTests {
     }
 
     @Test
+    func codexRolloutDiscoveryFindsSessionsAcrossMultipleRoots() throws {
+        let root1URL = FileManager.default.temporaryDirectory
+            .appendingPathComponent("open-island-multi-root-1-\(UUID().uuidString)", isDirectory: true)
+        let root2URL = FileManager.default.temporaryDirectory
+            .appendingPathComponent("open-island-multi-root-2-\(UUID().uuidString)", isDirectory: true)
+
+        let dir1 = root1URL.appendingPathComponent("2026/04/02", isDirectory: true)
+        let dir2 = root2URL.appendingPathComponent("2026/04/02", isDirectory: true)
+
+        try FileManager.default.createDirectory(at: dir1, withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: dir2, withIntermediateDirectories: true)
+
+        defer {
+            try? FileManager.default.removeItem(at: root1URL)
+            try? FileManager.default.removeItem(at: root2URL)
+        }
+
+        let rollout1 = dir1.appendingPathComponent("rollout-profile1.jsonl")
+        let rollout2 = dir2.appendingPathComponent("rollout-profile2.jsonl")
+
+        let lines1 = [
+            sessionMetaLine(sessionID: "session-root-1", timestamp: "2026-04-02T04:03:44.000Z", cwd: "/tmp/w1"),
+            rolloutLine(timestamp: "2026-04-02T04:03:45.000Z", type: "event_msg", payload: ["type": "user_message", "message": "Root 1 task"]),
+        ]
+        let lines2 = [
+            sessionMetaLine(sessionID: "session-root-2", timestamp: "2026-04-02T04:03:46.000Z", cwd: "/tmp/w2"),
+            rolloutLine(timestamp: "2026-04-02T04:03:47.000Z", type: "event_msg", payload: ["type": "user_message", "message": "Root 2 task"]),
+        ]
+
+        try lines1.joined(separator: "\n").write(to: rollout1, atomically: true, encoding: .utf8)
+        try lines2.joined(separator: "\n").write(to: rollout2, atomically: true, encoding: .utf8)
+
+        let discovery = CodexRolloutDiscovery(rootURLs: [root1URL, root2URL])
+        let records = discovery.discoverRecentSessions(now: Date(timeIntervalSince1970: 1_743_555_200))
+
+        #expect(records.count == 2)
+        let sessionIDs = Set(records.map(\.sessionID))
+        #expect(sessionIDs.contains("session-root-1"))
+        #expect(sessionIDs.contains("session-root-2"))
+    }
+
+    @Test
     func codexRolloutDiscoveryStreamsRolloutsLargerThanReadChunk() throws {
         // Pins streaming behavior across read-chunk boundaries. The
         // discovery path used to slurp the whole rollout via
@@ -1623,6 +1665,84 @@ struct CodexSessionTrackingTests {
         #expect(discovery.lastScanDiagnostics.parsedFileCount == 1)
         #expect(discovery.lastScanDiagnostics.cacheHitCount == 0)
         #expect(appendedRecords.first?.codexMetadata?.lastUserPrompt == "Only this appended line should be read.")
+    }
+
+    @Test
+    func liveSessionRecordReadsOldRolloutUnderCustomHome() throws {
+        let baseURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent("open-island-live-\(UUID().uuidString)", isDirectory: true)
+        let rootURL = baseURL.appendingPathComponent(".codex-yi/sessions/2026/01/15", isDirectory: true)
+        try FileManager.default.createDirectory(at: rootURL, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: baseURL) }
+
+        let sessionID = "01990000-aaaa-7bbb-8ccc-000000000001"
+        let rolloutURL = rootURL.appendingPathComponent("rollout-2026-01-15T09-00-00-\(sessionID).jsonl")
+        let lines = [
+            sessionMetaLine(sessionID: sessionID, timestamp: "2026-01-15T09:00:00.000Z", cwd: "/tmp/yiapi"),
+            rolloutLine(timestamp: "2026-01-15T09:00:07.000Z", type: "event_msg",
+                        payload: ["type": "user_message", "message": "First prompt."]),
+        ]
+        try (lines.joined(separator: "\n") + "\n").write(to: rolloutURL, atomically: true, encoding: .utf8)
+        // Far outside the 24h scan window.
+        try FileManager.default.setAttributes([.modificationDate: Date().addingTimeInterval(-10 * 86_400)],
+                                              ofItemAtPath: rolloutURL.path)
+
+        let record = try #require(CodexRolloutDiscovery().liveSessionRecord(transcriptPath: rolloutURL.path))
+
+        #expect(record.sessionID == sessionID)
+        #expect(record.codexMetadata?.transcriptPath == rolloutURL.path)
+        #expect(record.codexMetadata?.initialUserPrompt == "First prompt.")
+        #expect(record.codexMetadata?.lastUserPrompt == "First prompt.")
+    }
+
+    @Test
+    func liveSessionRecordBoundsReadsToHeadAndTailWindows() throws {
+        let rootURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent("open-island-live-big-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: rootURL, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: rootURL) }
+
+        let sessionID = "01990000-aaaa-7bbb-8ccc-000000000002"
+        let rolloutURL = rootURL.appendingPathComponent("rollout-2026-01-20T10-00-00-\(sessionID).jsonl")
+        var lines = [
+            sessionMetaLine(sessionID: sessionID, timestamp: "2026-01-20T10:00:00.000Z", cwd: "/tmp/big"),
+            rolloutLine(timestamp: "2026-01-20T10:00:08.000Z", type: "event_msg",
+                        payload: ["type": "user_message", "message": "Initial prompt from the head."]),
+        ]
+        // Middle prompts sit outside both windows and must not leak into the record.
+        for index in 0..<400 {
+            lines.append(rolloutLine(timestamp: "2026-01-21T00:00:00.000Z", type: "event_msg",
+                                     payload: ["type": "user_message", "message": "Middle prompt \(index) " + String(repeating: "x", count: 80)]))
+        }
+        lines.append(rolloutLine(timestamp: "2026-02-01T12:00:00.000Z", type: "event_msg",
+                                 payload: ["type": "user_message", "message": "Latest prompt from the tail."]))
+        try (lines.joined(separator: "\n") + "\n").write(to: rolloutURL, atomically: true, encoding: .utf8)
+
+        let record = try #require(CodexRolloutDiscovery().liveSessionRecord(
+            transcriptPath: rolloutURL.path,
+            headLimit: 1_024,
+            tailLimit: 1_024
+        ))
+
+        #expect(record.sessionID == sessionID)
+        #expect(record.codexMetadata?.initialUserPrompt == "Initial prompt from the head.")
+        #expect(record.codexMetadata?.lastUserPrompt == "Latest prompt from the tail.")
+    }
+
+    @Test
+    func liveSessionRecordRequiresSessionMeta() throws {
+        let rootURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent("open-island-live-nometa-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: rootURL, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: rootURL) }
+
+        let rolloutURL = rootURL.appendingPathComponent("rollout-2026-09-28T10-00-00-x.jsonl")
+        let line = rolloutLine(timestamp: "2026-09-28T10:00:00.000Z", type: "event_msg",
+                               payload: ["type": "user_message", "message": "No meta."])
+        try (line + "\n").write(to: rolloutURL, atomically: true, encoding: .utf8)
+
+        #expect(CodexRolloutDiscovery().liveSessionRecord(transcriptPath: rolloutURL.path) == nil)
+        #expect(CodexRolloutDiscovery().liveSessionRecord(transcriptPath: rootURL.appendingPathComponent("missing.jsonl").path) == nil)
     }
 }
 

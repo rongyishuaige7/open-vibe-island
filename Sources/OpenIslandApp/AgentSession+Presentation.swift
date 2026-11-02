@@ -110,8 +110,26 @@ extension AgentSession {
         return "\(jumpTarget.terminalApp) · \(jumpTarget.workspaceName)"
     }
 
+    /// Hidden when the terminal is unknown: "Unknown" is the sentinel for
+    /// "could not classify the host" and tells the user nothing.
     var spotlightTerminalBadge: String? {
-        jumpTarget?.terminalApp
+        guard let terminalApp = jumpTarget?.terminalApp.trimmedForSurface,
+              !terminalApp.isEmpty,
+              terminalApp.lowercased() != "unknown" else {
+            return nil
+        }
+        return terminalApp
+    }
+
+    /// Row badge: the model the session runs on, falling back to the terminal.
+    var spotlightContextBadge: String? {
+        SessionModelLabel.display(for: currentModelIdentifier) ?? spotlightTerminalBadge
+    }
+
+    /// Hover text for the context badge: the full model id and the terminal it lives in.
+    var spotlightContextBadgeHelp: String? {
+        let parts = [currentModelIdentifier, spotlightTerminalBadge].compactMap { $0 }
+        return parts.isEmpty ? nil : parts.joined(separator: " · ")
     }
 
     var spotlightWorkspaceName: String {
@@ -170,27 +188,34 @@ extension AgentSession {
 
     var spotlightHeadlineText: String {
         let workspaceName = spotlightWorkspaceName
-        var headline = workspaceName
+        var location = workspaceName
 
         if let branch = spotlightWorktreeBranch {
-            headline += " (\(branch))"
+            location += " (\(branch))"
         }
 
         guard let prompt = spotlightHeadlinePromptText else {
-            return headline
+            return location
         }
 
         guard workspaceName != "/" else {
             return prompt
         }
 
-        return "\(headline) · \(prompt)"
+        // Show conversation title / topic first, project path second for all agents
+        return "\(prompt) · \(location)"
     }
 
     var spotlightHeadlinePromptText: String? {
-        // Headline shows the initial prompt (session topic), not the latest.
-        // The latest prompt is shown separately in the "You:" line.
-        initialPromptText ?? latestPromptText
+        // Headline shows the session topic: the title the agent recorded, else
+        // the initial prompt. The latest prompt has its own "You:" line.
+        if let title = conversationTitle?.trimmedForSurface, !title.isEmpty {
+            return title
+        }
+        if let prompt = (initialPromptText ?? latestPromptText)?.trimmedForSurface, !prompt.isEmpty {
+            return prompt
+        }
+        return "新会话"
     }
 
     var spotlightPromptText: String? {
@@ -198,12 +223,16 @@ extension AgentSession {
     }
 
     var spotlightPromptLineText: String? {
+        localizedPromptLineText(.english)
+    }
+
+    func localizedPromptLineText(_ localizer: SessionTextLocalizer) -> String? {
         guard spotlightShowsDetailLines,
               let prompt = spotlightPromptText else {
             return nil
         }
 
-        return "You: \(prompt)"
+        return localizer.promptLine(prompt)
     }
 
     var completionReplyRecipientName: String {
@@ -234,30 +263,42 @@ extension AgentSession {
             return "Pi"
         case .ohMyPi:
             return "Oh My Pi"
+        case .deepSeekHarness:
+            return "DeepSeek Harness"
         }
     }
 
     var notificationHeaderPromptLineText: String? {
+        localizedNotificationHeaderPromptLineText(.english)
+    }
+
+    func localizedNotificationHeaderPromptLineText(_ localizer: SessionTextLocalizer) -> String? {
         guard phase != .completed else {
             return nil
         }
 
-        return spotlightPromptLineText
+        return localizedPromptLineText(localizer)
     }
 
     var spotlightActivityLineText: String? {
+        localizedActivityLineText(.english)
+    }
+
+    /// Status words and Open Island's own summaries go through `localizer`;
+    /// assistant messages and tool previews stay verbatim.
+    func localizedActivityLineText(_ localizer: SessionTextLocalizer) -> String? {
         guard spotlightShowsDetailLines else {
             return nil
         }
 
         if let request = permissionRequest?.summary.trimmedForSurface,
            !request.isEmpty {
-            return request
+            return localizer.summary(request)
         }
 
         if let prompt = questionPrompt?.title.trimmedForSurface,
            !prompt.isEmpty {
-            return prompt
+            return localizer.summary(prompt)
         }
 
         switch phase {
@@ -265,18 +306,20 @@ extension AgentSession {
             if let activity = spotlightRunningActivityText {
                 return activity
             }
-            return spotlightPromptLineText == nil ? "Running" : "Thinking"
+            return localizer.word(spotlightPromptLineText == nil ? .running : .thinking)
         case .waitingForApproval:
-            return permissionRequest?.summary.trimmedForSurface ?? "Approval needed"
+            return permissionRequest.map { localizer.summary($0.summary.trimmedForSurface) }
+                ?? localizer.word(.approvalNeeded)
         case .waitingForAnswer:
-            return questionPrompt?.title.trimmedForSurface ?? "Answer needed"
+            return questionPrompt.map { localizer.summary($0.title.trimmedForSurface) }
+                ?? localizer.word(.answerNeeded)
         case .completed:
             if let assistantMessage = lastAssistantMessageText?.trimmedForSurface,
                !assistantMessage.isEmpty {
                 return assistantMessage
             }
 
-            return jumpTarget != nil ? "Ready" : "Completed"
+            return localizer.word(jumpTarget != nil ? .ready : .completed)
         }
     }
 

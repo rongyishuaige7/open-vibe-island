@@ -12,6 +12,7 @@ This index is the repository map for humans and coding agents. Read these files 
 - [docs/architecture.md](./architecture.md) for the runtime shape and transport boundaries
 - [docs/quality.md](./quality.md) for the current harness contract and verification expectations
 - [docs/worktree-workflow.md](./worktree-workflow.md) for the parallel worktree lifecycle
+- [docs/local-workspace.md](./local-workspace.md) for the retained personal checkout, version differences, and cleanup recovery references
 - [docs/packaging.md](./packaging.md) for the current local app packaging, signing, and notarization path
 - [docs/releasing.md](./releasing.md) for the GitHub release workflow, bilingual notes template, and checklist
 

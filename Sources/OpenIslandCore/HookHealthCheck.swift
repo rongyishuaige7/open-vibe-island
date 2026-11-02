@@ -24,6 +24,8 @@ public struct HookHealthReport: Equatable, Sendable, Identifiable {
         case manifestMissing(expectedPath: String)
         /// The OpenCode plugin file is missing even though it should be installed.
         case pluginMissing(expectedPath: String)
+        /// The manifest file exists but managed hooks are absent from the configuration file.
+        case hooksMissingFromConfig(configPath: String)
 
         public var description: String {
             switch self {
@@ -41,6 +43,8 @@ public struct HookHealthReport: Equatable, Sendable, Identifiable {
                 "Installation manifest missing: \(expectedPath)"
             case .pluginMissing(let expectedPath):
                 "OpenCode plugin file is missing: \(expectedPath)"
+            case .hooksMissingFromConfig(let configPath):
+                "Managed hooks are missing from config: \(configPath)"
             }
         }
 
@@ -55,7 +59,7 @@ public struct HookHealthReport: Equatable, Sendable, Identifiable {
 
         public var isAutoRepairable: Bool {
             switch self {
-            case .staleCommandPath, .binaryNotExecutable, .manifestMissing, .pluginMissing:
+            case .staleCommandPath, .binaryNotExecutable, .manifestMissing, .pluginMissing, .hooksMissingFromConfig:
                 true
             default:
                 false
@@ -173,13 +177,15 @@ public enum HookHealthCheck {
             }
         }
 
-        // 3. Check manifest
-        if fileManager.fileExists(atPath: settingsPath),
-           hasOpenIslandHooks(in: settingsURL, fileManager: fileManager) {
-            let legacyManifestURL = claudeDirectory.appendingPathComponent(ClaudeHookInstallerManifest.legacyFileName)
-            if !fileManager.fileExists(atPath: manifestURL.path) && !fileManager.fileExists(atPath: legacyManifestURL.path) {
-                issues.append(.manifestMissing(expectedPath: manifestURL.path))
-            }
+        // 3. Check manifest and hook presence
+        let legacyManifestURL = claudeDirectory.appendingPathComponent(ClaudeHookInstallerManifest.legacyFileName)
+        let manifestExists = fileManager.fileExists(atPath: manifestURL.path) || fileManager.fileExists(atPath: legacyManifestURL.path)
+        let hooksPresent = fileManager.fileExists(atPath: settingsPath) && hasOpenIslandHooks(in: settingsURL, fileManager: fileManager)
+
+        if hooksPresent && !manifestExists {
+            issues.append(.manifestMissing(expectedPath: manifestURL.path))
+        } else if manifestExists && !hooksPresent {
+            issues.append(.hooksMissingFromConfig(configPath: settingsPath))
         }
 
         return HookHealthReport(
@@ -236,13 +242,15 @@ public enum HookHealthCheck {
             }
         }
 
-        // 3. Check manifest
-        if fileManager.fileExists(atPath: hooksPath),
-           hasOpenIslandHooks(in: hooksURL, fileManager: fileManager) {
-            let legacyManifestURL = codexDirectory.appendingPathComponent(CodexHookInstallerManifest.legacyFileName)
-            if !fileManager.fileExists(atPath: manifestURL.path) && !fileManager.fileExists(atPath: legacyManifestURL.path) {
-                issues.append(.manifestMissing(expectedPath: manifestURL.path))
-            }
+        // 3. Check manifest and hook presence
+        let legacyManifestURL = codexDirectory.appendingPathComponent(CodexHookInstallerManifest.legacyFileName)
+        let manifestExists = fileManager.fileExists(atPath: manifestURL.path) || fileManager.fileExists(atPath: legacyManifestURL.path)
+        let hooksPresent = fileManager.fileExists(atPath: hooksPath) && hasOpenIslandHooks(in: hooksURL, fileManager: fileManager)
+
+        if hooksPresent && !manifestExists {
+            issues.append(.manifestMissing(expectedPath: manifestURL.path))
+        } else if manifestExists && !hooksPresent {
+            issues.append(.hooksMissingFromConfig(configPath: hooksPath))
         }
 
         return HookHealthReport(

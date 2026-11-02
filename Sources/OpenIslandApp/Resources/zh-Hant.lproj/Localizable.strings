@@ -28,6 +28,23 @@
 "settings.general.hapticFeedback" = "懸停時震動回饋";
 "settings.general.suppressFrontmostNotifications" = "前台工作階段不彈出通知";
 "settings.general.showCodexUsage" = "顯示 Codex 用量";
+"settings.general.showTodayTokenUsage" = "顯示今日 Token";
+"settings.general.showTodayTokenUsage.caption" = "讀取 CC Switch、KEEPER 與 Claude Pro 本機日誌中各 Agent 的今日總量，以及 DeepSeek Harness 本機橋接記錄的今日總量，均含快取。";
+"usage.todayTokens.title" = "今日";
+"usage.todayTokens.help" = "從當地午夜起的 Token，含快取：Claude/Codex/AGY/Claude Pro 來自本機用量庫，DSH 來自本機帳本";
+"usage.todayTokens.helpLine" = "%@：%@ Token，其中快取讀取 %@，%@ 次請求";
+"usage.todayTokens.helpLineSessions" = "%@：%@ Token，其中快取讀取 %@，%@ 個工作階段";
+"usage.todayTokens.readFailed" = "最近一次讀取失敗：%@";
+"usage.todayTokens.detailTitle" = "今日 Token 消耗統計";
+"usage.todayTokens.totalLabel" = "今日總消耗";
+"usage.todayTokens.totalLine" = "今日總消耗：%@";
+"usage.todayTokens.dataSource" = "資料來源：CC Switch、KEEPER、Claude Pro 本機日誌與 DSH 橋接帳本";
+"usage.todayTokens.claudePro" = "Claude Pro";
+"usage.todayTokens.agyPool" = "AGY 普通池";
+"usage.todayTokens.agyPro" = "AGY Pro 個人池";
+"usage.todayTokens.other" = "其他";
+"usage.todayTokens.subtext" = "%@ 次請求 · 快取 %@";
+"usage.todayTokens.subtextSessions" = "%@ 個工作階段 · 快取 %@";
 "settings.general.completionReply" = "在完成卡片中回覆";
 "settings.general.cliHooks" = "CLI Hooks";
 "settings.general.activated" = "已啟用";
@@ -36,6 +53,7 @@
 "settings.general.uninstallConfirmTitle" = "確認移除 Hooks？";
 "settings.general.uninstallConfirmAction" = "移除";
 "settings.general.uninstallConfirmMessage.claude" = "這將從 Claude Code 中移除 Open Island 的 hooks。您可以隨時重新安裝。";
+"settings.general.uninstallConfirmMessage.dsh" = "這會從 DeepSeek Harness profile 中移除 Open Island 橋接外掛。之後需要重新啟動 DeepSeek Harness。";
 "settings.general.uninstallConfirmMessage.codex" = "這將從 Codex 中移除 Open Island 的 hooks。您可以隨時重新安裝。";
 "settings.general.uninstallConfirmMessage.claudeUsage" = "這將移除 Claude 用量橋接。您可以隨時重新安裝。";
 "settings.general.cancel" = "取消";
@@ -59,6 +77,7 @@
 "settings.appearance.rightSlot.note" = "收起狀態下島右側顯示的內容。";
 "settings.appearance.rightSlot.count" = "會話數";
 "settings.appearance.rightSlot.agents" = "代理";
+"settings.appearance.rightSlot.mascots" = "像素小人";
 "settings.appearance.rightSlot.none" = "不顯示";
 "settings.appearance.centerLabel.title" = "02 · 中央標籤";
 "settings.appearance.centerLabel.note" = "僅外接螢幕顯示 — MacBook 的物理凹槽會遮擋中央區域。";
@@ -84,6 +103,7 @@
 "settings.appearance.stateIndicator.bar" = "直條";
 "settings.appearance.stateIndicator.glyph" = "圖示";
 "settings.appearance.stateIndicator.tint" = "底色";
+"settings.appearance.stateIndicator.pixel" = "像素";
 "settings.appearance.sessionGroup.title" = "04 · 會話分組";
 "settings.appearance.sessionGroup.note" = "展開會話列表中的可選分組。";
 "settings.appearance.sessionGroup.none" = "不分組";
@@ -197,6 +217,7 @@
 "island.section.inProgress" = "進行中";
 "island.section.justDone" = "剛完成";
 "island.section.idle" = "閒置";
+"island.mascot.waiting" = "等你處理";
 "island.showAll" = "顯示全部 %lld 個工作階段";
 "island.collapseList" = "收起清單";
 "island.usageWaiting" = "等待用量資料";
@@ -225,3 +246,49 @@
 
 /* Window Titles */
 "window.settings" = "Open Island 設定";
+
+/* Session rows: status words and Open Island's own summaries */
+"session.status.running" = "執行中";
+"session.status.thinking" = "思考中";
+"session.status.approvalNeeded" = "需要核准";
+"session.status.answerNeeded" = "需要回答";
+"session.status.ready" = "就緒";
+"session.status.completed" = "已完成";
+"session.promptLine" = "你：%@";
+"session.summary.started" = "已在 %2$@ 啟動 %1$@ 工作階段。";
+"session.summary.resumed" = "已在 %2$@ 恢復 %1$@ 工作階段。";
+"session.summary.clearedContext" = "已清除 %2$@ 中的 %1$@ 上下文。";
+"session.summary.compactedContext" = "已壓縮 %2$@ 中的 %1$@ 上下文。";
+"session.summary.endedIn" = "%2$@ 中的 %1$@ 工作階段已結束。";
+"session.summary.ended" = "%@ 工作階段已結束。";
+"session.summary.compacting" = "%@ 正在壓縮對話。";
+"session.summary.detectedFrom" = "從 %2$@ 偵測到 %1$@ 工作階段。";
+"session.summary.detected" = "偵測到 %@ 工作階段。";
+"session.summary.agentDetectedFrom" = "從 %2$@ 偵測到 %1$@ Agent。";
+"session.summary.agentDetected" = "偵測到 %@ Agent。";
+"session.summary.codexPreparingBash" = "Codex 正在 %@ 中準備 Bash 命令。";
+"session.summary.codexWaitingPermissionIn" = "Codex 正在 %@ 中等待權限核准。";
+"session.summary.codexBashResult" = "Codex 在 %@ 中回報了 Bash 結果。";
+"session.summary.codexNewPrompt" = "Codex 在 %@ 中收到新提示。";
+"session.summary.codexTurnCompletedIn" = "Codex 在 %@ 中完成了一輪。";
+"session.summary.codexWantsToUse" = "Codex 想使用 %@。";
+"session.summary.codexRequestingPermission" = "Codex 正在請求權限。";
+"session.summary.codexWantsShell" = "Codex 想執行 Shell 命令。";
+"session.summary.codexWaitingApproval" = "Codex 正在等待核准。";
+"session.summary.codexWaitingInput" = "Codex 正在等待輸入。";
+"session.summary.codexWorking" = "Codex 正在工作…";
+"session.summary.codexSession" = "Codex 工作階段。";
+"session.summary.idle" = "閒置。";
+"session.summary.turnFailed" = "本輪失敗。";
+"session.summary.turnStalled" = "本輪已停滯。";
+"session.summary.turnInterrupted" = "Codex 本輪已中斷。";
+"session.summary.threadClosed" = "Codex 對話已關閉。";
+"session.summary.threadArchived" = "Codex 對話已封存。";
+"session.summary.rateLimited" = "已達到速率限制。";
+"session.summary.runningTool" = "正在執行 %@。";
+"session.summary.thinking" = "思考中。";
+"session.summary.prompt" = "提示：%@";
+"session.summary.permissionInactive" = "權限請求已失效。";
+"session.summary.approvalHandledElsewhere" = "已在 Open Island 之外處理核准。";
+"session.summary.hookDisconnected" = "Hook 程序已中斷連線。";
+"session.summary.claudeExitPlan" = "Claude 想結束規劃模式並開始實作。";

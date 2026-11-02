@@ -92,4 +92,22 @@ struct PerformancePolicyTests {
             isActionable: true
         ) == 1.0 / 15.0)
     }
+
+    @Test
+    func preloadedMissIsFinalButUnpreloadedKeyFallsBack() {
+        var loads = 0
+        let load = { () -> Int? in
+            loads += 1
+            return 7
+        }
+        let reads: ProcessMonitoringCoordinator.PreloadedReads<Int> = ["hit": 1, "miss": nil]
+
+        #expect(ProcessMonitoringCoordinator.preloadedValue(reads, for: "hit", orLoad: load) == 1)
+        #expect(ProcessMonitoringCoordinator.preloadedValue(reads, for: "miss", orLoad: load) == nil)
+        #expect(loads == 0)
+
+        #expect(ProcessMonitoringCoordinator.preloadedValue(reads, for: "new", orLoad: load) == 7)
+        #expect(ProcessMonitoringCoordinator.preloadedValue(nil, for: "hit", orLoad: load) == 7)
+        #expect(loads == 2)
+    }
 }

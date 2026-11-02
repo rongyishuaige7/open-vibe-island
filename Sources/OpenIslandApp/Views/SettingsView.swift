@@ -418,6 +418,7 @@ struct SetupSettingsPane: View {
     @State private var confirmingUninstallClaude = false
     @State private var confirmingUninstallCodex = false
     @State private var confirmingUninstallOpenCode = false
+    @State private var confirmingUninstallDSH = false
     @State private var confirmingUninstallQoder = false
     @State private var confirmingUninstallQwenCode = false
     @State private var confirmingUninstallFactory = false
@@ -491,6 +492,26 @@ struct SetupSettingsPane: View {
                     Button(lang.t("settings.general.cancel"), role: .cancel) {}
                 } message: {
                     Text("This will remove the Open Island plugin from ~/.config/opencode/plugins/.")
+                }
+
+                if model.dshIntegrationStatus?.dshHomeExists == true {
+                    hookRow(
+                        name: "DeepSeek Harness",
+                        installed: model.dshIntegrationInstalled,
+                        busy: model.isDSHSetupBusy,
+                        requiresBinary: false,
+                        configLocationURL: model.dshIntegrationStatus?.profiles.first?.patchFileURL,
+                        installAction: { model.installDSHIntegration() },
+                        uninstallAction: { confirmingUninstallDSH = true }
+                    )
+                    .alert(lang.t("settings.general.uninstallConfirmTitle"), isPresented: $confirmingUninstallDSH) {
+                        Button(lang.t("settings.general.uninstallConfirmAction"), role: .destructive) {
+                            model.uninstallDSHIntegration()
+                        }
+                        Button(lang.t("settings.general.cancel"), role: .cancel) {}
+                    } message: {
+                        Text(lang.t("settings.general.uninstallConfirmMessage.dsh"))
+                    }
                 }
 
                 hookRow(
@@ -703,6 +724,18 @@ struct SetupSettingsPane: View {
                     get: { model.showCodexUsage },
                     set: { model.showCodexUsage = $0 }
                 ))
+
+                Toggle(isOn: Binding(
+                    get: { model.showTodayTokenUsage },
+                    set: { model.showTodayTokenUsage = $0 }
+                )) {
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text(lang.t("settings.general.showTodayTokenUsage"))
+                        Text(lang.t("settings.general.showTodayTokenUsage.caption"))
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                }
             } header: {
                 HStack(spacing: 4) {
                     Text(lang.t("setup.section.usage"))
@@ -1092,6 +1125,19 @@ struct WatchSettingsPane: View {
         .navigationTitle("Watch")
         .onAppear {
             pairingCode = model.watchPairingCode
+        }
+        .task(id: model.watchNotificationEnabled) {
+            guard model.watchNotificationEnabled else {
+                pairingCode = "----"
+                return
+            }
+
+            // The endpoint regenerates an expired code on access, so keep the
+            // displayed value in sync instead of showing a dead code forever.
+            while !Task.isCancelled {
+                pairingCode = model.watchPairingCode
+                try? await Task.sleep(for: .seconds(1))
+            }
         }
     }
 }

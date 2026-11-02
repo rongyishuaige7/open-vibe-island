@@ -42,6 +42,9 @@ public enum BridgeTransportError: Error, LocalizedError {
     case malformedEnvelope
     case responseTimedOut
     case listenerFailed(String)
+    /// Another process is already serving the socket. Binding over it would
+    /// orphan the running instance, so startup must fail instead.
+    case bridgeAlreadyRunning(String)
     case socketPathTooLong
     case systemCallFailed(String, Int32)
 
@@ -57,6 +60,8 @@ public enum BridgeTransportError: Error, LocalizedError {
             "The local bridge timed out while waiting for a response."
         case let .listenerFailed(message):
             "The local bridge listener failed: \(message)"
+        case let .bridgeAlreadyRunning(path):
+            "Another Open Island instance is already listening on \(path)."
         case .socketPathTooLong:
             "The Unix socket path is too long for `sockaddr_un`."
         case let .systemCallFailed(name, code):
@@ -91,6 +96,7 @@ public enum BridgeCommand: Equatable, Codable, Sendable {
     case processGeminiHook(GeminiHookPayload)
     case processGrokHook(GrokHookPayload)
     case processPiHook(PiHookPayload)
+    case processDSHHook(DSHHookPayload)
 
     private enum CodingKeys: String, CodingKey {
         case type
@@ -106,6 +112,7 @@ public enum BridgeCommand: Equatable, Codable, Sendable {
         case geminiHook
         case grokHook
         case piHook
+        case dshHook
     }
 
     private enum CommandType: String, Codable {
@@ -120,6 +127,7 @@ public enum BridgeCommand: Equatable, Codable, Sendable {
         case processGeminiHook
         case processGrokHook
         case processPiHook
+        case processDSHHook
     }
 
     public init(from decoder: any Decoder) throws {
@@ -158,6 +166,8 @@ public enum BridgeCommand: Equatable, Codable, Sendable {
             self = .processGrokHook(try container.decode(GrokHookPayload.self, forKey: .grokHook))
         case .processPiHook:
             self = .processPiHook(try container.decode(PiHookPayload.self, forKey: .piHook))
+        case .processDSHHook:
+            self = .processDSHHook(try container.decode(DSHHookPayload.self, forKey: .dshHook))
         }
     }
 
@@ -201,6 +211,9 @@ public enum BridgeCommand: Equatable, Codable, Sendable {
         case let .processPiHook(payload):
             try container.encode(CommandType.processPiHook, forKey: .type)
             try container.encode(payload, forKey: .piHook)
+        case let .processDSHHook(payload):
+            try container.encode(CommandType.processDSHHook, forKey: .type)
+            try container.encode(payload, forKey: .dshHook)
         }
     }
 }

@@ -11,50 +11,74 @@ public final class ClaudeTranscriptDiscovery: @unchecked Sendable {
             .appendingPathComponent(".claude/projects", isDirectory: true)
     }
 
-    private let rootURL: URL
+    public static var defaultRootURLs: [URL] {
+        let home = FileManager.default.homeDirectoryForCurrentUser
+        return [
+            home.appendingPathComponent(".claude/projects", isDirectory: true),
+            home.appendingPathComponent(".claude-pro-hardened/projects", isDirectory: true)
+        ]
+    }
+
+    private let rootURLs: [URL]
     private let fileManager: FileManager
     private let maxAge: TimeInterval
     private let maxFiles: Int
 
     public init(
-        rootURL: URL = ClaudeTranscriptDiscovery.defaultRootURL,
+        rootURLs: [URL] = ClaudeTranscriptDiscovery.defaultRootURLs,
         fileManager: FileManager = .default,
         maxAge: TimeInterval = 86_400,
         maxFiles: Int = 40
     ) {
-        self.rootURL = rootURL
+        self.rootURLs = rootURLs
         self.fileManager = fileManager
         self.maxAge = maxAge
         self.maxFiles = maxFiles
     }
 
-    public func discoverRecentSessions(now: Date = .now) -> [AgentSession] {
-        guard fileManager.fileExists(atPath: rootURL.path),
-              let enumerator = fileManager.enumerator(
-                at: rootURL,
-                includingPropertiesForKeys: [.contentModificationDateKey, .isRegularFileKey],
-                options: [.skipsHiddenFiles]
-              ) else {
-            return []
-        }
+    public convenience init(
+        rootURL: URL,
+        fileManager: FileManager = .default,
+        maxAge: TimeInterval = 86_400,
+        maxFiles: Int = 40
+    ) {
+        self.init(
+            rootURLs: [rootURL],
+            fileManager: fileManager,
+            maxAge: maxAge,
+            maxFiles: maxFiles
+        )
+    }
 
+    public func discoverRecentSessions(now: Date = .now) -> [AgentSession] {
         let cutoff = now.addingTimeInterval(-maxAge)
         var candidates: [Candidate] = []
 
-        for case let fileURL as URL in enumerator {
-            guard fileURL.pathExtension == "jsonl",
-                  !fileURL.path.contains("/subagents/") else {
+        for rootURL in rootURLs {
+            guard fileManager.fileExists(atPath: rootURL.path),
+                  let enumerator = fileManager.enumerator(
+                    at: rootURL,
+                    includingPropertiesForKeys: [.contentModificationDateKey, .isRegularFileKey],
+                    options: [.skipsHiddenFiles]
+                  ) else {
                 continue
             }
 
-            let values = try? fileURL.resourceValues(forKeys: [.isRegularFileKey, .contentModificationDateKey])
-            guard values?.isRegularFile == true,
-                  let modifiedAt = values?.contentModificationDate,
-                  modifiedAt >= cutoff else {
-                continue
-            }
+            for case let fileURL as URL in enumerator {
+                guard fileURL.pathExtension == "jsonl",
+                      !fileURL.path.contains("/subagents/") else {
+                    continue
+                }
 
-            candidates.append(Candidate(fileURL: fileURL, modifiedAt: modifiedAt))
+                let values = try? fileURL.resourceValues(forKeys: [.isRegularFileKey, .contentModificationDateKey])
+                guard values?.isRegularFile == true,
+                      let modifiedAt = values?.contentModificationDate,
+                      modifiedAt >= cutoff else {
+                    continue
+                }
+
+                candidates.append(Candidate(fileURL: fileURL, modifiedAt: modifiedAt))
+            }
         }
 
         let sortedCandidates = candidates
@@ -62,11 +86,15 @@ public final class ClaudeTranscriptDiscovery: @unchecked Sendable {
             .prefix(maxFiles)
 
         return sortedCandidates.compactMap { candidate in
-            parseSession(at: candidate.fileURL, fallbackUpdatedAt: candidate.modifiedAt)
+            parseSession(at: candidate.fileURL, fallbackUpdatedAt: candidate.modifiedAt, now: now)
         }
     }
 
-    private func parseSession(at fileURL: URL, fallbackUpdatedAt: Date) -> AgentSession? {
+    public func parseSession(
+        at fileURL: URL,
+        fallbackUpdatedAt: Date? = nil,
+        now: Date = .now
+    ) -> AgentSession? {
         // Stream the transcript line by line. The original
         // `String(contentsOf:)` slurped the entire jsonl, which on
         // heavy Claude users (multi-hundred-MB transcripts) caused
@@ -81,14 +109,19 @@ public final class ClaudeTranscriptDiscovery: @unchecked Sendable {
         var sessionID = fileURL.deletingPathExtension().lastPathComponent
         var cwd: String?
         var entrypoint: String?
-        var updatedAt = fallbackUpdatedAt
+        let resolvedFallbackUpdatedAt = fallbackUpdatedAt
+            ?? (try? fileURL.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate)
+            ?? now
+        var updatedAt = resolvedFallbackUpdatedAt
         var initialUserPrompt: String?
         var lastUserPrompt: String?
         var lastAssistantMessage: String?
+        var conversationTitle: String?
         var model: String?
         var currentTool: String?
         var currentToolInputPreview: String?
         var pendingToolUses: [String: (name: String, preview: String?)] = [:]
+        var isTurnInProgress = false
 
         let processLine: (String) -> Void = { line in
             guard let data = line.data(using: .utf8),
@@ -124,34 +157,58 @@ public final class ClaudeTranscriptDiscovery: @unchecked Sendable {
             let topLevelType = object["type"] as? String
             let message = object["message"] as? [String: Any]
             let role = message?["role"] as? String
+            let hasInterruptedMessageID = object["interruptedMessageId"] != nil
 
-            if role == "user" {
-                if let prompt = self.promptText(from: message?["content"]) {
-                    if initialUserPrompt == nil {
-                        initialUserPrompt = prompt
+            if hasInterruptedMessageID {
+                isTurnInProgress = false
+                pendingToolUses.removeAll()
+                currentTool = nil
+                currentToolInputPreview = nil
+            } else if role == "user" {
+                let prompt = self.promptText(from: message?["content"])
+                if self.isInterruptionPrompt(prompt) {
+                    isTurnInProgress = false
+                    pendingToolUses.removeAll()
+                    currentTool = nil
+                    currentToolInputPreview = nil
+                } else {
+                    isTurnInProgress = true
+                    if let prompt {
+                        if initialUserPrompt == nil {
+                            initialUserPrompt = prompt
+                        }
+                        lastUserPrompt = prompt
                     }
-                    lastUserPrompt = prompt
-                }
 
-                if let toolResultIDs = self.toolResultIDs(from: message?["content"]) {
-                    for toolResultID in toolResultIDs {
-                        pendingToolUses.removeValue(forKey: toolResultID)
-                    }
+                    if let toolResultIDs = self.toolResultIDs(from: message?["content"]) {
+                        for toolResultID in toolResultIDs {
+                            pendingToolUses.removeValue(forKey: toolResultID)
+                        }
 
-                    if pendingToolUses.isEmpty {
-                        currentTool = nil
-                        currentToolInputPreview = nil
-                    } else if let lastPending = pendingToolUses.values.first {
-                        currentTool = lastPending.name
-                        currentToolInputPreview = lastPending.preview
+                        if pendingToolUses.isEmpty {
+                            currentTool = nil
+                            currentToolInputPreview = nil
+                        } else if let lastPending = pendingToolUses.values.first {
+                            currentTool = lastPending.name
+                            currentToolInputPreview = lastPending.preview
+                        }
                     }
                 }
             } else if role == "assistant" {
+                if let stopReason = message?["stop_reason"] as? String {
+                    if stopReason == "end_turn" || stopReason == "stop_sequence" || stopReason == "max_tokens" {
+                        isTurnInProgress = false
+                    } else if stopReason == "tool_use" {
+                        isTurnInProgress = true
+                    }
+                }
+
                 if let assistantText = self.assistantText(from: message?["content"]) {
                     lastAssistantMessage = assistantText
                 }
 
-                if let value = message?["model"] as? String, !value.isEmpty {
+                // `<synthetic>` marks locally generated replies (errors, interrupts), not a model.
+                if let value = message?["model"] as? String, !value.isEmpty, !value.hasPrefix("<") {
                     model = value
                 }
 
@@ -165,10 +222,29 @@ public final class ClaudeTranscriptDiscovery: @unchecked Sendable {
                         currentToolInputPreview = lastToolUse.preview
                     }
                 }
+            } else if topLevelType == "system" {
+                let subtype = object["subtype"] as? String
+                if subtype == "turn_duration"
+                    || subtype == "stop_hook_summary"
+                    || subtype == "away_summary"
+                    || subtype?.hasSuffix("_summary") == true {
+                    isTurnInProgress = false
+                    pendingToolUses.removeAll()
+                    currentTool = nil
+                    currentToolInputPreview = nil
+                }
             } else if topLevelType == "summary",
                       let summary = object["summary"] as? String,
                       !summary.isEmpty {
                 lastAssistantMessage = summary
+            } else if topLevelType == "custom-title",
+                      let title = object["customTitle"] as? String,
+                      !title.isEmpty {
+                conversationTitle = title
+            } else if topLevelType == "ai-title",
+                      let title = object["aiTitle"] as? String,
+                      !title.isEmpty {
+                conversationTitle = title
             }
         }
 
@@ -189,6 +265,18 @@ public final class ClaudeTranscriptDiscovery: @unchecked Sendable {
             }
         }
 
+        if !pendingToolUses.isEmpty {
+            isTurnInProgress = true
+        } else if isTurnInProgress {
+            // A completed or interrupted CLI turn without an assistant response
+            // or lingering idle at the prompt cannot be actively running if the file
+            // has not been written to for > 60s and no tool is executing.
+            let fileAge = now.timeIntervalSince(resolvedFallbackUpdatedAt)
+            if fileAge > 60 {
+                isTurnInProgress = false
+            }
+        }
+
         guard let cwd else {
             return nil
         }
@@ -203,17 +291,29 @@ public final class ClaudeTranscriptDiscovery: @unchecked Sendable {
             currentToolInputPreview: currentToolInputPreview,
             model: model
         )
-        let summary = lastAssistantMessage
-            ?? lastUserPrompt
-            ?? "Recovered Claude session in \(workspaceName)."
+        let summary: String
+        if isTurnInProgress, let currentTool {
+            let label = "Running \(currentTool)"
+            if let preview = currentToolInputPreview, !preview.isEmpty {
+                summary = "\(label): \(preview)"
+            } else {
+                summary = label
+            }
+        } else {
+            summary = lastAssistantMessage
+                ?? lastUserPrompt
+                ?? "Recovered Claude session in \(workspaceName)."
+        }
 
-        return AgentSession(
+        let phase: SessionPhase = isTurnInProgress ? .running : .completed
+
+        var session = AgentSession(
             id: sessionID,
             title: "Claude · \(workspaceName)",
             tool: .claudeCode,
             origin: .live,
             attachmentState: .stale,
-            phase: .completed,
+            phase: phase,
             summary: summary,
             updatedAt: updatedAt,
             jumpTarget: JumpTarget(
@@ -224,6 +324,10 @@ public final class ClaudeTranscriptDiscovery: @unchecked Sendable {
             ),
             claudeMetadata: metadata.isEmpty ? nil : metadata
         )
+        if let conversationTitle {
+            session.conversationTitle = conversationTitle
+        }
+        return session
     }
 
     private static let streamingChunkSize = 64 * 1_024
@@ -258,6 +362,11 @@ public final class ClaudeTranscriptDiscovery: @unchecked Sendable {
         }
 
         return nil
+    }
+
+    private func isInterruptionPrompt(_ prompt: String?) -> Bool {
+        guard let prompt else { return false }
+        return prompt.hasPrefix("[Request interrupted")
     }
 
     private func assistantText(from content: Any?) -> String? {

@@ -3,6 +3,8 @@ import Foundation
 public struct SessionStarted: Equatable, Codable, Sendable {
     public var sessionID: String
     public var title: String
+    /// Agent-recorded conversation title, when the transport can provide one.
+    public var conversationTitle: String?
     public var tool: AgentTool
     public var origin: SessionOrigin?
     public var initialPhase: SessionPhase
@@ -20,6 +22,7 @@ public struct SessionStarted: Equatable, Codable, Sendable {
     public init(
         sessionID: String,
         title: String,
+        conversationTitle: String? = nil,
         tool: AgentTool,
         origin: SessionOrigin? = nil,
         initialPhase: SessionPhase = .running,
@@ -36,6 +39,7 @@ public struct SessionStarted: Equatable, Codable, Sendable {
     ) {
         self.sessionID = sessionID
         self.title = title
+        self.conversationTitle = conversationTitle
         self.tool = tool
         self.origin = origin
         self.initialPhase = initialPhase
@@ -288,6 +292,7 @@ public enum AgentEvent: Equatable, Codable, Sendable {
     case piSessionMetadataUpdated(PiSessionMetadataUpdated)
     case sessionHeartbeat(SessionHeartbeat)
     case actionableStateResolved(ActionableStateResolved)
+    case dshTodayTokensUpdated(DSHTodayTokensUpdated)
 
     private enum CodingKeys: String, CodingKey {
         case type
@@ -305,6 +310,7 @@ public enum AgentEvent: Equatable, Codable, Sendable {
         case piSessionMetadataUpdated
         case sessionHeartbeat
         case actionableStateResolved
+        case dshTodayTokensUpdated
     }
 
     private enum EventType: String, Codable {
@@ -322,6 +328,7 @@ public enum AgentEvent: Equatable, Codable, Sendable {
         case piSessionMetadataUpdated
         case sessionHeartbeat
         case actionableStateResolved
+        case dshTodayTokensUpdated
     }
 
     public init(from decoder: any Decoder) throws {
@@ -370,6 +377,10 @@ public enum AgentEvent: Equatable, Codable, Sendable {
         case .actionableStateResolved:
             self = .actionableStateResolved(
                 try container.decode(ActionableStateResolved.self, forKey: .actionableStateResolved)
+            )
+        case .dshTodayTokensUpdated:
+            self = .dshTodayTokensUpdated(
+                try container.decode(DSHTodayTokensUpdated.self, forKey: .dshTodayTokensUpdated)
             )
         }
     }
@@ -420,6 +431,9 @@ public enum AgentEvent: Equatable, Codable, Sendable {
         case let .actionableStateResolved(payload):
             try container.encode(EventType.actionableStateResolved, forKey: .type)
             try container.encode(payload, forKey: .actionableStateResolved)
+        case let .dshTodayTokensUpdated(payload):
+            try container.encode(EventType.dshTodayTokensUpdated, forKey: .type)
+            try container.encode(payload, forKey: .dshTodayTokensUpdated)
         }
     }
 }

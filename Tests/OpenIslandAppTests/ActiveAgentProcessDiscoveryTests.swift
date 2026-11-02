@@ -20,24 +20,23 @@ struct ActiveAgentProcessDiscoveryTests {
             }
 
             guard executablePath == "/usr/sbin/lsof",
-                  let pid = arguments.dropFirst(2).first else {
+                  let pidArg = arguments.dropFirst(2).first else {
                 return nil
             }
 
-            switch pid {
-            case "102":
+            switch pidArg {
+            case "102,202":
                 return """
+                p102
                 fcwd
                 n/tmp/open-island
-                """
-            case "202":
-                return """
+                p202
                 fcwd
                 n/tmp/open-island
                 n/Users/test/.codex/sessions/2026/04/03/rollout-2026-04-03T11-42-31-019d516f-71ee-7e40-bcff-502fedac0928.jsonl
                 """
             default:
-                Issue.record("unexpected lsof lookup for pid \(pid)")
+                Issue.record("unexpected lsof lookup for pids \(pidArg)")
                 return nil
             }
         }
@@ -57,7 +56,8 @@ struct ActiveAgentProcessDiscoveryTests {
             sessionID: "019d516f-71ee-7e40-bcff-502fedac0928",
             workingDirectory: "/tmp/open-island",
             terminalTTY: "/dev/ttys001",
-            terminalApp: "Ghostty"
+            terminalApp: "Ghostty",
+            transcriptPath: "/Users/test/.codex/sessions/2026/04/03/rollout-2026-04-03T11-42-31-019d516f-71ee-7e40-bcff-502fedac0928.jsonl"
         )))
     }
 
@@ -132,9 +132,40 @@ struct ActiveAgentProcessDiscoveryTests {
                 sessionID: "019e0dc1-3f8b-7eb0-ae8d-04a5911e95b9",
                 workingDirectory: "/tmp/open-island",
                 terminalTTY: "/dev/ttys001",
-                terminalApp: "Ghostty"
+                terminalApp: "Ghostty",
+                transcriptPath: "/Users/test/.codex/sessions/2026/05/10/rollout-2026-05-10T01-20-29-019e0dc1-3f8b-7eb0-ae8d-04a5911e95b9.jsonl"
             ),
         ])
+    }
+
+    @Test
+    func codexDiscoveryMatchesRolloutUnderCustomCodexHome() {
+        let discovery = ActiveAgentProcessDiscovery { executablePath, arguments in
+            if executablePath == "/bin/ps" {
+                return """
+                  202 401 ttys001 /Users/test/.local/share/codex-cli/bin/codex
+                  401 900 ttys001 -/bin/zsh
+                  900 1 ?? /Applications/Ghostty.app/Contents/MacOS/ghostty
+                """
+            }
+
+            guard executablePath == "/usr/sbin/lsof",
+                  let pid = arguments.dropFirst(2).first,
+                  pid == "202" else {
+                return nil
+            }
+
+            return """
+            fcwd
+            n/tmp/yiapi
+            n/Users/test/.codex-yi/sessions/2026/01/15/rollout-2026-01-15T09-00-00-01990000-aaaa-7bbb-8ccc-000000000001.jsonl
+            """
+        }
+
+        let snapshots = discovery.discover()
+
+        #expect(snapshots.first?.sessionID == "01990000-aaaa-7bbb-8ccc-000000000001")
+        #expect(snapshots.first?.transcriptPath == "/Users/test/.codex-yi/sessions/2026/01/15/rollout-2026-01-15T09-00-00-01990000-aaaa-7bbb-8ccc-000000000001.jsonl")
     }
 
     @Test
@@ -193,16 +224,21 @@ struct ActiveAgentProcessDiscoveryTests {
             }
 
             guard executablePath == "/usr/sbin/lsof",
-                  let pid = arguments.dropFirst(2).first else {
+                  let pidArg = arguments.dropFirst(2).first else {
                 return nil
             }
 
-            guard pid == "302" || pid == "303" else {
-                Issue.record("unexpected lsof lookup for pid \(pid)")
+            guard pidArg == "302,303" else {
+                Issue.record("unexpected lsof lookup for pids \(pidArg)")
                 return nil
             }
 
             return """
+            p302
+            fcwd
+            n/tmp/simple-agent-lab
+            n/Users/test/.cursor/chats/cf595f65441221b71014fd6f7b9999b2/6f7b9f8a-2bd0-48b4-a497-9801dd191d03/store.db
+            p303
             fcwd
             n/tmp/simple-agent-lab
             n/Users/test/.cursor/chats/cf595f65441221b71014fd6f7b9999b2/6f7b9f8a-2bd0-48b4-a497-9801dd191d03/store.db
@@ -380,4 +416,178 @@ struct ActiveAgentProcessDiscoveryTests {
         #expect(!aliveIDs.contains("pi-a"))
         #expect(!aliveIDs.contains("omp-b"))
     }
+
+
+    @Test
+    func discoverWrappedAgyUsesAncestorTmuxPaneTTY() {
+        let sessionUUID = "12345678-abcd-ef01-2345-6789abcdef01"
+        let discovery = ActiveAgentProcessDiscovery { executablePath, arguments in
+            if executablePath == "/bin/ps" {
+                return """
+                  501 500 ttys041 agy --gemini_dir=/tmp/cpa --conversation=\(sessionUUID)
+                  500 400 ttys016 python3 /Users/test/.local/bin/agy-suggest command agy
+                  400 300 ttys016 zsh -ic agy-danger
+                  300 200 ttys016 bash -c agy-danger
+                  200 1 ?? tmux -u new-session -d -s agentdeck
+                  999 998 ttys099 -zsh
+                  998 1 ?? /Applications/Ghostty.app/Contents/MacOS/ghostty
+                """
+            }
+
+            if executablePath == "/usr/bin/which", arguments == ["tmux"] {
+                return "/opt/homebrew/bin/tmux"
+            }
+
+            if executablePath.hasSuffix("/tmux") {
+                if arguments.first == "list-panes" {
+                    return "/dev/ttys016\tagentdeck:1.0\t✓ WorkBuddy反代开源项目 · Developer · 就绪 1:18"
+                }
+                if arguments.first == "list-clients" {
+                    return "/dev/ttys099"
+                }
+                return nil
+            }
+
+            guard executablePath == "/usr/sbin/lsof",
+                  let pid = arguments.dropFirst(2).first else {
+                return nil
+            }
+            guard pid == "501" else { return nil }
+
+            return """
+            fcwd
+            n/tmp/my-workspace
+            n/tmp/.gemini/cpa/presence/\(sessionUUID).lock
+            n/tmp/.gemini/cpa/brain/\(sessionUUID)/.system_generated/logs/transcript.jsonl
+            """
+        }
+
+        let snapshots = discovery.discover()
+        #expect(snapshots.count == 1)
+        #expect(snapshots.first?.tool == .geminiCLI)
+        #expect(snapshots.first?.sessionID == sessionUUID)
+        #expect(snapshots.first?.terminalApp == "Ghostty")
+        #expect(snapshots.first?.terminalTTY == "/dev/ttys016")
+        #expect(snapshots.first?.tmuxTarget == "agentdeck:1.0")
+        #expect(snapshots.first?.paneTitle == "✓ WorkBuddy反代开源项目 · Developer · 就绪 1:18")
+    }
+
+    @Test
+    func discoverRecognizesAgyProcessWithSessionID() {
+        let sessionUUID = "12345678-abcd-ef01-2345-6789abcdef01"
+        let discovery = ActiveAgentProcessDiscovery { executablePath, arguments in
+            if executablePath == "/bin/ps" {
+                return """
+                  501 301 ttys003 /Users/test/.local/bin/agy --gemini_dir=/tmp/.gemini/cpa
+                  301 900 ttys003 -/bin/zsh
+                  900 1 ?? /Applications/Ghostty.app/Contents/MacOS/ghostty
+                """
+            }
+
+            guard executablePath == "/usr/sbin/lsof",
+                  let pid = arguments.dropFirst(2).first else {
+                return nil
+            }
+
+            if pid == "501" {
+                return """
+                fcwd
+                n/tmp/my-workspace
+                n/tmp/.gemini/cpa/presence/\(sessionUUID).lock
+                n/tmp/.gemini/cpa/brain/\(sessionUUID)/.system_generated/logs/transcript.jsonl
+                """
+            }
+
+            return nil
+        }
+
+        let snapshots = discovery.discover()
+        #expect(snapshots.count == 1)
+        #expect(snapshots.first?.tool == .geminiCLI)
+        #expect(snapshots.first?.sessionID == sessionUUID)
+        #expect(snapshots.first?.workingDirectory == "/tmp/my-workspace")
+        #expect(snapshots.first?.terminalTTY == "/dev/ttys003")
+        #expect(snapshots.first?.terminalApp == "Ghostty")
+        #expect(snapshots.first?.transcriptPath?.contains(sessionUUID) == true)
+    }
+
+    @MainActor
+    @Test
+    func coordinatorAgySessionLivenessReconciliation() {
+        let sessionUUID = "12345678-abcd-ef01-2345-6789abcdef01"
+        var state = SessionState(
+            sessions: [
+                AgentSession(
+                    id: sessionUUID,
+                    title: "Agy Live Session",
+                    tool: .geminiCLI,
+                    phase: .running,
+                    summary: "Working",
+                    updatedAt: .now,
+                    jumpTarget: JumpTarget(terminalApp: "Terminal", workspaceName: "Work", paneTitle: "Gemini", workingDirectory: "/tmp/work")
+                ),
+            ]
+        )
+
+        let coordinator = ProcessMonitoringCoordinator()
+        coordinator.stateAccessor = { state }
+        coordinator.stateUpdater = { state = $0 }
+
+        let snapshot = ActiveAgentProcessDiscovery.ProcessSnapshot(
+            tool: .geminiCLI,
+            sessionID: sessionUUID,
+            workingDirectory: "/tmp/work",
+            terminalTTY: "/dev/ttys001"
+        )
+
+        let aliveIDs = coordinator.sessionIDsWithAliveProcesses(
+            activeProcesses: [snapshot],
+            isCodexAppRunning: false,
+            sessions: state.sessions
+        )
+
+        #expect(aliveIDs.contains(sessionUUID))
+    }
+
+    @Test
+    func batchLsofOutputsParsesMultiplePIDsCorrectly() {
+        let discovery = ActiveAgentProcessDiscovery { executablePath, arguments in
+            if executablePath == "/bin/ps" {
+                return """
+                  101 1 ttys001 agy --gemini_dir=/tmp/cpa
+                  102 1 ttys002 claude
+                """
+            }
+            if executablePath == "/usr/sbin/lsof" {
+                let pids = arguments.dropFirst(2).first ?? ""
+                if pids.contains(",") {
+                    return """
+                    p101
+                    fcwd
+                    n/Users/test/workspace-agy
+                    p102
+                    fcwd
+                    n/Users/test/workspace-claude
+                    """
+                } else if pids == "101" {
+                    return """
+                    fcwd
+                    n/Users/test/workspace-agy
+                    """
+                } else if pids == "102" {
+                    return """
+                    fcwd
+                    n/Users/test/workspace-claude
+                    """
+                }
+            }
+            return nil
+        }
+
+        let snapshots = discovery.discover()
+        #expect(snapshots.count == 2)
+        #expect(snapshots.contains { $0.tool == .geminiCLI && $0.workingDirectory == "/Users/test/workspace-agy" })
+        #expect(snapshots.contains { $0.tool == .claudeCode && $0.workingDirectory == "/Users/test/workspace-claude" })
+    }
 }
+
