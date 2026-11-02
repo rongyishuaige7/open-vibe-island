@@ -126,6 +126,9 @@ final class AppModel {
     var dshIntegrationInstalled: Bool { hooks.dshIntegrationInstalled }
     var dshIntegrationStatus: DSHIntegrationStatus? { hooks.dshIntegrationStatus }
     var isDSHSetupBusy: Bool { hooks.isDSHSetupBusy }
+    var isPiDesktopSetupBusy: Bool { hooks.isPiDesktopSetupBusy }
+    var piDesktopIntegrationStatus: PiDesktopIntegrationStatus? { hooks.piDesktopIntegrationStatus }
+    var piDesktopIntegrationInstalled: Bool { hooks.piDesktopIntegrationStatus?.isInstalled == true }
     var claudeUsageInstalled: Bool { hooks.claudeUsageInstalled }
     var claudeHookStatusTitle: String { hooks.claudeHookStatusTitle }
     var claudeHookStatusSummary: String { hooks.claudeHookStatusSummary }
@@ -239,6 +242,9 @@ final class AppModel {
         hooks.installDSHIntegration()
     }
     func uninstallDSHIntegration() { hooks.uninstallDSHIntegration() }
+
+    func installPiDesktopIntegration() { hooks.installPiDesktopIntegration() }
+    func uninstallPiDesktopIntegration() { hooks.uninstallPiDesktopIntegration() }
     func installClaudeUsageBridge() { hooks.installClaudeUsageBridge() }
     func uninstallClaudeUsageBridge() { hooks.uninstallClaudeUsageBridge() }
     func updateClaudeConfigDirectory(to newDirectory: URL?) { hooks.updateClaudeConfigDirectory(to: newDirectory) }

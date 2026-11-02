@@ -275,6 +275,9 @@ struct TerminalJumpService {
     }
 
     func jump(to target: JumpTarget) throws -> String {
+        if target.terminalApp == PiDesktopEventMapper.displayName {
+            return try jumpToPiDesktop(target)
+        }
         // tmux sessions: switch pane first, then use the terminal-specific
         // jump to focus the correct window/tab (not just activate the app).
         if let tmuxTarget = target.tmuxTarget, !tmuxTarget.isEmpty {
@@ -455,6 +458,24 @@ struct TerminalJumpService {
         }
 
         throw TerminalJumpError.unsupportedTerminal(target.terminalApp)
+    }
+
+    /// PI Desktop has no URL scheme. The plugin's socket focuses the exact
+    /// conversation; without it we can still bring the app forward.
+    private func jumpToPiDesktop(_ target: JumpTarget) throws -> String {
+        if let sessionID = target.terminalSessionID,
+           PiDesktopFocusClient.focus(sessionID: sessionID) {
+            return "Focused the PI Desktop session."
+        }
+
+        let bundleIdentifier = PiDesktopEventMapper.bundleIdentifier
+        if let app = NSRunningApplication.runningApplications(withBundleIdentifier: bundleIdentifier).first {
+            app.activate(options: [])
+            return "Activated PI Desktop. Install its bridge plugin to focus the exact session."
+        }
+
+        try openAction(["-b", bundleIdentifier])
+        return "Launched PI Desktop."
     }
 
     private func jumpToITermSession(_ target: JumpTarget) throws -> Bool {

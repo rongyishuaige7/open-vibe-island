@@ -54,6 +54,7 @@
 "settings.general.uninstallConfirmAction" = "移除";
 "settings.general.uninstallConfirmMessage.claude" = "這將從 Claude Code 中移除 Open Island 的 hooks。您可以隨時重新安裝。";
 "settings.general.uninstallConfirmMessage.dsh" = "這會從 DeepSeek Harness profile 中移除 Open Island 橋接外掛。之後需要重新啟動 DeepSeek Harness。";
+"settings.general.uninstallConfirmMessage.piDesktop" = "這會從 ~/.pi-desktop/plugins/dev/ 移除 Open Island 外掛，PI Desktop 本身和其它外掛不受影響。";
 "settings.general.uninstallConfirmMessage.codex" = "這將從 Codex 中移除 Open Island 的 hooks。您可以隨時重新安裝。";
 "settings.general.uninstallConfirmMessage.claudeUsage" = "這將移除 Claude 用量橋接。您可以隨時重新安裝。";
 "settings.general.cancel" = "取消";
