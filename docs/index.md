@@ -33,6 +33,7 @@ This index is the repository map for humans and coding agents. Read these files 
 
 - [docs/notch-surface-model.md](./notch-surface-model.md) for the island surface routing model and debug harness intent
 - [docs/app-ghostty-codex-chain.md](./app-ghostty-codex-chain.md) for terminal environment findings across the current supported chain
+- [docs/exec-plans/active/2026-11-02-pi-desktop-integration.md](./exec-plans/active/2026-11-02-pi-desktop-integration.md) for the PI Desktop host-integration plan (SQLite read + optional plugin)
 
 ## Refactoring Plans
 
