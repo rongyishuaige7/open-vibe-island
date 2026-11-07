@@ -238,4 +238,177 @@ struct ClaudeProUsageReaderTests {
         #expect(secondSnapshot.totals.requestCount == 2)
         #expect(secondSnapshot.outputTokens == 300)
     }
+
+    @Test
+    func readsEachInstanceIndependently() throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: root) }
+
+        let calendar = Calendar.current
+        let now = Date()
+        let todayTS = calendar.startOfDay(for: now).timeIntervalSince1970 + 600
+
+        let pro = try makeFixture(
+            under: root,
+            name: "pro",
+            sessionID: "11111111-1111-1111-1111-111111111111",
+            todayTS: todayTS,
+            outputTokens: 100,
+            cacheReadTokens: 1_000,
+            costDelta: 2.75,
+            rateLimit5h: 35,
+            rateLimit7d: 45,
+            displayName: "rongyi"
+        )
+        let pro2 = try makeFixture(
+            under: root,
+            name: "pro2",
+            sessionID: "22222222-2222-2222-2222-222222222222",
+            todayTS: todayTS,
+            outputTokens: 20,
+            cacheReadTokens: 300,
+            costDelta: 0.5,
+            rateLimit5h: 12,
+            rateLimit7d: 7,
+            displayName: "yirong"
+        )
+
+        let proSnapshot = try ClaudeProUsageReader.loadToday(instance: pro, now: now, calendar: calendar)
+        let pro2Snapshot = try ClaudeProUsageReader.loadToday(instance: pro2, now: now, calendar: calendar)
+
+        #expect(proSnapshot.outputTokens == 100)
+        #expect(pro2Snapshot.outputTokens == 20)
+        #expect(proSnapshot.estimatedCostUSD == 2.75)
+        #expect(pro2Snapshot.estimatedCostUSD == 0.5)
+        #expect(proSnapshot.rateLimit5hPercent == 35)
+        #expect(pro2Snapshot.rateLimit5hPercent == 12)
+        #expect(proSnapshot.rateLimit7dPercent == 45)
+        #expect(pro2Snapshot.rateLimit7dPercent == 7)
+        #expect(proSnapshot.accountHint == "rongyi")
+        #expect(pro2Snapshot.accountHint == "yirong")
+    }
+
+    @Test
+    func labelsAnInstanceWithItsFallbackWhenNoProfileWasWritten() throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: root) }
+
+        let calendar = Calendar.current
+        let now = Date()
+        let todayTS = calendar.startOfDay(for: now).timeIntervalSince1970 + 600
+
+        let instance = try makeFixture(
+            under: root,
+            name: "pro2",
+            sessionID: "33333333-3333-3333-3333-333333333333",
+            todayTS: todayTS,
+            outputTokens: 5,
+            cacheReadTokens: 10,
+            costDelta: 0.1,
+            rateLimit5h: 3,
+            rateLimit7d: 4,
+            displayName: nil
+        )
+
+        let snapshot = try ClaudeProUsageReader.loadToday(instance: instance, now: now, calendar: calendar)
+        #expect(snapshot.accountHint == "Pro2")
+    }
+
+    /// Claude Code rewrites `.claude.json` while it runs, so a read can land on
+    /// a half-written file. The row must keep the name it already showed
+    /// instead of flickering back to the generic hint.
+    @Test
+    func keepsTheLastProfileNameWhenTheProfileBecomesUnreadable() throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: root) }
+
+        let calendar = Calendar.current
+        let now = Date()
+        let todayTS = calendar.startOfDay(for: now).timeIntervalSince1970 + 600
+
+        let instance = try makeFixture(
+            under: root,
+            name: "pro2",
+            sessionID: "44444444-4444-4444-4444-444444444444",
+            todayTS: todayTS,
+            outputTokens: 1,
+            cacheReadTokens: 1,
+            costDelta: 0.01,
+            rateLimit5h: 1,
+            rateLimit7d: 2,
+            displayName: "yirong"
+        )
+
+        let first = try ClaudeProUsageReader.loadToday(instance: instance, now: now, calendar: calendar)
+        #expect(first.accountHint == "yirong")
+
+        try "{\"oauthAccount\":"
+            .write(
+                to: instance.configDirectoryURL.appendingPathComponent(".claude.json"),
+                atomically: true,
+                encoding: .utf8
+            )
+
+        let second = try ClaudeProUsageReader.loadToday(instance: instance, now: now, calendar: calendar)
+        #expect(second.accountHint == "yirong")
+    }
+
+    /// Writes a sandbox laid out the way a hardened install is: a status line
+    /// state store, one workspace of transcripts, and optionally the profile
+    /// Claude Code caches.
+    private func makeFixture(
+        under root: URL,
+        name: String,
+        sessionID: String,
+        todayTS: TimeInterval,
+        outputTokens: Int,
+        cacheReadTokens: Int,
+        costDelta: Double,
+        rateLimit5h: Int,
+        rateLimit7d: Int,
+        displayName: String?
+    ) throws -> ClaudeProInstance {
+        let instance = ClaudeProInstance(
+            id: name,
+            fallbackAccountHint: name == "pro" ? "Pro" : "Pro2",
+            configDirectoryURL: root.appendingPathComponent(name, isDirectory: true)
+        )
+        let sessionsDirectory = instance.sessionsDirectoryURL
+        let projectDirectory = instance.projectsDirectoryURL
+            .appendingPathComponent("my-project", isDirectory: true)
+        try FileManager.default.createDirectory(at: sessionsDirectory, withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: projectDirectory, withIntermediateDirectories: true)
+
+        try """
+        {"session_id": "\(sessionID)", "samples": [
+          {"t": \(todayTS - 86_400), "cost": 1.5},
+          {"t": \(todayTS), "cost": \(1.5 + costDelta), "rl5h": \(rateLimit5h), "rl7d": \(rateLimit7d)}
+        ]}
+        """.write(
+            to: sessionsDirectory.appendingPathComponent("\(sessionID).json"),
+            atomically: true,
+            encoding: .utf8
+        )
+
+        let iso = ISO8601DateFormatter().string(from: Date(timeIntervalSince1970: todayTS))
+        try """
+        {"type":"assistant","timestamp":"\(iso)","message":{"usage":{"input_tokens":10,"output_tokens":\(outputTokens),"cache_read_input_tokens":\(cacheReadTokens),"cache_creation_input_tokens":0}}}
+        """.write(
+            to: projectDirectory.appendingPathComponent("\(sessionID).jsonl"),
+            atomically: true,
+            encoding: .utf8
+        )
+
+        if let displayName {
+            try """
+            {"oauthAccount":{"displayName":"\(displayName)"}}
+            """.write(
+                to: instance.configDirectoryURL.appendingPathComponent(".claude.json"),
+                atomically: true,
+                encoding: .utf8
+            )
+        }
+
+        return instance
+    }
 }
