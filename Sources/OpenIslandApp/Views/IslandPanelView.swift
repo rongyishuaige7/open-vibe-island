@@ -1038,8 +1038,11 @@ struct IslandPanelView: View {
         var candidateAgents: [(id: String, label: String, shortLabel: String, totals: AgentTokenTotals?)] = [
             (id: "claude", label: "Claude", shortLabel: "Cl", totals: monitor.usage?.claude),
         ]
-        if isClaudeProAvailable(usage: monitor.usage) {
+        if isClaudeProAvailable(usage: monitor.usage, instance: .pro) {
             candidateAgents.append((id: "claude-pro", label: lang.t("usage.todayTokens.claudePro"), shortLabel: "C-Pro", totals: monitor.usage?.claudePro))
+        }
+        if isClaudeProAvailable(usage: monitor.usage, instance: .pro2) {
+            candidateAgents.append((id: "claude-pro2", label: lang.t("usage.todayTokens.claudePro2"), shortLabel: "C-Pro2", totals: monitor.usage?.claudePro2))
         }
         candidateAgents.append((id: "codex", label: "Codex", shortLabel: "Cx", totals: monitor.usage?.codex))
         candidateAgents.append((id: "agy", label: lang.t("usage.todayTokens.agyPool"), shortLabel: "AGY", totals: monitor.usage?.agy))
@@ -1075,7 +1078,12 @@ struct IslandPanelView: View {
                 totals.cacheReadTokens.formatted(),
                 totals.requestCount.formatted()
             ))
-            if agent.id == "claude-pro", let subtext = claudeProSecondarySubtext(usage: monitor.usage) {
+            if agent.id == "claude-pro",
+               let subtext = claudeProSecondarySubtext(usage: monitor.usage, instance: .pro) {
+                helpLines.append("  ↳ \(subtext)")
+            }
+            if agent.id == "claude-pro2",
+               let subtext = claudeProSecondarySubtext(usage: monitor.usage, instance: .pro2) {
                 helpLines.append("  ↳ \(subtext)")
             }
         }
@@ -1381,13 +1389,24 @@ struct IslandPanelView: View {
                     languageCode: languageCode
                 )
 
-                if isClaudeProAvailable(usage: usage) {
+                if isClaudeProAvailable(usage: usage, instance: .pro) {
                     tokenDetailAgentRow(
                         label: lang.t("usage.todayTokens.claudePro"),
                         dotColor: IslandDesignPalette.Status.runningClaude,
                         totals: usage?.claudePro,
                         accountHint: usage?.claudeProAccountHint ?? "",
-                        secondarySubtext: claudeProSecondarySubtext(usage: usage),
+                        secondarySubtext: claudeProSecondarySubtext(usage: usage, instance: .pro),
+                        languageCode: languageCode
+                    )
+                }
+
+                if isClaudeProAvailable(usage: usage, instance: .pro2) {
+                    tokenDetailAgentRow(
+                        label: lang.t("usage.todayTokens.claudePro2"),
+                        dotColor: IslandDesignPalette.Status.runningClaude,
+                        totals: usage?.claudePro2,
+                        accountHint: usage?.claudePro2AccountHint ?? "",
+                        secondarySubtext: claudeProSecondarySubtext(usage: usage, instance: .pro2),
                         languageCode: languageCode
                     )
                 }
@@ -1606,24 +1625,50 @@ struct IslandPanelView: View {
         }
     }
 
-    private func isClaudeProAvailable(usage: TodayTokenUsage?) -> Bool {
-        if let usage, usage.claudePro.totalTokens > 0 || usage.claudeProCostUSD != nil {
+    /// A Pro row shows while its install exists, even before the first request
+    /// of the day, so the row does not appear and disappear with usage.
+    private func isClaudeProAvailable(usage: TodayTokenUsage?, instance: ClaudeProInstance) -> Bool {
+        let row = claudeProRow(usage: usage, instance: instance)
+        if row.totals.totalTokens > 0 || row.costUSD != nil {
             return true
         }
-        return FileManager.default.fileExists(atPath: ClaudeProUsageReader.defaultProjectsDirectoryURL.path)
-            || FileManager.default.fileExists(atPath: ClaudeProUsageReader.defaultSessionsDirectoryURL.path)
+        return FileManager.default.fileExists(atPath: instance.projectsDirectoryURL.path)
+            || FileManager.default.fileExists(atPath: instance.sessionsDirectoryURL.path)
     }
 
-    private func claudeProSecondarySubtext(usage: TodayTokenUsage?) -> String? {
+    /// One install's slice of today's totals. `TodayTokenUsage` keeps the two
+    /// accounts in separate fields, so the UI maps an instance to a row here.
+    private func claudeProRow(usage: TodayTokenUsage?, instance: ClaudeProInstance) -> ClaudeProRow {
+        if instance.id == ClaudeProInstance.pro.id {
+            return ClaudeProRow(
+                totals: usage?.claudePro ?? .zero,
+                costUSD: usage?.claudeProCostUSD,
+                rateLimit5h: usage?.claudeProRateLimit5h,
+                rateLimit7d: usage?.claudeProRateLimit7d
+            )
+        }
+        if instance.id == ClaudeProInstance.pro2.id {
+            return ClaudeProRow(
+                totals: usage?.claudePro2 ?? .zero,
+                costUSD: usage?.claudePro2CostUSD,
+                rateLimit5h: usage?.claudePro2RateLimit5h,
+                rateLimit7d: usage?.claudePro2RateLimit7d
+            )
+        }
+        return ClaudeProRow()
+    }
+
+    private func claudeProSecondarySubtext(usage: TodayTokenUsage?, instance: ClaudeProInstance) -> String? {
         guard let usage else { return nil }
+        let row = claudeProRow(usage: usage, instance: instance)
         var parts: [String] = []
-        if let cost = usage.claudeProCostUSD, cost > 0 {
+        if let cost = row.costUSD, cost > 0 {
             parts.append(String(format: "$%.2f", cost))
         }
-        if let r5 = usage.claudeProRateLimit5h {
+        if let r5 = row.rateLimit5h {
             parts.append("5h: \(r5)%")
         }
-        if let r7 = usage.claudeProRateLimit7d {
+        if let r7 = row.rateLimit7d {
             parts.append("7d: \(r7)%")
         }
         return parts.isEmpty ? nil : parts.joined(separator: " · ")
@@ -1694,6 +1739,14 @@ private struct UsageChipLayout {
     let usesShortTitle: Bool
     let showsAllWindows: Bool
     let showsRemaining: Bool
+}
+
+/// One isolated Claude Pro install's slice of today's totals.
+private struct ClaudeProRow {
+    var totals: AgentTokenTotals = .zero
+    var costUSD: Double?
+    var rateLimit5h: Int?
+    var rateLimit7d: Int?
 }
 
 /// One agent's token total inside a token chip.

@@ -41,8 +41,9 @@
 "usage.todayTokens.detailTitle" = "今日 Token 消耗统计";
 "usage.todayTokens.totalLabel" = "今日总消耗";
 "usage.todayTokens.totalLine" = "今日总消耗：%@";
-"usage.todayTokens.dataSource" = "数据源：CC Switch、KEEPER、Claude Pro 本地日志与 DSH 桥接账本";
+"usage.todayTokens.dataSource" = "数据源：CC Switch、KEEPER、Claude Pro / Pro 2 本地日志与 DSH 桥接账本";
 "usage.todayTokens.claudePro" = "Claude Pro";
+"usage.todayTokens.claudePro2" = "Claude Pro 2";
 "usage.todayTokens.agyPool" = "AGY 普通池";
 "usage.todayTokens.agyPro" = "AGY Pro 个人池";
 "usage.todayTokens.other" = "其他";

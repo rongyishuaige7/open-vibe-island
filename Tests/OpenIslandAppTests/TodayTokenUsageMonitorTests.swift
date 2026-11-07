@@ -187,10 +187,15 @@ struct TodayTokenUsageMonitorTests {
             dayStart: today,
             claude: AgentTokenTotals(requestCount: 2, totalTokens: 10_000),
             claudePro: AgentTokenTotals(requestCount: 50, totalTokens: 2_000_000, cacheReadTokens: 1_800_000),
+            claudePro2: AgentTokenTotals(requestCount: 20, totalTokens: 500_000, cacheReadTokens: 400_000),
             claudeProAccounts: ["Pro-Sandbox"],
+            claudePro2Accounts: ["Pro2-Sandbox"],
             claudeProCostUSD: 4.50,
             claudeProRateLimit5h: 30,
-            claudeProRateLimit7d: 45
+            claudeProRateLimit7d: 45,
+            claudePro2CostUSD: 1.25,
+            claudePro2RateLimit5h: 12,
+            claudePro2RateLimit7d: 7
         )
         monitor.apply(.success(usage), now: Self.now, calendar: Self.calendar)
 
@@ -201,7 +206,15 @@ struct TodayTokenUsageMonitorTests {
         #expect(monitor.usage?.claudeProRateLimit5h == 30)
         #expect(monitor.usage?.claudeProRateLimit7d == 45)
         #expect(monitor.usage?.claudeProAccountHint == "Pro-Sandbox")
-        #expect(monitor.usage?.totalTokens == 10_000 + 2_000_000)
+
+        #expect(monitor.usage?.claudePro2.requestCount == 20)
+        #expect(monitor.usage?.claudePro2.totalTokens == 500_000)
+        #expect(monitor.usage?.claudePro2CostUSD == 1.25)
+        #expect(monitor.usage?.claudePro2RateLimit5h == 12)
+        #expect(monitor.usage?.claudePro2RateLimit7d == 7)
+        #expect(monitor.usage?.claudePro2AccountHint == "Pro2-Sandbox")
+
+        #expect(monitor.usage?.totalTokens == 10_000 + 2_000_000 + 500_000)
     }
 
     /// The Pro account is user-configurable: KEEPER names no plan, so the
@@ -214,8 +227,13 @@ struct TodayTokenUsageMonitorTests {
         let monitor = TodayTokenUsageMonitor(
             databaseURL: URL(fileURLWithPath: "/nonexistent/cc-switch.db"),
             keeperDatabaseURL: dbURL,
-            claudeProSessionsDirectoryURL: URL(fileURLWithPath: "/nonexistent/claude-pro-sessions"),
-            claudeProProjectsDirectoryURL: URL(fileURLWithPath: "/nonexistent/claude-pro-projects"),
+            claudeProInstances: [
+                ClaudeProInstance(
+                    id: "pro",
+                    fallbackAccountHint: "Pro",
+                    configDirectoryURL: URL(fileURLWithPath: "/nonexistent/claude-pro-sandbox")
+                )
+            ],
             agyProAccounts: ["wisnumandala302"]
         )
 
