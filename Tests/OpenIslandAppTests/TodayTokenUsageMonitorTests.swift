@@ -234,6 +234,7 @@ struct TodayTokenUsageMonitorTests {
                     configDirectoryURL: URL(fileURLWithPath: "/nonexistent/claude-pro-sandbox")
                 )
             ],
+            yiWorkDataDirectoryURL: URL(fileURLWithPath: "/nonexistent/yi-work-data"),
             agyProAccounts: ["wisnumandala302"]
         )
 
