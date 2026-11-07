@@ -21,8 +21,9 @@ final class TodayTokenUsageMonitor {
 
     private let databaseURL: URL
     private let keeperDatabaseURL: URL
-    private let claudeProSessionsDirectoryURL: URL
-    private let claudeProProjectsDirectoryURL: URL
+    /// The isolated Claude Pro installs to read. Each one is a separate
+    /// account with its own cost and rate-limit windows.
+    private let claudeProInstances: [ClaudeProInstance]
     private let interval: Duration
     @ObservationIgnored private var task: Task<Void, Never>?
     @ObservationIgnored private var dshTotalsDay: Date = .distantPast
@@ -39,15 +40,13 @@ final class TodayTokenUsageMonitor {
     init(
         databaseURL: URL = CCSwitchUsageReader.defaultDatabaseURL,
         keeperDatabaseURL: URL = KeeperUsageReader.defaultDatabaseURL,
-        claudeProSessionsDirectoryURL: URL = ClaudeProUsageReader.defaultSessionsDirectoryURL,
-        claudeProProjectsDirectoryURL: URL = ClaudeProUsageReader.defaultProjectsDirectoryURL,
+        claudeProInstances: [ClaudeProInstance] = ClaudeProInstance.all,
         interval: Duration = .seconds(30),
         agyProAccounts: Set<String> = KeeperUsageReader.defaultAgyProAccounts
     ) {
         self.databaseURL = databaseURL
         self.keeperDatabaseURL = keeperDatabaseURL
-        self.claudeProSessionsDirectoryURL = claudeProSessionsDirectoryURL
-        self.claudeProProjectsDirectoryURL = claudeProProjectsDirectoryURL
+        self.claudeProInstances = claudeProInstances
         self.interval = interval
         self.agyProAccounts = agyProAccounts.isEmpty
             ? KeeperUsageReader.defaultAgyProAccounts
@@ -216,8 +215,7 @@ final class TodayTokenUsageMonitor {
     func refresh(now: Date = Date(), calendar: Calendar = .current) async {
         let databaseURL = self.databaseURL
         let keeperDatabaseURL = self.keeperDatabaseURL
-        let claudeProSessionsDirectoryURL = self.claudeProSessionsDirectoryURL
-        let claudeProProjectsDirectoryURL = self.claudeProProjectsDirectoryURL
+        let claudeProInstances = self.claudeProInstances
         let agyProAccounts = self.agyProAccounts
         let result = await Task.detached(priority: .utility) { () -> Result<TodayTokenUsage, any Error> in
             let dayStart = calendar.startOfDay(for: now)
@@ -266,31 +264,52 @@ final class TodayTokenUsageMonitor {
                 keeperError = error
             }
 
-            // 3. Try reading Claude Pro (isolated CLI)
-            do {
-                let proUsage = try ClaudeProUsageReader.loadToday(
-                    sessionsDirectoryURL: claudeProSessionsDirectoryURL,
-                    projectsDirectoryURL: claudeProProjectsDirectoryURL,
+            // 3. Try reading every isolated Claude Pro install. They are
+            // separate accounts, so their totals never get summed together.
+            var proSnapshots: [String: ClaudeProUsageSnapshot] = [:]
+            for instance in claudeProInstances {
+                guard let snapshot = try? ClaudeProUsageReader.loadToday(
+                    instance: instance,
                     now: now,
                     calendar: calendar
-                )
-                if proUsage.totals.totalTokens > 0 || proUsage.estimatedCostUSD > 0 {
-                    usage.claudePro = proUsage.totals
-                    usage.claudeProAccounts = [proUsage.accountHint]
-                    usage.claudeProCostUSD = proUsage.estimatedCostUSD > 0 ? proUsage.estimatedCostUSD : nil
-                    usage.claudeProRateLimit5h = proUsage.rateLimit5hPercent
-                    usage.claudeProRateLimit7d = proUsage.rateLimit7dPercent
+                ) else {
+                    // Best-effort; a Pro install is optional.
+                    continue
+                }
+                proSnapshots[instance.id] = snapshot
+            }
+
+            if let pro = proSnapshots[ClaudeProInstance.pro.id] {
+                // The account name stays visible even before the first request
+                // of the day, so the row never reads a bare "Pro".
+                usage.claudeProAccounts = [pro.accountHint]
+                if pro.totals.totalTokens > 0 || pro.estimatedCostUSD > 0 {
+                    usage.claudePro = pro.totals
+                    usage.claudeProCostUSD = pro.estimatedCostUSD > 0 ? pro.estimatedCostUSD : nil
+                    usage.claudeProRateLimit5h = pro.rateLimit5hPercent
+                    usage.claudeProRateLimit7d = pro.rateLimit7dPercent
                     hasAnyDatabase = true
                 }
-            } catch {
-                // Best-effort; Claude Pro is optional
+            }
+
+            if let pro2 = proSnapshots[ClaudeProInstance.pro2.id] {
+                usage.claudePro2Accounts = [pro2.accountHint]
+                if pro2.totals.totalTokens > 0 || pro2.estimatedCostUSD > 0 {
+                    usage.claudePro2 = pro2.totals
+                    usage.claudePro2CostUSD = pro2.estimatedCostUSD > 0 ? pro2.estimatedCostUSD : nil
+                    usage.claudePro2RateLimit5h = pro2.rateLimit5hPercent
+                    usage.claudePro2RateLimit7d = pro2.rateLimit7dPercent
+                    hasAnyDatabase = true
+                }
             }
 
             let ccMissing = (ccError as? CCSwitchUsageError) == .databaseMissing
             let keeperMissing = (keeperError as? KeeperUsageError) == .databaseMissing
 
             // If both databases are missing and no Claude Pro usage found, return missing error
-            if ccMissing && keeperMissing && usage.claudePro.totalTokens == 0 {
+            if ccMissing && keeperMissing
+                && usage.claudePro.totalTokens == 0
+                && usage.claudePro2.totalTokens == 0 {
                 return .failure(CCSwitchUsageError.databaseMissing)
             }
 

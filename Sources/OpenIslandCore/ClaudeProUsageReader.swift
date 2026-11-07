@@ -39,17 +39,147 @@ public struct ClaudeProUsageSnapshot: Equatable, Sendable {
     public static let zero = ClaudeProUsageSnapshot()
 }
 
+/// One isolated Claude Pro install: the sandbox config directory it writes to,
+/// plus the name to show when its signed-in profile cannot be read.
+///
+/// Adding a third install is one constant here plus one row in the island; the
+/// directory layout is identical for every hardened sandbox.
+public struct ClaudeProInstance: Sendable, Hashable, Identifiable {
+    public var id: String
+    public var fallbackAccountHint: String
+    public var configDirectoryURL: URL
+
+    public init(id: String, fallbackAccountHint: String, configDirectoryURL: URL) {
+        self.id = id
+        self.fallbackAccountHint = fallbackAccountHint
+        self.configDirectoryURL = configDirectoryURL
+    }
+
+    /// claude-statusline's state store: one JSON file per session, each holding
+    /// that session's samples (timestamp, cost, context, rate limits).
+    public var sessionsDirectoryURL: URL {
+        configDirectoryURL.appendingPathComponent(
+            "home/.local/state/claude-statusline/sessions",
+            isDirectory: true
+        )
+    }
+
+    /// Hardened transcripts, one directory per workspace.
+    public var projectsDirectoryURL: URL {
+        configDirectoryURL.appendingPathComponent("projects", isDirectory: true)
+    }
+
+    public static var pro: ClaudeProInstance {
+        ClaudeProInstance(
+            id: "pro",
+            fallbackAccountHint: "Pro",
+            configDirectoryURL: FileManager.default.homeDirectoryForCurrentUser
+                .appendingPathComponent(".claude-pro-hardened", isDirectory: true)
+        )
+    }
+
+    public static var pro2: ClaudeProInstance {
+        ClaudeProInstance(
+            id: "pro2",
+            fallbackAccountHint: "Pro2",
+            configDirectoryURL: FileManager.default.homeDirectoryForCurrentUser
+                .appendingPathComponent(".claude-pro2-hardened", isDirectory: true)
+        )
+    }
+
+    /// Every isolated install the island reads.
+    public static var all: [ClaudeProInstance] { [.pro, .pro2] }
+}
+
+/// The account name shown beside a Pro row.
+///
+/// Claude Code caches the signed-in profile in `<config>/.claude.json`. The
+/// island reads exactly one field of it — `oauthAccount.displayName` — so two
+/// Pro rows name different accounts instead of both reading "Pro". Nothing
+/// else from that file is decoded, stored, or logged, and it is only ever
+/// opened for reading: it is Claude Code's runtime state, and the island must
+/// never write to it.
+public enum ClaudeProAccountHint {
+    /// Only the key the island needs, so the rest of the profile never gets
+    /// materialized.
+    private struct Profile: Decodable {
+        struct Account: Decodable {
+            var displayName: String?
+        }
+
+        var oauthAccount: Account?
+    }
+
+    private struct Entry: Sendable {
+        var modificationDate: Date
+        var size: Int
+        var hint: String
+    }
+
+    /// Keyed by `.claude.json` path. Claude Code rewrites that file often, so
+    /// the modification date and size decide whether it is worth parsing again.
+    private static let cache = OSAllocatedUnfairLock(initialState: [String: Entry]())
+
+    /// The signed-in profile name, or `nil` when the file is missing or has
+    /// never recorded one.
+    public static func displayName(for instance: ClaudeProInstance) -> String? {
+        let url = instance.configDirectoryURL.appendingPathComponent(".claude.json", isDirectory: false)
+        let path = url.path
+
+        guard let attributes = try? FileManager.default.attributesOfItem(atPath: path),
+              let modificationDate = attributes[.modificationDate] as? Date,
+              let size = (attributes[.size] as? NSNumber)?.intValue else {
+            return nil
+        }
+
+        let cached = cache.withLock { $0[path] }
+        if let cached, cached.modificationDate == modificationDate, cached.size == size {
+            return cached.hint
+        }
+
+        guard let data = try? Data(contentsOf: url),
+              let profile = try? JSONDecoder().decode(Profile.self, from: data),
+              let name = profile.oauthAccount?.displayName?
+                  .trimmingCharacters(in: .whitespacesAndNewlines),
+              !name.isEmpty else {
+            // A half-written profile is normal while Claude Code saves. Keep
+            // the last name that parsed instead of flickering to the generic
+            // hint for one refresh.
+            return cached?.hint
+        }
+
+        cache.withLock { $0[path] = Entry(modificationDate: modificationDate, size: size, hint: name) }
+        return name
+    }
+}
+
 /// Reads real-time token usage, cost, and rate limits for isolated Claude Pro instances
 /// via claude-statusline state session stores and hardened transcripts.
 public enum ClaudeProUsageReader {
     public static var defaultSessionsDirectoryURL: URL {
-        FileManager.default.homeDirectoryForCurrentUser
-            .appendingPathComponent(".claude-pro-hardened/home/.local/state/claude-statusline/sessions", isDirectory: true)
+        ClaudeProInstance.pro.sessionsDirectoryURL
     }
 
     public static var defaultProjectsDirectoryURL: URL {
-        FileManager.default.homeDirectoryForCurrentUser
-            .appendingPathComponent(".claude-pro-hardened/projects", isDirectory: true)
+        ClaudeProInstance.pro.projectsDirectoryURL
+    }
+
+    /// Today's numbers for one isolated install, labelled with the account
+    /// Claude Code recorded when there is one.
+    public static func loadToday(
+        instance: ClaudeProInstance,
+        now: Date = Date(),
+        calendar: Calendar = .current
+    ) throws -> ClaudeProUsageSnapshot {
+        var snapshot = try loadToday(
+            sessionsDirectoryURL: instance.sessionsDirectoryURL,
+            projectsDirectoryURL: instance.projectsDirectoryURL,
+            now: now,
+            calendar: calendar
+        )
+        snapshot.accountHint = ClaudeProAccountHint.displayName(for: instance)
+            ?? instance.fallbackAccountHint
+        return snapshot
     }
 
     /// Sums today's token usage, costs, and current rate limits for Claude Pro
