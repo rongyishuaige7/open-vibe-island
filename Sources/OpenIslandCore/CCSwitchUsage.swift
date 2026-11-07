@@ -35,6 +35,9 @@ public struct TodayTokenUsage: Equatable, Sendable {
     public var dayStart: Date
     public var claude: AgentTokenTotals
     public var claudePro: AgentTokenTotals
+    /// A second isolated Claude Pro install, kept out of `claudePro` so its own
+    /// cost estimate and rate-limit windows stay readable.
+    public var claudePro2: AgentTokenTotals
     public var codex: AgentTokenTotals
     public var agy: AgentTokenTotals
     public var agyPro: AgentTokenTotals
@@ -45,16 +48,21 @@ public struct TodayTokenUsage: Equatable, Sendable {
     public var codexAccounts: [String]
     public var claudeAccounts: [String]
     public var claudeProAccounts: [String]
+    public var claudePro2Accounts: [String]
     public var otherAccounts: [String]
     public var agyAccountBreakdown: [AccountTokenUsage]
     public var claudeProCostUSD: Double?
     public var claudeProRateLimit5h: Int?
     public var claudeProRateLimit7d: Int?
+    public var claudePro2CostUSD: Double?
+    public var claudePro2RateLimit5h: Int?
+    public var claudePro2RateLimit7d: Int?
 
     public init(
         dayStart: Date,
         claude: AgentTokenTotals = .zero,
         claudePro: AgentTokenTotals = .zero,
+        claudePro2: AgentTokenTotals = .zero,
         codex: AgentTokenTotals = .zero,
         agy: AgentTokenTotals = .zero,
         agyPro: AgentTokenTotals = .zero,
@@ -64,15 +72,20 @@ public struct TodayTokenUsage: Equatable, Sendable {
         codexAccounts: [String] = [],
         claudeAccounts: [String] = [],
         claudeProAccounts: [String] = [],
+        claudePro2Accounts: [String] = [],
         otherAccounts: [String] = [],
         agyAccountBreakdown: [AccountTokenUsage] = [],
         claudeProCostUSD: Double? = nil,
         claudeProRateLimit5h: Int? = nil,
-        claudeProRateLimit7d: Int? = nil
+        claudeProRateLimit7d: Int? = nil,
+        claudePro2CostUSD: Double? = nil,
+        claudePro2RateLimit5h: Int? = nil,
+        claudePro2RateLimit7d: Int? = nil
     ) {
         self.dayStart = dayStart
         self.claude = claude
         self.claudePro = claudePro
+        self.claudePro2 = claudePro2
         self.codex = codex
         self.agy = agy
         self.agyPro = agyPro
@@ -82,17 +95,22 @@ public struct TodayTokenUsage: Equatable, Sendable {
         self.codexAccounts = codexAccounts
         self.claudeAccounts = claudeAccounts
         self.claudeProAccounts = claudeProAccounts
+        self.claudePro2Accounts = claudePro2Accounts
         self.otherAccounts = otherAccounts
         self.agyAccountBreakdown = agyAccountBreakdown
         self.claudeProCostUSD = claudeProCostUSD
         self.claudeProRateLimit5h = claudeProRateLimit5h
         self.claudeProRateLimit7d = claudeProRateLimit7d
+        self.claudePro2CostUSD = claudePro2CostUSD
+        self.claudePro2RateLimit5h = claudePro2RateLimit5h
+        self.claudePro2RateLimit7d = claudePro2RateLimit7d
     }
 
     /// Every channel together, cache included.
     public var totalTokens: Int {
         claude.totalTokens
             + claudePro.totalTokens
+            + claudePro2.totalTokens
             + codex.totalTokens
             + agy.totalTokens
             + agyPro.totalTokens
@@ -110,6 +128,13 @@ public struct TodayTokenUsage: Equatable, Sendable {
             return "Pro"
         }
         return claudeProAccounts.joined(separator: ", ")
+    }
+
+    public var claudePro2AccountHint: String {
+        if claudePro2Accounts.isEmpty {
+            return "Pro2"
+        }
+        return claudePro2Accounts.joined(separator: ", ")
     }
 
     public var codexAccountHint: String {
