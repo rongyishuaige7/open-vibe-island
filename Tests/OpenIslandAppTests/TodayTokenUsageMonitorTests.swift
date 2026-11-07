@@ -235,6 +235,7 @@ struct TodayTokenUsageMonitorTests {
                 )
             ],
             yiWorkDataDirectoryURL: URL(fileURLWithPath: "/nonexistent/yi-work-data"),
+            yiWorkLedgerURL: URL(fileURLWithPath: "/nonexistent/yi-work-ledger.jsonl"),
             agyProAccounts: ["wisnumandala302"]
         )
 

@@ -20,6 +20,7 @@ struct YiWorkUsageReaderTests {
 
         let snapshot = YiWorkUsageReader.loadToday(
             dataDirectoryURL: fixture.dataDirectory,
+            ledgerURL: nil,
             stateURL: fixture.stateURL,
             calendar: calendar
         )
@@ -43,6 +44,7 @@ struct YiWorkUsageReaderTests {
 
         let first = YiWorkUsageReader.loadToday(
             dataDirectoryURL: fixture.dataDirectory,
+            ledgerURL: nil,
             stateURL: fixture.stateURL,
             calendar: calendar
         )
@@ -51,6 +53,7 @@ struct YiWorkUsageReaderTests {
         // Same numbers read twice must not double count.
         let unchanged = YiWorkUsageReader.loadToday(
             dataDirectoryURL: fixture.dataDirectory,
+            ledgerURL: nil,
             stateURL: fixture.stateURL,
             calendar: calendar
         )
@@ -59,6 +62,7 @@ struct YiWorkUsageReaderTests {
         try fixture.writeSession(id: "91820845", updatedAt: now, input: 1_500, output: 120, cacheRead: 1_200)
         let grown = YiWorkUsageReader.loadToday(
             dataDirectoryURL: fixture.dataDirectory,
+            ledgerURL: nil,
             stateURL: fixture.stateURL,
             calendar: calendar
         )
@@ -81,6 +85,7 @@ struct YiWorkUsageReaderTests {
 
         let snapshot = YiWorkUsageReader.loadToday(
             dataDirectoryURL: fixture.dataDirectory,
+            ledgerURL: nil,
             stateURL: fixture.stateURL,
             calendar: calendar
         )
@@ -107,6 +112,7 @@ struct YiWorkUsageReaderTests {
 
         let snapshot = YiWorkUsageReader.loadToday(
             dataDirectoryURL: fixture.dataDirectory,
+            ledgerURL: nil,
             stateURL: fixture.stateURL,
             calendar: calendar
         )
@@ -123,6 +129,7 @@ struct YiWorkUsageReaderTests {
         )
         let grown = YiWorkUsageReader.loadToday(
             dataDirectoryURL: fixture.dataDirectory,
+            ledgerURL: nil,
             stateURL: fixture.stateURL,
             calendar: calendar
         )
@@ -139,6 +146,7 @@ struct YiWorkUsageReaderTests {
 
         _ = YiWorkUsageReader.loadToday(
             dataDirectoryURL: fixture.dataDirectory,
+            ledgerURL: nil,
             stateURL: fixture.stateURL,
             now: now,
             calendar: calendar
@@ -147,6 +155,7 @@ struct YiWorkUsageReaderTests {
         let nextDay = calendar.date(byAdding: .day, value: 1, to: now) ?? now.addingTimeInterval(86_400)
         let rolled = YiWorkUsageReader.loadToday(
             dataDirectoryURL: fixture.dataDirectory,
+            ledgerURL: nil,
             stateURL: fixture.stateURL,
             now: nextDay,
             calendar: calendar
@@ -161,6 +170,7 @@ struct YiWorkUsageReaderTests {
     func returnsEmptyWithoutADataDirectory() {
         let snapshot = YiWorkUsageReader.loadToday(
             dataDirectoryURL: URL(fileURLWithPath: "/nonexistent/yi-work-\(UUID().uuidString)"),
+            ledgerURL: nil,
             stateURL: FileManager.default.temporaryDirectory
                 .appendingPathComponent("yi-work-state-\(UUID().uuidString).json"),
             calendar: calendar
@@ -203,17 +213,127 @@ struct YiWorkUsageReaderTests {
         #expect(YiWorkUsageReader.parseTimestamp("") == nil)
     }
 
+    @Test
+    func sumsOpenAILedgerLinesWithoutCountingCacheTwice() throws {
+        let fixture = try Fixture()
+        defer { fixture.cleanUp() }
+
+        let today = YiWorkUsageReader.dayString(for: Date(), calendar: calendar)
+        try fixture.writeLedger([
+            ledgerLine(day: today, conversation: "c1", semantics: "openai", input: 1_000, output: 100, cacheRead: 900),
+            ledgerLine(day: today, conversation: "c2", semantics: "openai", input: 2_000, output: 200, cacheRead: 1_800)
+        ])
+
+        let snapshot = YiWorkUsageReader.loadToday(
+            dataDirectoryURL: fixture.dataDirectory,
+            ledgerURL: fixture.ledgerURL,
+            stateURL: fixture.stateURL,
+            calendar: calendar
+        )
+
+        #expect(snapshot.totals.totalTokens == 3_300)
+        #expect(snapshot.totals.cacheReadTokens == 2_700)
+        #expect(snapshot.activeSessionsCount == 2)
+    }
+
+    @Test
+    func sumsAnthropicLedgerLinesWithCache() throws {
+        let fixture = try Fixture()
+        defer { fixture.cleanUp() }
+
+        let today = YiWorkUsageReader.dayString(for: Date(), calendar: calendar)
+        try fixture.writeLedger([
+            ledgerLine(day: today, conversation: "c1", semantics: "anthropic", input: 1_000, output: 100, cacheRead: 900)
+        ])
+
+        let snapshot = YiWorkUsageReader.loadToday(
+            dataDirectoryURL: fixture.dataDirectory,
+            ledgerURL: fixture.ledgerURL,
+            stateURL: fixture.stateURL,
+            calendar: calendar
+        )
+
+        #expect(snapshot.totals.totalTokens == 2_000)
+        #expect(snapshot.totals.cacheReadTokens == 900)
+    }
+
+    @Test
+    func ignoresOtherDaysAssistantLinesAndBrokenLines() throws {
+        let fixture = try Fixture()
+        defer { fixture.cleanUp() }
+
+        let today = YiWorkUsageReader.dayString(for: Date(), calendar: calendar)
+        try fixture.writeLedger([
+            ledgerLine(day: "2026-01-01", conversation: "old", semantics: "openai", input: 9_999, output: 999, cacheRead: 0),
+            ledgerLine(day: today, conversation: "assistant", semantics: "openai", input: 9_999, output: 999, cacheRead: 0, backend: "aionrs"),
+            "{\"v\":1,\"day\":", // half-written line
+            ledgerLine(day: today, conversation: "c1", semantics: "openai", input: 10, output: 2, cacheRead: 0)
+        ])
+
+        let snapshot = YiWorkUsageReader.loadToday(
+            dataDirectoryURL: fixture.dataDirectory,
+            ledgerURL: fixture.ledgerURL,
+            stateURL: fixture.stateURL,
+            calendar: calendar
+        )
+
+        #expect(snapshot.totals.totalTokens == 12)
+        #expect(snapshot.activeSessionsCount == 1)
+    }
+
+    @Test
+    func countsAConversationOnceAcrossItsTurns() throws {
+        let fixture = try Fixture()
+        defer { fixture.cleanUp() }
+
+        let today = YiWorkUsageReader.dayString(for: Date(), calendar: calendar)
+        try fixture.writeLedger([
+            ledgerLine(day: today, conversation: "c1", semantics: "openai", input: 10, output: 1, cacheRead: 0),
+            ledgerLine(day: today, conversation: "c1", semantics: "openai", input: 20, output: 2, cacheRead: 0)
+        ])
+
+        let snapshot = YiWorkUsageReader.loadToday(
+            dataDirectoryURL: fixture.dataDirectory,
+            ledgerURL: fixture.ledgerURL,
+            stateURL: fixture.stateURL,
+            calendar: calendar
+        )
+
+        #expect(snapshot.totals.totalTokens == 33)
+        #expect(snapshot.activeSessionsCount == 1)
+    }
+
     // MARK: - Fixture
+
+    private func ledgerLine(
+        day: String,
+        conversation: String,
+        semantics: String,
+        input: Int,
+        output: Int,
+        cacheRead: Int,
+        backend: String = "dsh"
+    ) -> String {
+        """
+        {"v":1,"ts":1794060900000,"day":"\(day)","conversationId":"\(conversation)","turnId":"\(conversation):1",\
+        "agent":{"id":"a","name":"\(backend)","backend":"\(backend)","model":null,"provider":null},\
+        "semantics":"\(semantics)","tokens":{"input":\(input),"output":\(output),"cacheRead":\(cacheRead),\
+        "cacheWrite":0,"thought":0,"total":\(input + output + cacheRead)},\
+        "cost":null,"source":"acp_context_usage"}
+        """
+    }
 
     private struct Fixture {
         let root: URL
         let dataDirectory: URL
         let stateURL: URL
+        let ledgerURL: URL
 
         init() throws {
             root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
             dataDirectory = root.appendingPathComponent("YIWorkData", isDirectory: true)
             stateURL = root.appendingPathComponent("yi-work-usage.json")
+            ledgerURL = root.appendingPathComponent("usage/turns.jsonl")
             try FileManager.default.createDirectory(at: dataDirectory, withIntermediateDirectories: true)
         }
 
@@ -246,6 +366,14 @@ struct YiWorkUsageReaderTests {
                 atomically: true,
                 encoding: .utf8
             )
+        }
+
+        func writeLedger(_ lines: [String]) throws {
+            try FileManager.default.createDirectory(
+                at: ledgerURL.deletingLastPathComponent(),
+                withIntermediateDirectories: true
+            )
+            try (lines.joined(separator: "\n") + "\n").write(to: ledgerURL, atomically: true, encoding: .utf8)
         }
 
         func cleanUp() {

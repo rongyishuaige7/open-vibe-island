@@ -32,6 +32,15 @@ The data directory differs between the dev script and the packaged app, so the
 island takes the candidate the backend wrote to most recently
 (`~/YIWorkData`, `~/.yi-work-web-dev`, …), or `YI_WORK_DATA_DIR` when set.
 
+The CLI agents YI-Work launches over ACP (dsh, hermes, …) report their usage to
+YI-Work's frontend instead. YI-Work appends one line per finished turn to
+`~/.yi-work/usage/turns.jsonl`, and the island sums today's lines too — skipping
+the assistant's own lines, which the counters above already cover. That ledger
+carries a `semantics` field because the wire shapes differ: an `openai` line
+already counts cached tokens inside `input`, an `anthropic` line reports them
+separately, and only the second kind gets its cache added.
+
+
 ## Claude Pro and Claude Pro 2
 
 The two Claude Pro rows are two isolated sandboxes, each signed in to its own

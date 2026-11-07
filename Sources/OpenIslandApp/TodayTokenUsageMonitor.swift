@@ -27,6 +27,8 @@ final class TodayTokenUsageMonitor {
     /// YI-Work's data directory, resolved once at launch. `nil` when YI-Work
     /// is not installed, which keeps the row off.
     private let yiWorkDataDirectoryURL: URL?
+    /// The ledger ACP agents write through YI-Work's frontend.
+    private let yiWorkLedgerURL: URL?
     private let interval: Duration
     @ObservationIgnored private var task: Task<Void, Never>?
     @ObservationIgnored private var dshTotalsDay: Date = .distantPast
@@ -45,6 +47,7 @@ final class TodayTokenUsageMonitor {
         keeperDatabaseURL: URL = KeeperUsageReader.defaultDatabaseURL,
         claudeProInstances: [ClaudeProInstance] = ClaudeProInstance.all,
         yiWorkDataDirectoryURL: URL? = YiWorkUsageReader.defaultDataDirectoryURL,
+        yiWorkLedgerURL: URL? = YiWorkUsageReader.defaultLedgerURL,
         interval: Duration = .seconds(30),
         agyProAccounts: Set<String> = KeeperUsageReader.defaultAgyProAccounts
     ) {
@@ -52,6 +55,7 @@ final class TodayTokenUsageMonitor {
         self.keeperDatabaseURL = keeperDatabaseURL
         self.claudeProInstances = claudeProInstances
         self.yiWorkDataDirectoryURL = yiWorkDataDirectoryURL
+        self.yiWorkLedgerURL = yiWorkLedgerURL
         self.interval = interval
         self.agyProAccounts = agyProAccounts.isEmpty
             ? KeeperUsageReader.defaultAgyProAccounts
@@ -222,6 +226,7 @@ final class TodayTokenUsageMonitor {
         let keeperDatabaseURL = self.keeperDatabaseURL
         let claudeProInstances = self.claudeProInstances
         let yiWorkDataDirectoryURL = self.yiWorkDataDirectoryURL
+        let yiWorkLedgerURL = self.yiWorkLedgerURL
         let agyProAccounts = self.agyProAccounts
         let result = await Task.detached(priority: .utility) { () -> Result<TodayTokenUsage, any Error> in
             let dayStart = calendar.startOfDay(for: now)
@@ -314,6 +319,7 @@ final class TodayTokenUsageMonitor {
             // not anything was spent today.
             let yiWorkUsage = YiWorkUsageReader.loadToday(
                 dataDirectoryURL: yiWorkDataDirectoryURL,
+                ledgerURL: yiWorkLedgerURL,
                 now: now,
                 calendar: calendar
             )

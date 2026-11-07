@@ -101,6 +101,15 @@ public enum YiWorkUsageReader {
             .appendingPathComponent("yi-work-usage.json", isDirectory: false)
     }
 
+    /// The ledger YI-Work's frontend writes for the ACP agents it runs.
+    public static var defaultLedgerURL: URL? {
+        if let override = ProcessInfo.processInfo.environment["YI_WORK_USAGE_LEDGER"], !override.isEmpty {
+            return URL(fileURLWithPath: (override as NSString).expandingTildeInPath, isDirectory: false)
+        }
+        return FileManager.default.homeDirectoryForCurrentUser
+            .appendingPathComponent(".yi-work/usage/turns.jsonl", isDirectory: false)
+    }
+
     /// Every directory YI-Work has been seen to keep its data in. The dev
     /// script and the packaged app disagree, and the user can move it with
     /// `--data-dir`, so the reader resolves rather than assumes.
@@ -147,15 +156,64 @@ public enum YiWorkUsageReader {
         return resolveDataDirectory()
     }
 
-    /// Sums today's assistant usage. Best effort: a missing or half-written
-    /// state file only makes this round's numbers smaller, never throws.
+    /// Sums today's YI-Work usage from the two records it leaves behind: the
+    /// assistant's per-conversation counters, and the ledger YI-Work's frontend
+    /// writes for the ACP agents it runs (dsh, hermes, …).
+    ///
+    /// Best effort: a missing or half-written file only makes this round's
+    /// numbers smaller, never throws.
     public static func loadToday(
         dataDirectoryURL: URL? = defaultDataDirectoryURL,
+        ledgerURL: URL? = defaultLedgerURL,
         stateURL: URL = defaultStateURL,
         now: Date = Date(),
         calendar: Calendar = .current
     ) -> YiWorkUsageSnapshot {
-        guard let dataDirectoryURL else { return .empty }
+        let assistant = loadAssistantToday(
+            dataDirectoryURL: dataDirectoryURL,
+            stateURL: stateURL,
+            now: now,
+            calendar: calendar
+        )
+        let ledger = loadLedgerToday(ledgerURL: ledgerURL, now: now, calendar: calendar)
+
+        guard assistant.dataDirectory != nil || ledger.found else { return .empty }
+
+        let conversations = assistant.sessionIDs.union(ledger.conversationIDs)
+        return YiWorkUsageSnapshot(
+            totals: AgentTokenTotals(
+                requestCount: conversations.count,
+                totalTokens: assistant.totalTokens + ledger.totalTokens,
+                cacheReadTokens: assistant.cacheReadTokens + ledger.cacheReadTokens
+            ),
+            activeSessionsCount: conversations.count,
+            dataDirectory: assistant.dataDirectory
+        )
+    }
+
+    private struct AssistantToday {
+        var totalTokens = 0
+        var cacheReadTokens = 0
+        var sessionIDs: Set<String> = []
+        var dataDirectory: URL?
+    }
+
+    private struct LedgerToday: Sendable {
+        var totalTokens = 0
+        var cacheReadTokens = 0
+        var conversationIDs: Set<String> = []
+        var found = false
+
+        static let missing = LedgerToday()
+    }
+
+    private static func loadAssistantToday(
+        dataDirectoryURL: URL?,
+        stateURL: URL,
+        now: Date,
+        calendar: Calendar
+    ) -> AssistantToday {
+        guard let dataDirectoryURL else { return AssistantToday() }
 
         let sessionsDirectory = dataDirectoryURL
             .appendingPathComponent("aionrs-sessions", isDirectory: true)
@@ -165,7 +223,7 @@ public enum YiWorkUsageReader {
             includingPropertiesForKeys: [.isDirectoryKey],
             options: [.skipsHiddenFiles]
         ) else {
-            return .empty
+            return AssistantToday()
         }
 
         return stateLock.withLock {
@@ -233,21 +291,113 @@ public enum YiWorkUsageReader {
 
             // The assistant's provider is OpenAI-shaped: `input_tokens` already
             // counts the cached ones, so adding cache again would double it.
-            return YiWorkUsageSnapshot(
-                totals: AgentTokenTotals(
-                    requestCount: state.activeSessionIDs.count,
-                    totalTokens: state.inputTokens + state.outputTokens,
-                    cacheReadTokens: state.cacheReadTokens
-                ),
-                activeSessionsCount: state.activeSessionIDs.count,
+            return AssistantToday(
+                totalTokens: state.inputTokens + state.outputTokens,
+                cacheReadTokens: state.cacheReadTokens,
+                sessionIDs: Set(state.activeSessionIDs),
                 dataDirectory: dataDirectoryURL
             )
         }
     }
 
+    /// Sums the frontend ledger's lines for today.
+    ///
+    /// One line per finished turn, written by YI-Work for the ACP agents it
+    /// runs. Its `semantics` field says whether `input` already counts the
+    /// cached tokens: OpenAI-compatible backends include them, Anthropic-shaped
+    /// ones report them separately.
+    private static func loadLedgerToday(
+        ledgerURL: URL?,
+        now: Date,
+        calendar: Calendar
+    ) -> LedgerToday {
+        guard let ledgerURL else { return .missing }
+
+        let path = ledgerURL.path
+        guard let attributes = try? FileManager.default.attributesOfItem(atPath: path),
+              let modified = attributes[.modificationDate] as? Date,
+              let size = (attributes[.size] as? NSNumber)?.intValue else {
+            return .missing
+        }
+
+        let day = dayString(for: now, calendar: calendar)
+        if let cached = ledgerCache.withLock({ $0[path] }),
+           cached.modified == modified,
+           cached.size == size,
+           cached.day == day {
+            return cached.totals
+        }
+
+        guard let data = try? Data(contentsOf: ledgerURL) else { return .missing }
+
+        var totals = LedgerToday(found: true)
+        for line in data.split(separator: UInt8(ascii: "\n")) {
+            guard !line.isEmpty,
+                  let object = try? JSONSerialization.jsonObject(with: Data(line)) as? [String: Any],
+                  let lineDay = object["day"] as? String,
+                  lineDay == day else {
+                continue
+            }
+
+            // The assistant's own counters already cover it; a ledger line for
+            // it would count the same tokens twice.
+            if let agent = object["agent"] as? [String: Any],
+               let backend = (agent["backend"] as? String)?.lowercased(),
+               backend == "aionrs" {
+                continue
+            }
+
+            let tokens = object["tokens"] as? [String: Any] ?? [:]
+            let input = intValue(tokens["input"])
+            let output = intValue(tokens["output"])
+            let cacheRead = intValue(tokens["cacheRead"])
+            let cacheWrite = intValue(tokens["cacheWrite"])
+            let semantics = (object["semantics"] as? String)?.lowercased() ?? "openai"
+
+            totals.totalTokens += semantics == "anthropic"
+                ? input + output + cacheRead + cacheWrite
+                : input + output
+            totals.cacheReadTokens += cacheRead
+
+            if let conversationID = object["conversationId"] as? String, !conversationID.isEmpty {
+                totals.conversationIDs.insert(conversationID)
+            }
+        }
+
+        let entry = LedgerCacheEntry(modified: modified, size: size, day: day, totals: totals)
+        ledgerCache.withLock { $0[path] = entry }
+        return totals
+    }
+
+    static func dayString(for date: Date, calendar: Calendar) -> String {
+        let formatter = DateFormatter()
+        formatter.calendar = calendar
+        formatter.locale = Locale(identifier: "en_US_POSIX")
+        formatter.timeZone = calendar.timeZone
+        formatter.dateFormat = "yyyy-MM-dd"
+        return formatter.string(from: date)
+    }
+
+    private static func intValue(_ value: Any?) -> Int {
+        if let number = value as? NSNumber { return number.intValue }
+        if let string = value as? String { return Int(string) ?? 0 }
+        return 0
+    }
+
     // MARK: - Persistence
 
     private static let stateLock = OSAllocatedUnfairLock()
+
+    private struct LedgerCacheEntry: Sendable {
+        var modified: Date
+        var size: Int
+        var day: String
+        var totals: LedgerToday
+    }
+
+    /// Keyed by ledger path. The file is append-only, so an unchanged size and
+    /// modification date means the same answer for the same day.
+    private static let ledgerCache = OSAllocatedUnfairLock(initialState: [String: LedgerCacheEntry]())
 
     /// AionCore writes microsecond fractions ("…T14:17:33.285543Z"), which
     /// `ISO8601DateFormatter` rejects, so trim to milliseconds before parsing.
