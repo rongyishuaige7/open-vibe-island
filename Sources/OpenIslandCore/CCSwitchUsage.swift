@@ -41,6 +41,10 @@ public struct TodayTokenUsage: Equatable, Sendable {
     public var codex: AgentTokenTotals
     public var agy: AgentTokenTotals
     public var agyPro: AgentTokenTotals
+    /// Tokens YI-Work's built-in assistant spent, read from the runtime YI-Work
+    /// ships. Not an account: an application total, and disjoint from the rows
+    /// above because that assistant talks to its own provider.
+    public var yiWork: AgentTokenTotals
     /// KEEPER usage from any other upstream, e.g. an OpenAI-compatible API key.
     public var other: AgentTokenTotals
     public var agyAccounts: [String]
@@ -66,6 +70,7 @@ public struct TodayTokenUsage: Equatable, Sendable {
         codex: AgentTokenTotals = .zero,
         agy: AgentTokenTotals = .zero,
         agyPro: AgentTokenTotals = .zero,
+        yiWork: AgentTokenTotals = .zero,
         other: AgentTokenTotals = .zero,
         agyAccounts: [String] = [],
         agyProAccounts: [String] = [],
@@ -89,6 +94,7 @@ public struct TodayTokenUsage: Equatable, Sendable {
         self.codex = codex
         self.agy = agy
         self.agyPro = agyPro
+        self.yiWork = yiWork
         self.other = other
         self.agyAccounts = agyAccounts
         self.agyProAccounts = agyProAccounts
@@ -114,6 +120,7 @@ public struct TodayTokenUsage: Equatable, Sendable {
             + codex.totalTokens
             + agy.totalTokens
             + agyPro.totalTokens
+            + yiWork.totalTokens
             + other.totalTokens
     }
 
@@ -148,6 +155,9 @@ public struct TodayTokenUsage: Equatable, Sendable {
     public var agyProAccountHint: String {
         agyProAccounts.joined(separator: ", ")
     }
+
+    /// Which runtime inside YI-Work produced the row.
+    public var yiWorkAccountHint: String { "aionrs" }
 
     public var otherAccountHint: String {
         otherAccounts.joined(separator: ", ")
