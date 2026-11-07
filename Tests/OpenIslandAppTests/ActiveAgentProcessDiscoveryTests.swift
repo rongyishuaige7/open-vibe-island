@@ -589,5 +589,87 @@ struct ActiveAgentProcessDiscoveryTests {
         #expect(snapshots.contains { $0.tool == .geminiCLI && $0.workingDirectory == "/Users/test/workspace-agy" })
         #expect(snapshots.contains { $0.tool == .claudeCode && $0.workingDirectory == "/Users/test/workspace-claude" })
     }
+
+    /// A hardened sandbox runs `claude-pro-exec` for every account, so the
+    /// command line alone cannot say which install a process belongs to. The
+    /// per-pid session record does, and it also survives working directories
+    /// whose characters Claude encodes into the project folder name.
+    @Test
+    func bindsASandboxedClaudeProcessThroughItsSessionRecord() throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: root) }
+
+        let configDirectory = root.appendingPathComponent(".claude-pro2-hardened", isDirectory: true)
+        let sessionsDirectory = configDirectory.appendingPathComponent("sessions", isDirectory: true)
+        let projectDirectory = configDirectory
+            .appendingPathComponent("projects", isDirectory: true)
+            .appendingPathComponent("-Users-test-Desktop----video-making", isDirectory: true)
+        try FileManager.default.createDirectory(at: sessionsDirectory, withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: projectDirectory, withIntermediateDirectories: true)
+
+        let sessionID = "5f02f023-2502-472a-874f-ee8f140d2239"
+        let transcriptURL = projectDirectory.appendingPathComponent("\(sessionID).jsonl")
+        try #"{"type":"summary","summary":"hello"}"#
+            .write(to: transcriptURL, atomically: true, encoding: .utf8)
+        try """
+        {"pid":4242,"sessionId":"\(sessionID)","cwd":"/Users/test/Desktop/视频/video-making","status":"busy"}
+        """.write(
+            to: sessionsDirectory.appendingPathComponent("4242.json"),
+            atomically: true,
+            encoding: .utf8
+        )
+
+        let discovery = ActiveAgentProcessDiscovery(
+            commandRunner: { executablePath, _ in
+                executablePath == "/bin/ps"
+                    ? "4242 1 ttys004 /Users/test/.local/share/claude-pro-bin/claude-pro-exec --settings /Users/test/.local/share/claude-pro2-hardening/sessions/abc/settings.json"
+                    : nil
+            },
+            claudeConfigDirectories: [configDirectory]
+        )
+
+        let snapshots = discovery.discover()
+
+        #expect(snapshots.count == 1)
+        #expect(snapshots.first?.tool == .claudeCode)
+        #expect(snapshots.first?.sessionID == sessionID)
+        #expect(snapshots.first?.workingDirectory == "/Users/test/Desktop/视频/video-making")
+        // Comparing resolved paths: the temporary directory is a symlink on
+        // macOS, so the resolved transcript starts with /private/var.
+        #expect(
+            snapshots.first?.transcriptPath.map { URL(fileURLWithPath: $0).resolvingSymlinksInPath().path }
+                == transcriptURL.resolvingSymlinksInPath().path
+        )
+    }
+
+    /// A leftover record still names the pid it was written for; a different
+    /// process must not inherit it.
+    @Test
+    func ignoresASessionRecordThatNamesAnotherPID() throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: root) }
+
+        let configDirectory = root.appendingPathComponent(".claude-pro-hardened", isDirectory: true)
+        let sessionsDirectory = configDirectory.appendingPathComponent("sessions", isDirectory: true)
+        try FileManager.default.createDirectory(at: sessionsDirectory, withIntermediateDirectories: true)
+        try """
+        {"pid":9999,"sessionId":"5f02f023-2502-472a-874f-ee8f140d2239","cwd":"/Users/test/Desktop/视频/video-making","status":"busy"}
+        """.write(
+            to: sessionsDirectory.appendingPathComponent("4242.json"),
+            atomically: true,
+            encoding: .utf8
+        )
+
+        let discovery = ActiveAgentProcessDiscovery(
+            commandRunner: { executablePath, _ in
+                executablePath == "/bin/ps"
+                    ? "4242 1 ttys004 /Users/test/.local/share/claude-pro-bin/claude-pro-exec --settings /Users/test/.local/share/claude-pro-hardening/sessions/abc/settings.json"
+                    : nil
+            },
+            claudeConfigDirectories: [configDirectory]
+        )
+
+        #expect(discovery.discover().isEmpty)
+    }
 }
 

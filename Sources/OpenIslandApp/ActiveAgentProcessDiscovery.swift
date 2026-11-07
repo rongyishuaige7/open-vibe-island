@@ -53,9 +53,26 @@ struct ActiveAgentProcessDiscovery {
     typealias CommandRunner = @Sendable (_ executablePath: String, _ arguments: [String]) -> String?
 
     private let commandRunner: CommandRunner
+    /// Claude config directories to look for `<config>/sessions/<pid>.json` in.
+    /// The sandboxed Pro installs share one binary, so their records are the
+    /// only thing that says which install a process belongs to.
+    private let claudeConfigDirectories: [URL]
 
-    init(commandRunner: @escaping CommandRunner = Self.commandOutput) {
+    init(
+        commandRunner: @escaping CommandRunner = Self.commandOutput,
+        claudeConfigDirectories: [URL] = Self.defaultClaudeConfigDirectories
+    ) {
         self.commandRunner = commandRunner
+        self.claudeConfigDirectories = claudeConfigDirectories
+    }
+
+    static var defaultClaudeConfigDirectories: [URL] {
+        var directories = [ClaudeConfigDirectory.resolved()]
+        for instance in ClaudeProInstance.all
+        where !directories.contains(instance.configDirectoryURL) {
+            directories.append(instance.configDirectoryURL)
+        }
+        return directories
     }
 
     func discover() -> [ProcessSnapshot] {
@@ -454,6 +471,72 @@ struct ActiveAgentProcessDiscovery {
     private func isClaudeSubagentWorktree(_ path: String) -> Bool {
         path.contains("/.claude/worktrees/agent-")
             || path.contains("/.claude-pro-hardened/worktrees/agent-")
+            || path.contains("/.claude-pro2-hardened/worktrees/agent-")
+    }
+
+    /// One running Claude session, as Claude Code itself recorded it.
+    struct ClaudeSessionRecord: Equatable, Sendable {
+        var configDirectory: URL
+        var sessionID: String
+        var workingDirectory: String?
+        var status: String?
+    }
+
+    /// Reads `<config>/sessions/<pid>.json` from the install that owns `pid`.
+    ///
+    /// Claude Code writes one record per running session and removes it on
+    /// exit, so a record that still names this pid is the most reliable link
+    /// between a process, its account, and its transcript. The pid inside the
+    /// file has to match as well, which keeps a leftover file from attaching
+    /// an unrelated process.
+    private func claudeSessionRecord(forPID pid: String) -> ClaudeSessionRecord? {
+        for configDirectory in claudeConfigDirectories {
+            let url = configDirectory
+                .appendingPathComponent("sessions", isDirectory: true)
+                .appendingPathComponent("\(pid).json", isDirectory: false)
+            guard let data = try? Data(contentsOf: url),
+                  let json = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any],
+                  let recordedPID = json["pid"] as? Int,
+                  String(recordedPID) == pid,
+                  let sessionID = json["sessionId"] as? String,
+                  let uuid = firstUUID(in: sessionID) else {
+                continue
+            }
+
+            return ClaudeSessionRecord(
+                configDirectory: configDirectory,
+                sessionID: uuid,
+                workingDirectory: json["cwd"] as? String,
+                status: json["status"] as? String
+            )
+        }
+
+        return nil
+    }
+
+    /// Finds a session's transcript by id rather than by project folder name.
+    ///
+    /// Claude encodes the working directory into the folder name, turning every
+    /// non-ASCII character into `-`, so a path derived from `cwd` stops
+    /// matching as soon as the project lives under a Chinese folder name.
+    private func claudeTranscriptPath(configDirectory: URL, sessionID: String) -> String? {
+        let projectsURL = configDirectory.appendingPathComponent("projects", isDirectory: true)
+        guard let subdirectories = try? FileManager.default.contentsOfDirectory(
+            at: projectsURL,
+            includingPropertiesForKeys: [.isDirectoryKey],
+            options: [.skipsHiddenFiles]
+        ) else {
+            return nil
+        }
+
+        for subdirectory in subdirectories {
+            let candidate = subdirectory.appendingPathComponent("\(sessionID).jsonl", isDirectory: false)
+            if FileManager.default.fileExists(atPath: candidate.path) {
+                return candidate.path
+            }
+        }
+
+        return nil
     }
 
     private func claudeSnapshot(
@@ -462,7 +545,13 @@ struct ActiveAgentProcessDiscovery {
         preloadedLsofs: [String: String]? = nil
     ) -> ProcessSnapshot? {
         let lsofOutput = lsofOutput(pid: process.pid, preloaded: preloadedLsofs)
-        let workingDirectory = lsofOutput.flatMap(workingDirectory(from:))
+        // Claude Code records every running session at `<config>/sessions/<pid>.json`.
+        // It names the session id, the directory the CLI was launched in, and the
+        // install it belongs to — things the command line cannot say, because
+        // every hardened install runs the same `claude-pro-exec` binary.
+        let record = claudeSessionRecord(forPID: process.pid)
+        let workingDirectory = record?.workingDirectory
+            ?? lsofOutput.flatMap(workingDirectory(from:))
 
         // Subagent processes run in .claude/worktrees/agent-*/ directories.
         // They are tracked as metadata on the parent session, not as separate sessions.
@@ -470,11 +559,21 @@ struct ActiveAgentProcessDiscovery {
             return nil
         }
 
-        var transcriptPath = lsofOutput.flatMap {
-            bestClaudeTranscriptPath(in: $0, workingDirectory: workingDirectory)
+        var sessionID = record?.sessionID
+        var transcriptPath = record.flatMap {
+            claudeTranscriptPath(configDirectory: $0.configDirectory, sessionID: $0.sessionID)
         }
-        var sessionID = transcriptPath.flatMap(firstUUID(in:))
-            ?? claudeSessionID(from: process.command)
+
+        if transcriptPath == nil {
+            transcriptPath = lsofOutput.flatMap {
+                bestClaudeTranscriptPath(in: $0, workingDirectory: workingDirectory)
+            }
+        }
+
+        if sessionID == nil {
+            sessionID = transcriptPath.flatMap(firstUUID(in:))
+                ?? claudeSessionID(from: process.command)
+        }
 
         if transcriptPath == nil {
             transcriptPath = fallbackClaudeTranscriptPath(
@@ -517,17 +616,15 @@ struct ActiveAgentProcessDiscovery {
 
     private func candidateClaudeProjectsURLs() -> [URL] {
         let fileManager = FileManager.default
-        let home = fileManager.homeDirectoryForCurrentUser
-        let paths = [
-            home.appendingPathComponent(".claude/projects", isDirectory: true),
-            home.appendingPathComponent(".claude-pro-hardened/projects", isDirectory: true),
-        ]
-        return paths.filter { fileManager.fileExists(atPath: $0.path) }
+        return claudeConfigDirectories
+            .map { $0.appendingPathComponent("projects", isDirectory: true) }
+            .filter { fileManager.fileExists(atPath: $0.path) }
     }
 
     private func bestClaudeTranscriptPath(in lsofOutput: String, workingDirectory: String?) -> String? {
-        let paths = allMatchingPaths(in: lsofOutput, containing: "/.claude/projects/", suffix: ".jsonl")
-            + allMatchingPaths(in: lsofOutput, containing: "/.claude-pro-hardened/projects/", suffix: ".jsonl")
+        let paths = claudeConfigDirectories
+            .map { $0.path + "/projects/" }
+            .flatMap { allMatchingPaths(in: lsofOutput, containing: $0, suffix: ".jsonl") }
         guard !paths.isEmpty else {
             return nil
         }
