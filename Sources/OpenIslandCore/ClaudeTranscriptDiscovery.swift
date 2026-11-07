@@ -11,12 +11,12 @@ public final class ClaudeTranscriptDiscovery: @unchecked Sendable {
             .appendingPathComponent(".claude/projects", isDirectory: true)
     }
 
+    /// Every install whose transcripts the island reads: the plain CLI and each
+    /// isolated Pro sandbox.
     public static var defaultRootURLs: [URL] {
         let home = FileManager.default.homeDirectoryForCurrentUser
-        return [
-            home.appendingPathComponent(".claude/projects", isDirectory: true),
-            home.appendingPathComponent(".claude-pro-hardened/projects", isDirectory: true)
-        ]
+        return [home.appendingPathComponent(".claude/projects", isDirectory: true)]
+            + ClaudeProInstance.all.map(\.projectsDirectoryURL)
     }
 
     private let rootURLs: [URL]
