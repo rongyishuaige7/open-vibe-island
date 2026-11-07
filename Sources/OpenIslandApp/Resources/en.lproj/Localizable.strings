@@ -45,6 +45,7 @@
 "usage.todayTokens.claudePro" = "Claude Pro";
 "usage.todayTokens.claudePro2" = "Claude Pro 2";
 "usage.todayTokens.yiWork" = "YI-Work";
+"usage.todayTokens.yiWorkAssistant" = "Assistant";
 "usage.todayTokens.agyPool" = "AGY Pool";
 "usage.todayTokens.agyPro" = "AGY Pro";
 "usage.todayTokens.other" = "Other";

@@ -1449,7 +1449,7 @@ struct IslandPanelView: View {
                         label: lang.t("usage.todayTokens.yiWork"),
                         dotColor: IslandDesignPalette.Agent.YiWork.accent,
                         totals: usage?.yiWork,
-                        accountHint: usage?.yiWorkAccountHint ?? "",
+                        accountHint: lang.t("usage.todayTokens.yiWorkAssistant"),
                         languageCode: languageCode,
                         subtextKey: "usage.todayTokens.subtextSessions"
                     )

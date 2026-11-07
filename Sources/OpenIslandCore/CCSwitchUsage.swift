@@ -156,9 +156,6 @@ public struct TodayTokenUsage: Equatable, Sendable {
         agyProAccounts.joined(separator: ", ")
     }
 
-    /// Which runtime inside YI-Work produced the row.
-    public var yiWorkAccountHint: String { "aionrs" }
-
     public var otherAccountHint: String {
         otherAccounts.joined(separator: ", ")
     }

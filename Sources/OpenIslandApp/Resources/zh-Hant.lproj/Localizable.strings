@@ -45,6 +45,7 @@
 "usage.todayTokens.claudePro" = "Claude Pro";
 "usage.todayTokens.claudePro2" = "Claude Pro 2";
 "usage.todayTokens.yiWork" = "YI-Work";
+"usage.todayTokens.yiWorkAssistant" = "管家";
 "usage.todayTokens.agyPool" = "AGY 普通池";
 "usage.todayTokens.agyPro" = "AGY Pro 個人池";
 "usage.todayTokens.other" = "其他";
