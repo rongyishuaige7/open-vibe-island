@@ -18,6 +18,15 @@ enum IslandDesignPalette {
             static let hairline = accent.opacity(0.28)
             static let glow = accent.opacity(0.20)
         }
+
+        /// YI-Work: warm orange, leaning orange-yellow. Sits between Claude's
+        /// yellow and a pure red so the row reads as its own thing rather than
+        /// another Claude tint.
+        enum YiWork {
+            static let accent = Color(red: 255.0 / 255.0, green: 122.0 / 255.0, blue: 30.0 / 255.0)
+            static let accentMuted = Color(red: 214.0 / 255.0, green: 98.0 / 255.0, blue: 26.0 / 255.0)
+            static let glow = accent.opacity(0.22)
+        }
     }
 
     enum Status {

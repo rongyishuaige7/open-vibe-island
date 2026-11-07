@@ -1447,7 +1447,7 @@ struct IslandPanelView: View {
                 if isYiWorkAvailable(usage: usage) {
                     tokenDetailAgentRow(
                         label: lang.t("usage.todayTokens.yiWork"),
-                        dotColor: Color(red: 64.0 / 255.0, green: 196.0 / 255.0, blue: 168.0 / 255.0),
+                        dotColor: IslandDesignPalette.Agent.YiWork.accent,
                         totals: usage?.yiWork,
                         accountHint: usage?.yiWorkAccountHint ?? "",
                         languageCode: languageCode,
