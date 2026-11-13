@@ -10,6 +10,36 @@ source. Every number is local: there is no server and no telemetry.
 | Claude Pro 2 | `ClaudeProUsageReader` local logs, `~/.claude-pro2-hardened` |
 | AGY 普通池 / AGY Pro 个人池 | KEEPER, `/opt/homebrew/var/cpa-usage-keeper/app.db` |
 | DSH | DeepSeek Harness host plugin ledger |
+| YI-Work | AionCore's per-conversation state, `<dataDir>/aionrs-sessions` |
+
+## YI-Work
+
+YI-Work's built-in assistant ("管家") runs on the AionCore backend it ships, not
+on one of the CLI agents the rows above follow. The backend writes no transcript
+and reports no usage to the renderer, so the island reads the one record it does
+keep: `<dataDir>/aionrs-sessions/sessions/<id>/state.json`, whose `total_usage`
+block is cumulative per conversation.
+
+A day's total is therefore the growth of those blocks, accumulated over the local
+day and remembered in
+`~/Library/Application Support/open-island/yi-work-usage.json`. Growth whose
+`updated_at` is older than today's midnight is ignored, so a restart after
+midnight does not dump yesterday into today. The provider is OpenAI-shaped:
+`input_tokens` already contains the cached ones, and the row reports
+`input + output` with the cache read shown separately.
+
+The data directory differs between the dev script and the packaged app, so the
+island takes the candidate the backend wrote to most recently
+(`~/YIWorkData`, `~/.yi-work-web-dev`, …), or `YI_WORK_DATA_DIR` when set.
+
+The CLI agents YI-Work launches over ACP (dsh, hermes, …) report their usage to
+YI-Work's frontend instead. YI-Work appends one line per finished turn to
+`~/.yi-work/usage/turns.jsonl`, and the island sums today's lines too — skipping
+the assistant's own lines, which the counters above already cover. That ledger
+carries a `semantics` field because the wire shapes differ: an `openai` line
+already counts cached tokens inside `input`, an `anthropic` line reports them
+separately, and only the second kind gets its cache added.
+
 
 ## Claude Pro and Claude Pro 2
 

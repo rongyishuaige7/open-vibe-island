@@ -1053,6 +1053,9 @@ struct IslandPanelView: View {
         if let piDesktop = monitor.piDesktopTotals {
             candidateAgents.append((id: "piDesktop", label: "PI Desktop", shortLabel: "PI", totals: piDesktop))
         }
+        if isYiWorkAvailable(usage: monitor.usage) {
+            candidateAgents.append((id: "yi-work", label: lang.t("usage.todayTokens.yiWork"), shortLabel: "YIW", totals: monitor.usage?.yiWork))
+        }
         if let other = monitor.usage?.other, other.totalTokens > 0 {
             candidateAgents.append((id: "other", label: lang.t("usage.todayTokens.other"), shortLabel: "Oth", totals: other))
         }
@@ -1441,6 +1444,17 @@ struct IslandPanelView: View {
                     )
                 }
 
+                if isYiWorkAvailable(usage: usage) {
+                    tokenDetailAgentRow(
+                        label: lang.t("usage.todayTokens.yiWork"),
+                        dotColor: IslandDesignPalette.Agent.YiWork.accent,
+                        totals: usage?.yiWork,
+                        accountHint: lang.t("usage.todayTokens.yiWorkAssistant"),
+                        languageCode: languageCode,
+                        subtextKey: "usage.todayTokens.subtextSessions"
+                    )
+                }
+
                 let hasAgyAccountBreakdown = (usage?.agyAccountBreakdown.count ?? 0) > 1
                 tokenDetailAgentRow(
                     label: lang.t("usage.todayTokens.agyPool"),
@@ -1627,6 +1641,15 @@ struct IslandPanelView: View {
 
     /// A Pro row shows while its install exists, even before the first request
     /// of the day, so the row does not appear and disappear with usage.
+    /// YI-Work shows while its data directory exists, so the row does not
+    /// appear and disappear with usage.
+    private func isYiWorkAvailable(usage: TodayTokenUsage?) -> Bool {
+        if let usage, usage.yiWork.totalTokens > 0 {
+            return true
+        }
+        return YiWorkUsageReader.defaultDataDirectoryURL != nil
+    }
+
     private func isClaudeProAvailable(usage: TodayTokenUsage?, instance: ClaudeProInstance) -> Bool {
         let row = claudeProRow(usage: usage, instance: instance)
         if row.totals.totalTokens > 0 || row.costUSD != nil {

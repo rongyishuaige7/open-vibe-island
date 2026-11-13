@@ -41,9 +41,11 @@
 "usage.todayTokens.detailTitle" = "Today's Token Usage";
 "usage.todayTokens.totalLabel" = "Total Tokens Today";
 "usage.todayTokens.totalLine" = "Total Tokens Today: %@";
-"usage.todayTokens.dataSource" = "Sources: CC Switch, KEEPER, Claude Pro / Pro 2 & DSH bridge";
+"usage.todayTokens.dataSource" = "Sources: CC Switch, KEEPER, Claude Pro / Pro 2, DSH bridge & YI-Work";
 "usage.todayTokens.claudePro" = "Claude Pro";
 "usage.todayTokens.claudePro2" = "Claude Pro 2";
+"usage.todayTokens.yiWork" = "YI-Work";
+"usage.todayTokens.yiWorkAssistant" = "Assistant";
 "usage.todayTokens.agyPool" = "AGY Pool";
 "usage.todayTokens.agyPro" = "AGY Pro";
 "usage.todayTokens.other" = "Other";

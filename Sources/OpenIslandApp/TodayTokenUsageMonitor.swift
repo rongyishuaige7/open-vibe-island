@@ -24,6 +24,11 @@ final class TodayTokenUsageMonitor {
     /// The isolated Claude Pro installs to read. Each one is a separate
     /// account with its own cost and rate-limit windows.
     private let claudeProInstances: [ClaudeProInstance]
+    /// YI-Work's data directory, resolved once at launch. `nil` when YI-Work
+    /// is not installed, which keeps the row off.
+    private let yiWorkDataDirectoryURL: URL?
+    /// The ledger ACP agents write through YI-Work's frontend.
+    private let yiWorkLedgerURL: URL?
     private let interval: Duration
     @ObservationIgnored private var task: Task<Void, Never>?
     @ObservationIgnored private var dshTotalsDay: Date = .distantPast
@@ -41,12 +46,16 @@ final class TodayTokenUsageMonitor {
         databaseURL: URL = CCSwitchUsageReader.defaultDatabaseURL,
         keeperDatabaseURL: URL = KeeperUsageReader.defaultDatabaseURL,
         claudeProInstances: [ClaudeProInstance] = ClaudeProInstance.all,
+        yiWorkDataDirectoryURL: URL? = YiWorkUsageReader.defaultDataDirectoryURL,
+        yiWorkLedgerURL: URL? = YiWorkUsageReader.defaultLedgerURL,
         interval: Duration = .seconds(30),
         agyProAccounts: Set<String> = KeeperUsageReader.defaultAgyProAccounts
     ) {
         self.databaseURL = databaseURL
         self.keeperDatabaseURL = keeperDatabaseURL
         self.claudeProInstances = claudeProInstances
+        self.yiWorkDataDirectoryURL = yiWorkDataDirectoryURL
+        self.yiWorkLedgerURL = yiWorkLedgerURL
         self.interval = interval
         self.agyProAccounts = agyProAccounts.isEmpty
             ? KeeperUsageReader.defaultAgyProAccounts
@@ -216,6 +225,8 @@ final class TodayTokenUsageMonitor {
         let databaseURL = self.databaseURL
         let keeperDatabaseURL = self.keeperDatabaseURL
         let claudeProInstances = self.claudeProInstances
+        let yiWorkDataDirectoryURL = self.yiWorkDataDirectoryURL
+        let yiWorkLedgerURL = self.yiWorkLedgerURL
         let agyProAccounts = self.agyProAccounts
         let result = await Task.detached(priority: .utility) { () -> Result<TodayTokenUsage, any Error> in
             let dayStart = calendar.startOfDay(for: now)
@@ -303,13 +314,28 @@ final class TodayTokenUsageMonitor {
                 }
             }
 
+            // 4. Try reading YI-Work's built-in assistant. It keeps its own
+            // ledger, so the read also advances the delta baselines whether or
+            // not anything was spent today.
+            let yiWorkUsage = YiWorkUsageReader.loadToday(
+                dataDirectoryURL: yiWorkDataDirectoryURL,
+                ledgerURL: yiWorkLedgerURL,
+                now: now,
+                calendar: calendar
+            )
+            if yiWorkUsage.totals.totalTokens > 0 {
+                usage.yiWork = yiWorkUsage.totals
+                hasAnyDatabase = true
+            }
+
             let ccMissing = (ccError as? CCSwitchUsageError) == .databaseMissing
             let keeperMissing = (keeperError as? KeeperUsageError) == .databaseMissing
 
             // If both databases are missing and no Claude Pro usage found, return missing error
             if ccMissing && keeperMissing
                 && usage.claudePro.totalTokens == 0
-                && usage.claudePro2.totalTokens == 0 {
+                && usage.claudePro2.totalTokens == 0
+                && usage.yiWork.totalTokens == 0 {
                 return .failure(CCSwitchUsageError.databaseMissing)
             }
 
